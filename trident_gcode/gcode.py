@@ -65,6 +65,7 @@ class GcodeWriter:
     _total_e: float = 0.0
     _max_z_rate: float = 0.0
     _lh_clamp_events: int = 0
+    _width_clamp_events: int = 0
     _blob_count: int = 0
     _moves: list = field(default_factory=list)   # (x,y,z,extruding,speed_mm_s) per move
     _bounds: list[float] = field(
@@ -116,6 +117,7 @@ class GcodeWriter:
         speed: float | None = None,
         layer_height_override: float | None = None,
         flow_override: float = 1.0,
+        line_width_override: float | None = None,
     ) -> None:
         if not self._has_position:
             # Nothing to extrude from yet; just position.
@@ -134,8 +136,21 @@ class GcodeWriter:
             if clamped != layer_height_override:
                 self._lh_clamp_events += 1
             lh = clamped
+        # Variable line width: same contract as layer_height_override -- an
+        # absolute mm value clamped to a band around nominal, used for BOTH the
+        # E volume and the volumetric-flow speed cap so the melt-limit clamp
+        # always tracks the actual bead cross-section, never the nominal one.
+        # Wider allowed band than layer-height's [0.25,1.5]x: width variation is
+        # a deliberate feature here, not an incidental gap correction.
+        lw = self.line_width
+        if line_width_override is not None:
+            lo, hi = 0.5 * self.line_width, 2.0 * self.line_width
+            clamped = min(max(line_width_override, lo), hi)
+            if clamped != line_width_override:
+                self._width_clamp_events += 1
+            lw = clamped
         e = extrusion_for_segment(
-            length, self.line_width, lh,
+            length, lw, lh,
             self.profile, self.flow_multiplier * flow_override,
         )
         req = self.print_speed if speed is None else speed
@@ -143,7 +158,7 @@ class GcodeWriter:
         # The extra first-layer flow factor raises the volume per mm, so fold it
         # into the flow cap too or the hotend could be out-run.
         if self.max_volumetric_speed > 0.0:
-            area = self.line_width * lh * flow_override
+            area = lw * lh * flow_override
             if area > 0.0:
                 req = min(req, self.max_volumetric_speed / area)
         allowed = self._allowed_speed(x, y, z, req)
@@ -306,6 +321,13 @@ class GcodeWriter:
         clamped to the [0.25, 1.5]x nominal band. >0 means some geometry asked
         for a local layer height outside safe bounds and flow was compensated."""
         return self._lh_clamp_events
+
+    @property
+    def width_clamp_events(self) -> int:
+        """How many extrude moves had their line_width_override clamped to the
+        [0.5, 2.0]x nominal band. >0 means a requested width curve exceeded the
+        safe band and was compensated."""
+        return self._width_clamp_events
 
     def text(self) -> str:
         return "\n".join(self._lines) + "\n"
