@@ -72,6 +72,7 @@ def build_continuous_spiral(
     base_style: str = "spiral",
     skirt_loops: int = 0,
     flow_callback: Callable[[float], float] | None = None,
+    width_callback: Callable[[float], float] | None = None,
     blob_spec: BlobSpec | None = None,
     loop_spec: LoopSpec | None = None,
     overhang_flow_k: float = 0.0,
@@ -103,8 +104,15 @@ def build_continuous_spiral(
     that move (applied after first_layer_flow).  Useful for flow-ladder calibration
     prints.  None (default) = no per-point override.
 
-    With all adhesion/base/brim/flow_callback options at their defaults the emitted
-    G-code is byte-identical to the plain continuous spiral (gap-aware wall only).
+    ``width_callback(t)`` -- if provided, called with the same height fraction t
+    in [0,1] for each wall-spiral point and its return value multiplies the
+    writer's nominal line_width for that move (passed through as
+    ``line_width_override``).  Like ``flow_callback``, suppressed during the
+    first adhesion turn.  None (default) = no per-point override.
+
+    With all adhesion/base/brim/flow_callback/width_callback options at their
+    defaults the emitted G-code is byte-identical to the plain continuous
+    spiral (gap-aware wall only).
     """
     profile = writer.profile
     cx, cy = center if center is not None else profile.bed_center
@@ -249,9 +257,12 @@ def build_continuous_spiral(
                 writer.set_fan(writer.fan_speed)
             t_frac = i / max(total_pts - 1, 1)
             cb_flow = flow_callback(t_frac) if flow_callback is not None else 1.0
+            cb_w = width_callback(t_frac) if width_callback is not None else None
             oh_flow = _overhang_flow(p.tilt, overhang_flow_k)
             writer.extrude_to(x, y, z, speed=speed, layer_height_override=p.gap,
-                              flow_override=cb_flow * oh_flow)
+                              flow_override=cb_flow * oh_flow,
+                              line_width_override=(writer.line_width * cb_w
+                                                    if cb_w is not None else None))
             if i in blob_sites:
                 vol = blob_volume_at(i / max(total_pts - 1, 1), blob_spec)
                 e_mm = blob_e_for_volume(vol, writer.profile)
@@ -317,10 +328,13 @@ def build_continuous_spiral(
                 lh_over, flow_over = p.gap, 1.0
             t_frac = i / max(total_pts - 1, 1)
             cb_flow = flow_callback(t_frac) if (flow_callback is not None and not first_turn) else 1.0
+            cb_w = width_callback(t_frac) if (width_callback is not None and not first_turn) else None
             oh_flow = _overhang_flow(p.tilt, overhang_flow_k) if not first_turn else 1.0
             writer.extrude_to(x, y, z, speed=speed,
                               layer_height_override=lh_over,
-                              flow_override=flow_over * cb_flow * oh_flow)
+                              flow_override=flow_over * cb_flow * oh_flow,
+                              line_width_override=(writer.line_width * cb_w
+                                                    if cb_w is not None else None))
             if i in blob_sites:
                 vol = blob_volume_at(i / max(total_pts - 1, 1), blob_spec)
                 e_mm = blob_e_for_volume(vol, writer.profile)
@@ -343,6 +357,11 @@ def build_continuous_spiral(
             f"WARNING: {writer.layer_height_clamp_events} moves had local layer "
             f"height clamped to [0.25,1.5]x nominal (steep non-planar geometry)"
         )
+    if writer.width_clamp_events:
+        writer.comment(
+            f"WARNING: {writer.width_clamp_events} moves had local line width "
+            f"clamped to [0.5,2.0]x nominal (width curve out of band)"
+        )
 
     return {
         "points": len(pts),
@@ -355,6 +374,7 @@ def build_continuous_spiral(
         "filament_mm": round(writer.total_filament_mm, 1),
         "max_z_rate_mm_s": round(writer.max_z_rate, 2),
         "layer_height_clamp_events": writer.layer_height_clamp_events,
+        "width_clamp_events": writer.width_clamp_events,
         "blob_count": writer.blob_count,
         "loop_count": len(loop_sites),
         "bounds": writer.bounds,

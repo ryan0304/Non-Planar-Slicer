@@ -104,6 +104,7 @@ def build_profile_spiral(
     blob_spec: BlobSpec | None = None,
     loop_spec: LoopSpec | None = None,
     overhang_flow_k: float = 0.0,
+    width_callback: Callable[[float], float] | None = None,
 ) -> dict:
     """Emit a complete profile-spiral and return a report dict.
 
@@ -116,6 +117,13 @@ def build_profile_spiral(
         *points_per_turn* vertices, CCW wound.
     heights : list[float]
         Z height for each contour (same length as *contours*).
+    width_callback : Callable[[float], float] | None
+        If provided, called with the height fraction t in [0,1] for each wall
+        point (same t used for z_amp_envelope/r_envelope); its return value
+        multiplies the writer's nominal line_width for that move (passed
+        through as ``line_width_override``). None (default) = no per-point
+        override, and the emitted G-code is byte-identical to the generator
+        without this parameter.
     """
     if len(contours) != len(heights):
         raise ValueError(
@@ -201,6 +209,14 @@ def build_profile_spiral(
         writer.comment(
             f"solid base ({base_layers} layers) + brim ({brim_loops} loops)")
         base_zs = blend_layer_z(base_seq, base_z, lh)
+        # The base/brim stack sits entirely below the wall's own t range (the
+        # wall's t=0 is its first contour, printed after the base) -- so t=0.0
+        # is the natural height fraction for every base/brim point here,
+        # matching the same "start of the object" convention used elsewhere
+        # (z_amp_ramp, r_fade_in) for t=0.
+        cb_w_base = width_callback(0.0) if width_callback is not None else None
+        lw_base = (writer.line_width * cb_w_base
+                  if cb_w_base is not None else None)
         for (bx, by, k), bz in zip(base_seq, base_zs):
             first_disk = (k == 0)
             writer.extrude_to(
@@ -208,6 +224,7 @@ def build_profile_spiral(
                 speed=writer.first_layer_speed if first_disk else writer.print_speed,
                 layer_height_override=lh,
                 flow_override=first_layer_flow if first_disk else 1.0,
+                line_width_override=lw_base,
             )
         if base_layers > 0:
             writer.set_fan(writer.fan_speed)
@@ -369,8 +386,11 @@ def build_profile_spiral(
                           lux, luy, loop_spec)
                 _loop_pending = None
                 continue
+            cb_w = width_callback(t) if width_callback is not None else None
             writer.extrude_to(x_bed, y_bed, z, speed=speed,
-                              layer_height_override=gap, flow_override=flow * oh_flow)
+                              layer_height_override=gap, flow_override=flow * oh_flow,
+                              line_width_override=(writer.line_width * cb_w
+                                                    if cb_w is not None else None))
             if step_idx in blob_sites:
                 vol = blob_volume_at(step_idx / max(total_steps - 1, 1), blob_spec)
                 e_mm = blob_e_for_volume(vol, writer.profile)
@@ -390,6 +410,11 @@ def build_profile_spiral(
             f"WARNING: {writer.layer_height_clamp_events} moves had local layer "
             f"height clamped to [0.25,1.5]x nominal (steep non-planar geometry)"
         )
+    if writer.width_clamp_events:
+        writer.comment(
+            f"WARNING: {writer.width_clamp_events} moves had local line width "
+            f"clamped to [0.5,2.0]x nominal (width curve out of band)"
+        )
 
     return {
         "contours": n_contours,
@@ -401,6 +426,7 @@ def build_profile_spiral(
         "filament_mm": round(writer.total_filament_mm, 1),
         "max_z_rate_mm_s": round(writer.max_z_rate, 2),
         "layer_height_clamp_events": writer.layer_height_clamp_events,
+        "width_clamp_events": writer.width_clamp_events,
         "blob_count": writer.blob_count,
         "loop_count": len(loop_sites),
         "bounds": writer.bounds,
