@@ -281,6 +281,12 @@ straight into the 3D viewer with full playback and telemetry, and the Trident
 safety report is shown beneath the button. A **Download .gcode** button saves the
 result.
 
+Every change is autosaved to the browser (`localStorage`) and undoable --
+**Ctrl+Z** / **Ctrl+Shift+Z** (or the undo/redo buttons) step back and forward
+through up to 50 recent edits, and **Save design** / **Load design** export
+or import the full parameter set as JSON so a design survives a browser
+restart or moves between machines.
+
 **The 1.9 mm probe ceiling is enforced, not just suggested.** The wave amplitude
 is clamped to `[0, 1.9] mm` both in the curve editor and again on the server, so
 even a hand-crafted request can't ask for a print tall enough to strike the
@@ -288,6 +294,50 @@ toolhead body/Omron probe behind the nozzle (crest-to-trough span is 2x the
 amplitude; 1.9 mm keeps a safety margin under the 3.8 mm measured clearance).
 Radius scale is clamped to `[0.2, 1.5]`. Requests that wouldn't fit the bed or
 exceed Z max are rejected with a clear error in the status line.
+
+## Asymmetric shaping (app only)
+
+Beyond the symmetric wave/silhouette curves, the app has a **3D control cage**
+for asymmetric deformation: switch the silhouette editor to **Unsymmetrical**
+mode and drag any of a 5-row x 8-column grid of handles directly in the 3D
+view to bulge or pinch specific angular regions at specific heights (each
+handle scales local radius, clamped to `[0.5, 1.5]x`). Combine with a **spine
+offset** (`spine_mm` / `spine_deg` -- leans the whole silhouette off-axis by a
+distance and direction) and **ovality** (elongates the cross-section along one
+axis) for organic, non-radially-symmetric forms. All three are app-only today
+(no `generate.py` CLI flags yet) and flow through the same safety-clamped
+pipeline as everything else. Cage deformation does not apply to the loop
+fabric pattern (see below) since it isn't a radius-displacement texture.
+
+## Blob and loop-fabric textures (app only)
+
+Two more wall textures, alongside the seven radius-displacement patterns
+(`trident_gcode/blobs.py`, `trident_gcode/generators/loop_fabric.py`):
+
+- **Blobs** -- discrete raised bumps placed at intervals around and up the
+  wall, with named presets (`dots`, `pearls`, `columns`, `spikes`, `organic`)
+  controlling spacing, jitter, and per-height volume envelope. Good for
+  textured/tactile surfaces that read as deliberate bumps rather than a
+  continuous wave.
+- **Loop fabric** -- a knitted/chainmail-style wall built from small looped
+  excursions rather than a plain spiral pass, with presets (`tiedspikes`,
+  `chainmail`, `fineknit`, `opennet`, `ribs`, `zigzag`, `scallops`). This
+  replaces the normal wall generator entirely for that print (it routes
+  through `build_loop_fabric` instead of `build_continuous_spiral`), so it
+  doesn't combine with the Z-wave/silhouette-cage controls the way the other
+  patterns do.
+
+Both are configured and previewed in the app (`serve.py` + the designer's
+Texture step); like the cage, they don't yet have `generate.py` CLI flags.
+
+## Multi-printer profiles
+
+`GET /api/printers` lists every configured `PrinterProfile` (bed size, Z max,
+Z-amplitude ceiling) and the app's printer dropdown lets you generate against
+any of them, not just the default Voron Trident -- useful if you're
+prototyping settings for a second machine. Each profile carries its own
+safety limits (footprint, Z-rate, probe keep-out where applicable), enforced
+the same way regardless of which one is selected.
 
 ## The printer view
 
@@ -465,26 +515,35 @@ start of each band so you can visually match the print to the G-code.
 
 ```
 generate.py                     CLI entry point
+serve.py                        static file server + JSON API for the browser app
+tools/make_sample_meshes.py     writes sample STLs into examples/
+tools/check_regression.py       byte-compares generated output against regression_ref/
 calibrate.py                    calibration print suite (live-Z / flow / z-amp)
 presets.py                      curated, machine-safe presets
-tools/make_sample_meshes.py     writes sample STLs into examples/
 trident_gcode/
-  profile.py                    machine + material limits (from printer.cfg)
-  paths.py                      2D base shapes + continuous spiral geometry
+  profile.py                    machine + material limits (from printer.cfg); multi-printer profiles
+  paths.py                      2D base shapes + continuous spiral geometry + radius-texture patterns
   extrusion.py                  volumetric E math + Z feedrate clamping
-  gcode.py                      Klipper-flavoured G-code emitter + safety checks
+  gcode.py                      Klipper/Marlin G-code emitter + safety checks
   config.py                     JSON config file load / save / validation
   mesh.py                       pure-Python STL load + horizontal slicing
   surface.py                    non-planar height fields (+ STL top sampling)
+  profile_stack.py              unified contour-stack format (parametric shapes + sliced meshes)
   orca.py                       OrcaSlicer filament profile import
+  blobs.py                      blob-texture and loop-fabric site placement
   fullcontrol_export.py         export any toolpath as a FullControl script
   generators/
     continuous_spiral.py        parametric spiral -> bed-placed G-code
+    profile_spiral.py           unified generator over any contour stack (app-only asymmetric cage/spine/ovality)
     mesh_spiral.py              wrap a spiral around an STL silhouette
     surface_spiral.py           conformal shell following a surface
     base_fill.py                solid base disk + brim as one continuous bead
-viewer/index.html               drag-drop Three.js viewer + playback
+    loop_fabric.py              knitted/chainmail wall texture generator
+viewer/index.html               3D viewer + browser design app shell
+viewer/viewer.js                Three.js scene, playback, telemetry
+viewer/designer.js              design wizard, curve editors, cage editor, undo/redo/persistence
 examples/cal/                   calibration G-code files (generated by calibrate.py)
+regression_ref/                 reference G-code checked by tools/check_regression.py
 ```
 
 ## Roadmap
@@ -495,5 +554,7 @@ examples/cal/                   calibration G-code files (generated by calibrate
 - [x] Wire Orca filament fields (fan, retraction, pressure advance) into emission
 - [x] Config/profile system (`--config` / `--save-config`)
 - [x] Calibration suite (`calibrate.py`) — live-Z disk, flow ladder, Z-amp ladder
+- [x] Asymmetric shaping (3D control cage, spine offset, ovality), blob and loop-fabric
+      textures, multi-printer profiles, mesh upload, undo/redo — app-only so far
 - [ ] Variable line width along the path
 - [ ] Feasibility study + prototype for true dynamic tri-Z bed tilt
