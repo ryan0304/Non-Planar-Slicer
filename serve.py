@@ -352,6 +352,7 @@ def generate_design(body):
     amp_profile = body.get("amp_profile") or [[0, 0.0], [1, 0.0]]
     radius_profile = body.get("radius_profile") or [[0, 1.0], [1, 1.0]]
     radius_profile_smooth = bool(body.get("radius_profile_smooth", False))
+    width_profile = body.get("width_profile") or [[0, 1.0], [1, 1.0]]
 
     # Asymmetric control cage: N rows (height) x M cols (azimuth) of radius scale
     # factors. Validate shape, clamp values to [0.5, 1.5], coerce non-numeric to
@@ -359,10 +360,14 @@ def generate_design(body):
     # output stays byte-identical.
     cage = _parse_cage(body.get("cage"))
 
-    # Server-side clamps (never trust the client).
+    # Server-side clamps (never trust the client). width_fn's band (0.6-1.8) is
+    # tighter than the writer's hard [0.5, 2.0] line_width_override clamp -- the
+    # writer's clamp is the real safety net, this just keeps a malicious/buggy
+    # client from ever getting close to it.
     amp_fn = _make_interp(amp_profile, AMP_MIN, AMP_MAX)
     radius_interp = _make_smooth_interp if radius_profile_smooth else _make_interp
     radius_fn = radius_interp(radius_profile, RADIUS_SCALE_MIN, RADIUS_SCALE_MAX)
+    width_fn = _make_interp(width_profile, 0.6, 1.8)
 
     profile = _get_profile(body)
 
@@ -446,6 +451,7 @@ def generate_design(body):
             skirt_loops=skirt_loops,
             blob_spec=blob_spec,
             overhang_flow_k=overhang_flow_k,
+            width_callback=width_fn,
         )
 
     gcode_text = writer.text()
@@ -564,6 +570,10 @@ def generate_mesh_texture_design(body):
 
     amp_profile = body.get("amp_profile") or [[0, 0.0], [1, 0.0]]
     amp_fn = _make_interp(amp_profile, AMP_MIN, AMP_MAX)
+    # Server-side clamp tighter than the writer's hard [0.5, 2.0] line_width
+    # override band -- see generate_design()'s width_fn for the rationale.
+    width_profile = body.get("width_profile") or [[0, 1.0], [1, 1.0]]
+    width_fn = _make_interp(width_profile, 0.6, 1.8)
 
     tris = entry["tris"]
     if scale != 1.0:
@@ -628,6 +638,7 @@ def generate_mesh_texture_design(body):
         blob_spec=blob_spec,
         loop_spec=loop_spec,
         overhang_flow_k=overhang_flow_k,
+        width_callback=width_fn,
     )
 
     gcode_text = writer.text()
