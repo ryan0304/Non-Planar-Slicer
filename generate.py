@@ -17,7 +17,9 @@ Then open viewer/index.html in a browser and drag the .gcode file onto it.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from typing import Callable
 
 from trident_gcode import TRIDENT, GcodeWriter, PrinterProfile
 from trident_gcode.paths import SpiralSpec, circle, star, superellipse
@@ -34,6 +36,63 @@ def make_shape(name: str, radius: float):
     if name == "square":
         return superellipse(radius, n=4.0)
     raise SystemExit(f"unknown shape: {name}")
+
+
+def _parse_width_curve(raw: str) -> list[tuple[float, float]]:
+    """Parse --line-width-curve JSON into sorted (t, mult) control points.
+
+    Clear error message + exit(1) on malformed input, matching this file's
+    existing CLI validation style (e.g. --surface stl / --filament errors).
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: --line-width-curve is not valid JSON: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(data, list) or not data:
+        print("ERROR: --line-width-curve must be a JSON list of [t, mult] pairs, "
+              "e.g. '[[0,1.0],[0.5,1.4],[1,0.8]]'", file=sys.stderr)
+        sys.exit(1)
+    pts: list[tuple[float, float]] = []
+    for item in data:
+        if (not isinstance(item, list) or len(item) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                           for v in item)):
+            print(f"ERROR: --line-width-curve entry {item!r} is not a [t, mult] "
+                  f"pair of numbers", file=sys.stderr)
+            sys.exit(1)
+        pts.append((float(item[0]), float(item[1])))
+    pts.sort(key=lambda p: p[0])
+    return pts
+
+
+def _width_callback_from_curve(pts: list[tuple[float, float]]) -> Callable[[float], float]:
+    """Piecewise-linear interpolation over sorted (t, mult) control points.
+
+    Only a loose sanity clamp is applied here ([0.02, 20.0], just enough to
+    keep a typo'd control point from producing a zero/negative width). The
+    CLI is trusted local input (unlike the browser client in serve.py, which
+    gets a clamp tighter than the writer's own band) -- the REAL safety net is
+    GcodeWriter.extrude_to's hard [0.5, 2.0]x line_width_override clamp, which
+    must stay the operative one so an out-of-band curve is visibly caught
+    there (width_clamp_events) rather than silently absorbed here.
+    """
+    lo, hi = pts[0][0], pts[-1][0]
+
+    def cb(t: float) -> float:
+        if t <= lo:
+            v = pts[0][1]
+        elif t >= hi:
+            v = pts[-1][1]
+        else:
+            v = pts[-1][1]
+            for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+                if t0 <= t <= t1:
+                    v = v0 if t1 == t0 else v0 + (t - t0) / (t1 - t0) * (v1 - v0)
+                    break
+        return min(max(v, 0.02), 20.0)
+
+    return cb
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -68,6 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="nozzle diameter (mm). Sets a sensible default line width if --line-width is omitted")
     ap.add_argument("--line-width", type=float, default=None,
                     help="bead width (mm). Defaults to ~1.1x nozzle if omitted")
+    ap.add_argument("--line-width-curve", type=str, default=None,
+                    help="JSON control points [[t, mult], ...] for a per-point "
+                         "line-width curve over height fraction t in [0,1], e.g. "
+                         "'[[0,1.0],[0.5,1.4],[1,0.8]]' (a taper is just two "
+                         "points). Piecewise-linear, clamped to [0.5,2.0]x "
+                         "line-width. Shape/circle/star/square mode only.")
     ap.add_argument("--points-per-turn", type=int, default=240)
 
     # Radial surface texture (probe-safe: displaces radius, never Z)
@@ -175,6 +240,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"WARNING: line width {line_width} exceeds 2x the {args.nozzle}mm nozzle "
               f"- the nozzle may not be able to lay it down cleanly.", file=sys.stderr)
 
+    # ---- line-width curve -----------------------------------------------------
+    width_callback = None
+    if args.line_width_curve:
+        width_pts = _parse_width_curve(args.line_width_curve)
+        width_callback = _width_callback_from_curve(width_pts)
+
     # ---- filament / writer kwargs -------------------------------------------
     fil_kwargs = dict(
         flow_multiplier=args.flow,
@@ -279,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
                 first_layer_flow=args.first_layer_flow,
                 base_layers=args.base_layers,
                 brim_loops=args.brim,
+                width_callback=width_callback,
             )
     except (ValueError, OSError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
@@ -319,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.pattern:
             print(f"  texture         : {args.pattern}  depth={args.pattern_amp}mm "
                   f"waves={args.pattern_waves} bands={args.pattern_bands} (radial, probe-safe)")
+        if width_callback is not None:
+            print(f"  width curve     : {args.line_width_curve}")
     print(f"  points          : {report['points']}")
     if report.get("base_layers") or report.get("brim_loops"):
         print(f"  base/brim       : {report.get('base_layers', 0)} base layer(s), "
@@ -332,6 +406,9 @@ def main(argv: list[str] | None = None) -> int:
     if report.get("layer_height_clamp_events"):
         print(f"  WARNING         : {report['layer_height_clamp_events']} moves had "
               f"local layer height clamped (steep non-planar geometry)")
+    if report.get("width_clamp_events"):
+        print(f"  WARNING         : {report['width_clamp_events']} moves had "
+              f"local line width clamped to [0.5,2.0]x nominal (width curve out of band)")
     zr = report['max_z_rate_mm_s']
     ok = "OK" if zr <= profile.max_z_velocity + 0.05 else "OVER LIMIT"
     print(f"  max Z-rate      : {zr}mm/s / {profile.max_z_velocity}mm/s [{ok}]")
