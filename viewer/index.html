@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Cache-Control" content="no-store" />
+<title>Trident Non-Planar G-code Viewer</title>
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<div id="app">
+  <div id="canvas-wrap">
+    <div id="overlay"><div class="card">
+      <div style="font-size:14px;margin-bottom:6px">Drop a <b>.gcode</b> file here</div>
+      <div class="sub" style="margin:0">or use the picker on the right</div>
+    </div></div>
+    <div id="stale-badge" style="display:none;position:absolute;top:40px;left:50%;
+      transform:translateX(-50%);z-index:6;padding:4px 12px;border-radius:6px;
+      background:rgba(224,64,47,.15);border:1px solid #e0402f;color:#ff8a7a;
+      font-size:11.5px;pointer-events:none">G-code is outdated &#8212; design changed
+      since last generate</div>
+    <!-- Timeline wrap: sparkline on top, controls below -->
+    <div id="tl-wrap" style="display:none">
+      <canvas id="spark"></canvas>
+      <div id="timeline">
+        <button id="play" title="Play / pause">&#9654;</button>
+        <input id="scrub" type="range" min="0" max="1000" value="1000">
+        <select id="speed" title="Playback speed">
+          <option value="0.0333">0.5&times;</option>
+          <option value="0.0667" selected>1&times;</option>
+          <option value="0.1667">2&times;</option>
+          <option value="0.5">4&times;</option>
+        </select>
+        <span id="tl-read">100%</span>
+      </div>
+    </div>
+  </div>
+  <div id="splitter" title="Drag to resize"></div>
+  <div id="panel">
+    <div id="panel-scroll">
+    <h1>Trident Non-Planar Viewer</h1>
+    <div class="sub">Continuous single-Z toolpath preview</div>
+
+    <div id="mode-bar">
+      <button class="mode-btn" data-mode="design">Design</button>
+      <button class="mode-btn" data-mode="viewer">G-code Viewer</button>
+    </div>
+
+    <div id="mode-design">
+    <div class="group" id="design-group">
+      <h2>Design a vase</h2>
+
+      <div id="preset-bar">
+        <select id="preset-select"><option value="">Load preset...</option></select>
+        <button id="undo-btn" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
+        <button id="redo-btn" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
+        <button id="save-design" title="Save design as JSON">Save</button>
+        <button id="load-design" title="Load design from JSON">Load</button>
+        <input type="file" id="load-design-file" accept=".json" hidden>
+      </div>
+
+      <div id="step-bar">
+        <button class="step-item" data-step="model"><span class="step-num">1</span><span class="step-label">Model</span></button>
+        <button class="step-item" data-step="texture"><span class="step-num">2</span><span class="step-label">Texture</span></button>
+        <button class="step-item" data-step="print"><span class="step-num">3</span><span class="step-label">Print</span></button>
+        <button class="step-item" data-step="generate"><span class="step-num">4</span><span class="step-label">Generate</span></button>
+      </div>
+
+      <!-- ---- Step 1: Model (shape + STL import) ---- -->
+      <div class="step-panel" id="step-model">
+        <div class="drow"><span>Shape</span>
+          <select id="d-shape">
+            <option value="circle">circle</option>
+            <option value="star">star</option>
+            <option value="square">square</option>
+          </select></div>
+        <div class="drow"><span>Radius (mm)</span><input type="number" id="d-radius" min="10" max="80" step="1"></div>
+        <div class="drow"><span>Height (mm)</span><input type="number" id="d-height" min="10" max="140" step="1"></div>
+        <div class="drow"><span>Layer height</span><input type="number" id="d-lh" min="0.2" max="0.6" step="0.05"></div>
+        <div class="drow"><span>XY twist (turns)</span><input type="number" id="d-xytwist" min="-3" max="3" step="0.25"></div>
+
+        <hr>
+        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px">Asymmetry</h3>
+        <div class="drow"><span>Lean (mm)</span><input type="number" id="d-spine" min="0" max="20" step="1"></div>
+        <div class="drow"><span>Lean direction (deg)</span><input type="number" id="d-spinedeg" min="0" max="360" step="15"></div>
+        <div class="drow"><span>Ovality</span><input type="number" id="d-ovality" min="-0.4" max="0.4" step="0.05"></div>
+        <div class="hint" style="margin-top:-2px;margin-bottom:2px">Lean bends the vase so the top
+          shifts sideways; ovality squashes the cross-section into an ellipse.</div>
+
+        <div id="star-rows" style="display:none">
+          <div class="drow"><span>Star points</span><input type="number" id="d-starpoints" min="3" max="12" step="1"></div>
+          <div class="drow"><span>Star depth</span><input type="number" id="d-stardepth" min="0" max="1" step="0.05"></div>
+        </div>
+
+        <div class="drow" style="margin-top:8px"><span>Bottom</span>
+          <span>
+            <label style="cursor:pointer"><input type="radio" name="d-bottom" value="solid"> Solid</label>
+            &nbsp;
+            <label style="cursor:pointer"><input type="radio" name="d-bottom" value="open"> Open</label>
+          </span>
+        </div>
+        <div class="drow" id="row-base"><span>Base layers</span><input type="number" id="d-base" min="0" max="3" step="1"></div>
+        <div class="drow"><span>Brim loops</span><input type="number" id="d-brim" min="0" max="5" step="1"></div>
+        <div class="drow" id="row-basestyle"><span>Base style</span>
+          <select id="d-basestyle">
+            <option value="spiral">Spiral disk</option>
+            <option value="concentric">Concentric rings</option>
+          </select></div>
+        <div class="drow"><span>Skirt loops</span><input type="number" id="d-skirt" min="0" max="3" step="1"></div>
+        <div class="drow" id="row-squish"><span>First layer height (mm)</span><input type="number" id="d-flh" min="0.1" max="0.6" step="0.05" placeholder="auto"></div>
+        <div class="hint" id="flh-hint" style="margin-top:-4px;margin-bottom:2px">Lower = bead pressed
+          harder into the plate = firmer grip. Auto = 75% of layer height.</div>
+        <div class="drow" id="row-spacing"><span>Base line spacing &times;</span><input type="number" id="d-spacing" min="0.9" max="1.5" step="0.05"></div>
+
+        <hr>
+        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px">Or import an STL</h3>
+        <div id="import-panel">
+          <div class="import-drop" id="stl-drop">
+            Drop an STL file here<br>or click to browse
+            <input type="file" id="stl-file" accept=".stl" hidden>
+          </div>
+
+          <div id="mesh-info" style="display:none">
+            <div class="drow"><span>Mesh</span><span id="mesh-name">-</span></div>
+            <div class="drow"><span>Triangles</span><span id="mesh-tris">-</span></div>
+            <div class="drow"><span>Size (mm)</span><span id="mesh-size">-</span></div>
+            <div class="drow"><span>Height (mm)</span><span id="mesh-height">-</span></div>
+            <div class="drow"><span>Scale</span><input type="number" id="mesh-scale" min="0.1" max="10" step="0.1" value="1.0"></div>
+            <div class="drow"><span>Layer height</span><input type="number" id="mesh-lh" min="0.1" max="0.6" step="0.05" value="0.3"></div>
+            <button id="mesh-clear" style="margin-top:8px;width:100%">Clear mesh</button>
+            <div class="hint" style="margin-top:6px">
+              Works best with vase-like shapes (single outer wall).
+              Use the Texture and Waves tabs to add surface patterns.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Step 2: Texture (Z waves + surface texture) ---- -->
+      <div class="step-panel" id="step-texture">
+        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px">Z waves</h3>
+        <div class="drow"><span>Z waves</span><input type="number" id="d-waves" min="0" max="12" step="1"></div>
+        <div class="drow"><span>Z twist (turns)</span><input type="number" id="d-ztwist" min="0" max="2" step="0.25"></div>
+
+        <div class="cv-editor">
+          <div class="cv-head"><b>Wave amplitude over height</b><span class="cv-reset" id="amp-reset">reset</span></div>
+          <canvas id="amp-curve" width="360" height="100"></canvas>
+          <div id="slope-read" style="font-size:10.5px;color:var(--muted);margin-top:3px"></div>
+        </div>
+
+        <hr>
+        <div class="drow"><span>Texture pattern</span>
+          <select id="d-pattern">
+            <option value="">none</option>
+            <option value="blobs">&#9679; blobs (raised dots)</option>
+            <option value="loops">&#8767; loops (hanging strands)</option>
+            <option value="vwave">v-wave (ridges)</option>
+            <option value="hwave">h-wave (rings)</option>
+            <option value="ripple">ripple (diagonal)</option>
+            <option value="diamond">diamond</option>
+            <option value="bubbles">bubbles</option>
+            <option value="pleats">pleats</option>
+            <option value="hammered">hammered</option>
+          </select></div>
+        <div id="pattern-rows" style="display:none">
+          <div class="drow"><span>Texture depth (mm)</span><input type="number" id="d-pamp" min="0" max="4" step="0.1"></div>
+          <div class="drow"><span>Repeats around</span><input type="number" id="d-pwaves" min="1" max="40" step="1"></div>
+          <div class="drow"><span>Bands over height</span><input type="number" id="d-pbands" min="0" max="30" step="0.5"></div>
+          <div class="drow"><span>Pattern twist</span><input type="number" id="d-ptwist" min="-3" max="3" step="0.25"></div>
+          <div class="drow"><span>Fade in</span><input type="number" id="d-pfadein" min="0" max="1" step="0.05"></div>
+          <div class="drow"><span>Fade out</span><input type="number" id="d-pfadeout" min="0" max="1" step="0.05"></div>
+          <div class="drow"><span>Open lattice (mesh)</span><input type="checkbox" id="d-palternate"></div>
+          <div class="hint" id="lattice-hint" style="display:none;margin-top:2px">Alternate turns zigzag opposite ways and bond only at crossings &#8212; an open net of strands. Print SLOW (20-30 mm/s) with max cooling; best with v-wave or pleats, depth 2-3 mm, 15-40 repeats. Fragile by design.</div>
+          <div class="hint" style="margin-top:2px">Radial texture: displaces the wall
+            sideways, never Z &#8212; no probe risk, so it can be bold.</div>
+        </div>
+
+        <hr>
+        <div id="blob-rows" style="display:none">
+          <div class="drow"><span>Blob style</span>
+            <select id="d-blob-style">
+              <option value="dots">Dots (sparse diamond)</option>
+              <option value="pearls">Pearls (dense rows)</option>
+              <option value="columns">Bead columns</option>
+              <option value="spikes">Spikes (bold drips)</option>
+              <option value="organic">Organic scatter</option>
+              <option value="custom">Custom</option>
+            </select></div>
+          <div class="drow"><span>Blobs per turn</span><input type="number" id="d-blob-per-turn" min="1" max="36" step="1"></div>
+          <div class="drow"><span>Spacing (mm)</span><input type="number" id="d-blob-spacing" min="0" max="20" step="0.5"></div>
+          <div class="hint" style="margin-top:-4px;margin-bottom:2px">0 = use per-turn count</div>
+          <div class="drow"><span>Turn stride</span><input type="number" id="d-blob-stride" min="1" max="10" step="1"></div>
+          <div class="drow"><span>Alignment</span>
+            <select id="d-blob-align">
+              <option value="stagger">Stagger (diamond)</option>
+              <option value="column">Column</option>
+              <option value="jitter">Jitter</option>
+            </select></div>
+          <div class="drow" id="row-blob-jitter"><span>Jitter</span><input type="number" id="d-blob-jitter" min="0" max="1" step="0.1"></div>
+          <div class="drow"><span>Volume (mm&sup3;)</span><input type="number" id="d-blob-volume" min="0.5" max="15" step="0.5"></div>
+          <div class="drow"><span>Size at base &times;</span><input type="number" id="d-blob-volstart" min="0.1" max="3" step="0.1"></div>
+          <div class="drow"><span>Size at top &times;</span><input type="number" id="d-blob-volend" min="0.1" max="3" step="0.1"></div>
+          <div class="drow"><span>Dwell (ms)</span><input type="number" id="d-blob-dwell" min="50" max="2000" step="50"></div>
+          <div class="drow"><span>Fade in</span><input type="number" id="d-blob-fadein" min="0" max="0.5" step="0.05"></div>
+          <div class="drow"><span>Fade out</span><input type="number" id="d-blob-fadeout" min="0" max="0.5" step="0.05"></div>
+          <div class="hint" style="margin-top:2px">Raised dots: nozzle dwells and extrudes extra
+            material at regular intervals. Higher volume = bigger blobs.</div>
+        </div>
+
+        <div id="loop-rows" style="display:none">
+          <div class="drow"><span>Loop style</span>
+            <select id="d-loop-style">
+              <option value="tiedspikes">Tied spikes (video style)</option>
+              <option value="chainmail">Chainmail (dense)</option>
+              <option value="fineknit">Fine knit</option>
+              <option value="opennet">Open net</option>
+              <option value="ribs">Vertical ribs</option>
+              <option value="zigzag">Zigzag weave</option>
+              <option value="scallops">Scallop rows</option>
+              <option value="custom">Custom</option>
+            </select></div>
+          <div class="drow"><span>Stitch spacing (mm)</span><input type="number" id="d-loop-spacing" min="0" max="20" step="0.5"></div>
+          <div class="hint" style="margin-top:-4px;margin-bottom:2px">0 = use per-turn count</div>
+          <div class="drow"><span>Loops per turn</span><input type="number" id="d-loop-per-turn" min="1" max="48" step="1"></div>
+          <div class="drow"><span>Row height (mm)</span><input type="number" id="d-loop-row" min="1" max="6" step="0.5"></div>
+          <div class="drow"><span>Loop height (mm)</span><input type="number" id="d-loop-up" min="1" max="8" step="0.5"></div>
+          <div class="hint" id="loop-zcap" style="margin-top:-4px;margin-bottom:2px"></div>
+          <div class="drow"><span>Outward lean (mm)</span><input type="number" id="d-loop-out" min="0" max="5" step="0.25"></div>
+          <div class="drow"><span>Alignment</span>
+            <select id="d-loop-align">
+              <option value="stagger">Stagger (brick)</option>
+              <option value="column">Column</option>
+            </select></div>
+          <div class="drow"><span>Stitch motion</span>
+            <select id="d-loop-mode">
+              <option value="dip">Dip (hook below)</option>
+              <option value="spike">Spike (rise + pause)</option>
+            </select></div>
+          <div class="drow" id="row-loop-dwell"><span>Peak pause (ms)</span><input type="number" id="d-loop-dwell" min="0" max="2000" step="50"></div>
+          <div class="drow" id="row-loop-lean"><span>Spike lean (deg)</span><input type="number" id="d-loop-lean" min="0" max="45" step="5"></div>
+          <div class="drow" id="row-loop-coast"><span>Tip coast (mm)</span><input type="number" id="d-loop-coast" min="0" max="6" step="0.2"></div>
+          <div class="drow" id="row-loop-retract"><span>Tip retract (mm)</span><input type="number" id="d-loop-retract" min="0" max="2" step="0.1"></div>
+          <div class="hint" id="retract-hint" style="margin-top:-4px;margin-bottom:2px">Pulls filament back
+            during the peak pause — the strong fix for oozy tips. 0 = off.</div>
+          <div class="drow"><span>Row wave (mm)</span><input type="number" id="d-loop-waveamp" min="0" max="3" step="0.25"></div>
+          <div class="drow"><span>Waves around</span><input type="number" id="d-loop-waves" min="1" max="40" step="1"></div>
+          <div class="drow"><span>Strand thickness &times;</span><input type="number" id="d-loop-flow" min="0.5" max="2.5" step="0.1"></div>
+          <div class="drow"><span>Stitch speed (mm/s)</span><input type="number" id="d-loop-speed" min="5" max="30" step="1"></div>
+          <div class="drow"><span>Base cuff (turns)</span><input type="number" id="d-loop-cuff" min="1" max="10" step="1"></div>
+          <div class="hint" style="margin-top:2px">Knitted wall: the whole wall becomes rows of
+            VERTICAL loop stitches. Each row climbs by Row height while every stitch dips down by
+            Loop height and hooks the row below &#8212; loop height must exceed row height to
+            interlock. No solid wall; fully open fabric. Slow + max cooling.</div>
+        </div>
+
+        <hr>
+        <div class="drow"><span>Overhang flow boost</span>
+          <input type="range" id="d-overhang-k" min="0" max="1" step="0.05" style="width:90px">
+          <span id="overhang-k-read" style="font-size:11px;min-width:28px;text-align:right">0</span>
+        </div>
+        <div class="hint" style="margin-top:2px">Compensates under-extrusion on outward-leaning
+          walls. 0 = off, higher = more extra flow on overhangs.</div>
+
+        <div class="cv-editor" id="sil-section">
+          <div class="cv-head"><b>Silhouette</b><span class="cv-reset" id="sil-reset">reset</span></div>
+          <div id="sil-mode-bar">
+            <button class="sil-mode-btn" data-silmode="sym">Symmetrical</button>
+            <button class="sil-mode-btn" data-silmode="asym">Unsymmetrical (3D)</button>
+          </div>
+          <div id="sil-sym-panel">
+            <canvas id="sil-curve" width="360" height="100"></canvas>
+            <div class="hint" style="margin-top:2px">Scales the whole outline at each height.
+              Double-click to add a point, right-click to remove, drag to shape. Shift = fine.</div>
+          </div>
+          <div id="sil-asym-panel" style="display:none">
+            <div class="hint" style="margin-top:2px">Drag the orange points ON THE MODEL (left) to bulge
+              or dent local regions — each point affects only its side. Points appear when this mode is
+              active and a draft preview is visible.</div>
+            <button id="cage-reset" style="margin-top:6px;width:100%">Reset unsymmetrical changes</button>
+            <div class="hint" id="cage-note" style="margin-top:4px">Applies to parametric designs
+              (not loop fabric or STL mode).</div>
+          </div>
+        </div>
+        <label class="row" style="margin-top:6px"><span>Smooth silhouette curvature</span><input type="checkbox" id="sil-smooth"></label>
+      </div>
+
+      <!-- ---- Step 3: Print ---- -->
+      <div class="step-panel" id="step-print">
+        <div class="drow"><span>Nozzle (mm)</span>
+          <select id="d-nozzle">
+            <option value="">auto (profile)</option>
+            <option value="0.2">0.2</option>
+            <option value="0.4">0.4</option>
+            <option value="0.6">0.6</option>
+            <option value="0.8">0.8</option>
+          </select></div>
+        <div class="drow"><span>Print speed (mm/s)</span><input type="number" id="d-speed" min="20" max="90" step="1"></div>
+        <div class="drow"><span>Filament</span><select id="d-filament"></select></div>
+        <div class="drow"><span>Line width override</span><input type="number" id="d-lwoverride" min="0.1" max="1.2" step="0.05" placeholder="auto"></div>
+      </div>
+
+      <!-- ---- Step 4: Generate (printer + generate/download) ---- -->
+      <div class="step-panel" id="step-generate">
+        <div class="group" id="printer-group">
+          <h2>Printer</h2>
+          <div class="drow"><span>Printer</span>
+            <select id="d-printer"></select></div>
+        </div>
+
+        <button id="gen-btn">Generate &amp; preview</button>
+        <div id="gen-status"></div>
+        <pre id="gen-report"></pre>
+        <button id="dl-btn">Download .gcode</button>
+      </div>
+
+      <div id="step-nav">
+        <button id="step-back">Back</button>
+        <button id="step-next">Next</button>
+      </div>
+    </div>
+    </div>
+
+    <div id="mode-viewer">
+    <div class="drop" id="drop">
+      Click to choose a .gcode file<br>or drag &amp; drop anywhere
+      <input type="file" id="file" accept=".gcode,.gco,.g,.nc,.txt" hidden>
+    </div>
+
+    <div class="group" id="telemetry-group" style="display:none">
+      <h2>Live telemetry <span style="color:var(--muted);font-weight:400;text-transform:none">&#8212; at playhead</span></h2>
+      <div class="stat"><span>Speed</span><span id="tm-speed" class="tm">&#8211;</span></div>
+      <div class="stat"><span>Flow rate</span><span id="tm-flow" class="tm">&#8211;</span></div>
+      <div class="stat"><span>Z height</span><span id="tm-z" class="tm">&#8211;</span></div>
+      <div class="stat"><span>Layer height</span><span id="tm-lh" class="tm">&#8211;</span></div>
+      <div class="stat"><span>Line width</span><span id="tm-lw" class="tm">&#8211;</span></div>
+      <div class="stat"><span>Nozzle</span><span id="tm-nz" class="tm">&#8211;</span></div>
+    </div>
+
+    <div class="group" id="stats-group" style="display:none">
+      <h2>Print stats</h2>
+      <div class="stat"><span>File</span><span id="s-name">&#8211;</span></div>
+      <div class="stat"><span>Extrude moves</span><span id="s-moves">&#8211;</span></div>
+      <div class="stat"><span>Travel moves</span><span id="s-travel">&#8211;</span></div>
+      <div class="stat"><span>Height (Z)</span><span id="s-height">&#8211;</span></div>
+      <div class="stat"><span>Footprint</span><span id="s-foot">&#8211;</span></div>
+      <div class="stat"><span>Filament</span><span id="s-fil">&#8211;</span></div>
+      <div class="stat"><span>Max Z-rate</span><span id="s-zrate">&#8211;</span></div>
+      <div class="stat"><span>Est. time</span><span id="s-time" class="tm">&#8211;</span></div>
+      <div class="stat"><span>Risky moves</span><span id="s-risk" class="tm">&#8211;</span></div>
+    </div>
+
+    <div class="group">
+      <h2>Display</h2>
+      <label class="row"><span>Color</span>
+        <select id="t-colormode" style="width:110px;background:var(--input-bg);color:var(--txt);border:1px solid var(--input-border);border-radius:6px;padding:3px 5px;font-size:12px">
+          <option value="height">By height</option>
+          <option value="overhang">By overhang</option>
+          <option value="plain">Plain</option>
+        </select></label>
+      <label class="row"><span>X-ray view</span><input type="checkbox" id="t-xray"></label>
+      <label class="row"><span>Emphasize layers</span><input type="checkbox" id="t-bands" checked></label>
+      <label class="row"><span>Highlight risky</span><input type="checkbox" id="t-risk"></label>
+      <label class="row"><span>Show travels</span><input type="checkbox" id="t-travel" checked></label>
+      <label class="row"><span>Show printer</span><input type="checkbox" id="t-printer" checked></label>
+      <label class="row"><span>Show bed grid</span><span><input type="checkbox" id="t-bed" checked></span></label>
+      <label class="row"><span>Spin</span><input type="checkbox" id="t-spin"></label>
+      <label class="row"><span>True bead width</span><input type="checkbox" id="t-truewidth" checked></label>
+      <label class="row" id="row-width" style="opacity:.45"><span>Line thickness (px)</span>
+        <input type="range" id="t-width" min="1" max="9" step="0.5" value="2" style="width:110px"></label>
+      <button id="fit-view" style="width:100%;margin-top:8px;padding:6px 0;border:1px solid var(--line);
+        border-radius:8px;background:#1c2230;color:var(--txt);font-size:12px;cursor:pointer">
+        Fit view to model &nbsp;(F)</button>
+      <div class="legend" id="legend"></div>
+      <div class="legend-labels" id="legend-labels"><span id="z-lo">0</span><span id="z-mid">height (mm)</span><span id="z-hi">&#8211;</span></div>
+    </div>
+
+    <div class="hint">
+      Bed: 235 &times; 235 mm. Z up to 160 mm. The path is colored low&#8594;high so you can
+      see the non-planar Z modulation. Drag to orbit, scroll to zoom, right-drag to pan.
+      <br><br>
+      <b>Playback:</b> space = play/pause &middot; <b>&#8592; &#8594;</b> step one turn &middot; Home/End = start/finish.
+    </div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module" src="viewer.js"></script>
+
+<!-- ============================================================= -->
+<!-- Design-a-vase panel: tabs, curve editors, generate. Plain      -->
+<!-- (non-module) script; talks to serve.py's JSON API and drives  -->
+<!-- window.loadGcode.                                              -->
+<!-- ============================================================= -->
+<script src="preview_math.js"></script>
+<script src="designer.js"></script>
+</body>
+</html>
