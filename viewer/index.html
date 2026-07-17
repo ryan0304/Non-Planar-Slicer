@@ -297,6 +297,13 @@
         <div class="drow"><span>Print speed (mm/s)</span><input type="number" id="d-speed" min="20" max="90" step="1"></div>
         <div class="drow"><span>Filament</span><select id="d-filament"></select></div>
         <div class="drow"><span>Line width override</span><input type="number" id="d-lwoverride" min="0.1" max="1.2" step="0.05" placeholder="auto"></div>
+
+        <div class="cv-editor">
+          <div class="cv-head"><b>Line width over height</b><span class="cv-reset" id="width-reset">reset</span></div>
+          <canvas id="width-curve" width="360" height="100"></canvas>
+          <div class="hint" style="margin-top:2px">Scales bead width at each height (0.6-1.8&times;).
+            Double-click to add a point, right-click to remove, drag to shape. Shift = fine.</div>
+        </div>
       </div>
 
       <!-- ---- Step 4: Generate (printer + generate/download) ---- -->

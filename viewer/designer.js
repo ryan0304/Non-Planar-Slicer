@@ -21,6 +21,7 @@
     amp_profile: [[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]],
     radius_profile: [[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]],
     radius_profile_smooth: false,
+    width_profile: [[0,1],[1,1]],
     sil3d: false,
     sil_mode: "sym",
     cage: null,
@@ -604,14 +605,19 @@
                              PROBE_LIMIT, 'amp limit 0.95');
   var silEditor = makeEditor('sil-curve', RAD_LO, RAD_HI, [1,1,1,1,1,1],
                              1.0, '1.0');
+  var widthEditor = makeEditor('width-curve', 0.6, 1.8, [1,1,1,1,1,1],
+                               1.0, '1.0');
   // Restore persisted curve shapes.
   ampEditor.setProfile(design.amp_profile);
   silEditor.setProfile(design.radius_profile);
-  ampEditor.draw(); silEditor.draw();
+  widthEditor.setProfile(design.width_profile);
+  ampEditor.draw(); silEditor.draw(); widthEditor.draw();
   ampEditor.setChangeHandler(function(){ design.amp_profile = ampEditor.profile(); persistDesign(); updateSlope(); schedulePreview(); });
   silEditor.setChangeHandler(function(){ design.radius_profile = silEditor.profile(); persistDesign(); updateSlope(); schedulePreview(); refreshShapeCage(); });
+  widthEditor.setChangeHandler(function(){ design.width_profile = widthEditor.profile(); persistDesign(); schedulePreview(); });
   document.getElementById('amp-reset').addEventListener('click', function(){ ampEditor.reset(); });
   document.getElementById('sil-reset').addEventListener('click', function(){ silEditor.reset(); });
+  document.getElementById('width-reset').addEventListener('click', function(){ widthEditor.reset(); });
 
   // Smooth-curve checkbox for the silhouette editor.
   (function(){
@@ -1348,7 +1354,8 @@
     if(ohRead) ohRead.textContent = (design.overhang_flow_k || 0).toFixed(2);
     ampEditor.setProfile(design.amp_profile);
     silEditor.setProfile(design.radius_profile);
-    ampEditor.draw(); silEditor.draw();
+    widthEditor.setProfile(design.width_profile);
+    ampEditor.draw(); silEditor.draw(); widthEditor.draw();
     persistDesign();
     refreshShapeRows();
     refreshPatternRows();
@@ -1362,6 +1369,7 @@
     var data = JSON.parse(JSON.stringify(design));
     data.amp_profile = ampEditor.profile();
     data.radius_profile = silEditor.profile();
+    data.width_profile = widthEditor.profile();
     var blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -1502,6 +1510,7 @@
       filament: design.filament || null,
       amp_profile: ampEditor.profile(),
       radius_profile: silEditor.profile(),
+      width_profile: widthEditor.profile(),
       radius_profile_smooth: !!design.radius_profile_smooth,
       pattern: null,
       overhang_flow_k: design.overhang_flow_k || 0,
