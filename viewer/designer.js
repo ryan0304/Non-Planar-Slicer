@@ -229,10 +229,27 @@
     var splitter = document.getElementById('splitter');
     var panel = document.getElementById('panel');
     var MIN_W = 280, MAX_W = 500, DEFAULT_W = 340;
+    // Below the responsive breakpoint the stylesheet stacks the panel
+    // full-width; an inline width would override that media query, so only
+    // apply (and keep) the persisted width on wide viewports.
+    var narrowMq = window.matchMedia('(max-width: 900px)');
+    function applyPanelWidth(w){
+      if(narrowMq.matches){
+        panel.style.width = '';
+        panel.style.flexBasis = '';
+        return;
+      }
+      panel.style.width = w + 'px';
+      panel.style.flexBasis = w + 'px';
+    }
     var saved = parseFloat(localStorage.getItem('panel-width'));
     var startW = (saved && saved >= MIN_W && saved <= MAX_W) ? saved : DEFAULT_W;
-    panel.style.width = startW + 'px';
-    panel.style.flexBasis = startW + 'px';
+    applyPanelWidth(startW);
+    narrowMq.addEventListener('change', function(){
+      var s = parseFloat(localStorage.getItem('panel-width'));
+      applyPanelWidth((s && s >= MIN_W && s <= MAX_W) ? s : DEFAULT_W);
+      if(window.__viewerResize) window.__viewerResize();
+    });
 
     var dragging = false, startX = 0, startPanelW = 0;
     function onMove(e){
