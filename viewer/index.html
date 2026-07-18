@@ -16,7 +16,23 @@
     </div></div>
     <div id="stale-badge" class="stale-badge">G-code is outdated &#8212; design changed
       since last generate</div>
-    <!-- Machine readout strip: sparkline + scrub bar + live telemetry, one HUD -->
+    <!-- Floating Orca-style telemetry card, anchored top-left of the canvas. -->
+    <div id="telemetry-card" class="telemetry-card" style="display:none">
+      <div class="telemetry-header">
+        <span class="telemetry-title">Telemetry</span>
+        <button id="telemetry-toggle" class="telemetry-toggle" type="button"
+          title="Collapse telemetry" aria-expanded="true" aria-controls="telemetry-group">&#9662;</button>
+      </div>
+      <div id="telemetry-group" class="readout-telemetry">
+        <div class="stat"><span>Speed</span><span id="tm-speed" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Flow rate</span><span id="tm-flow" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Z height</span><span id="tm-z" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Layer height</span><span id="tm-lh" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Line width</span><span id="tm-lw" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Nozzle</span><span id="tm-nz" class="tm">&#8211;</span></div>
+      </div>
+    </div>
+    <!-- Machine readout strip: sparkline + scrub bar only, slim -->
     <div id="tl-wrap" class="machine-readout" style="display:none">
       <canvas id="spark" class="spark"></canvas>
       <div id="timeline" class="timeline">
@@ -29,14 +45,6 @@
           <option value="0.5">4&times;</option>
         </select>
         <span id="tl-read" class="tl-read">100%</span>
-      </div>
-      <div id="telemetry-group" class="readout-telemetry" style="display:none">
-        <div class="stat"><span>Speed</span><span id="tm-speed" class="tm">&#8211;</span></div>
-        <div class="stat"><span>Flow rate</span><span id="tm-flow" class="tm">&#8211;</span></div>
-        <div class="stat"><span>Z height</span><span id="tm-z" class="tm">&#8211;</span></div>
-        <div class="stat"><span>Layer height</span><span id="tm-lh" class="tm">&#8211;</span></div>
-        <div class="stat"><span>Line width</span><span id="tm-lw" class="tm">&#8211;</span></div>
-        <div class="stat"><span>Nozzle</span><span id="tm-nz" class="tm">&#8211;</span></div>
       </div>
     </div>
   </div>

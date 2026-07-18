@@ -63,7 +63,7 @@ input, select, textarea {
 }
 
 /* Uppercase label / group-heading treatment. */
-.group h2, .section-heading, .step-label, .cv-head, .legend-labels {
+.group h2, .section-heading, .step-label, .cv-head, .legend-labels, .telemetry-title {
   text-transform:uppercase;
   letter-spacing:.06em;
   color:var(--ink-muted);
@@ -131,10 +131,10 @@ input[type=checkbox] { accent-color:var(--accent); }
 .card-title { font-size:14px; margin-bottom:6px; }
 
 /* =========================================================================
-   Machine readout strip — unifies the timeline scrubber (sparkline + scrub
-   bar) and the live telemetry group into one bottom HUD. Turn/revolution
-   count gets visual primacy since per-turn playback stepping is this tool's
-   signature interaction.
+   Machine readout strip — the timeline scrubber (sparkline + scrub bar)
+   only. Slim, full-width, bottom of the canvas. Turn/revolution count gets
+   visual primacy since per-turn playback stepping is this tool's signature
+   interaction. Live telemetry lives in the floating card below instead.
    ========================================================================= */
 .machine-readout { position:absolute; left:var(--sp-4); right:var(--sp-4); bottom:var(--sp-3);
   background:rgba(21,26,34,.94); border:1px solid var(--line); border-radius:10px;
@@ -152,13 +152,31 @@ input[type=checkbox] { accent-color:var(--accent); }
 .tl-read { font-size:12px; color:var(--ink-muted); min-width:150px; text-align:right; }
 .tl-read .turn-count { color:var(--ink); font-weight:700; font-size:13px; }
 
-/* Live telemetry, folded into the same strip below the scrub bar. */
-.readout-telemetry { display:flex; flex-wrap:wrap; gap:0; border-top:1px solid var(--line); }
-.readout-telemetry .stat { flex:1 1 auto; min-width:84px; display:flex; flex-direction:column;
-  gap:2px; padding:6px var(--sp-3); border-bottom:none; border-right:1px solid var(--line); }
-.readout-telemetry .stat:last-child { border-right:none; }
+/* =========================================================================
+   Telemetry card — Orca-style floating overlay, anchored top-left of the
+   canvas (mirrors .overlay .card's translucent-surface idiom). Collapsible
+   via #telemetry-toggle; state persisted in localStorage.
+   ========================================================================= */
+.telemetry-card { position:absolute; top:16px; left:16px; width:190px; z-index:5;
+  background:rgba(21,26,34,.92); border:1px solid var(--line); border-radius:6px;
+  overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.35); }
+.telemetry-header { display:flex; align-items:center; justify-content:space-between;
+  padding:6px 8px; border-bottom:1px solid var(--line); }
+.telemetry-title { font-size:9.5px; margin:0; }
+.telemetry-toggle { background:none; border:none; color:var(--ink-muted); cursor:pointer;
+  font-size:11px; padding:2px 5px; line-height:1; border-radius:4px; font-family:var(--font-ui);
+  transition:color .15s, background-color .15s, transform .15s; }
+.telemetry-toggle:hover { color:var(--ink); background:var(--surface-raised); }
+.telemetry-toggle:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
+.telemetry-card.collapsed .telemetry-toggle { transform:rotate(-90deg); }
+.telemetry-card.collapsed .readout-telemetry { display:none; }
+
+/* Live telemetry rows: label left, value right (--font-mono via .tm). */
+.readout-telemetry { display:flex; flex-direction:column; padding:2px var(--sp-3) 4px; }
+.readout-telemetry .stat { flex:none; display:flex; align-items:center; justify-content:space-between;
+  gap:var(--sp-2); padding:4px 0; border-bottom:none; }
 .readout-telemetry .stat span:first-child { font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; }
-.readout-telemetry .stat .tm { font-size:13px; }
+.readout-telemetry .stat .tm { font-size:12.5px; }
 
 /* ---- Design a vase panel ---- */
 .drow { display:flex; align-items:center; justify-content:space-between; font-size:12px;
@@ -279,4 +297,5 @@ input[type=checkbox] { accent-color:var(--accent); }
   .splitter { display:none; }
   .mobile-note { display:block; font-size:11px; color:var(--warn); background:rgba(255,180,84,.10);
     border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:var(--sp-4); }
+  .telemetry-card { top:8px; left:8px; width:150px; max-width:calc(100% - 16px); }
 }

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<!--
+  dev_smoke.html — DEV-ONLY visual-smoke harness. NOT part of the app.
+
+  Loads index.html in a fullscreen iframe, fetches a .gcode file (same-origin,
+  via serve.py) and feeds it into the running viewer through the existing
+  window.loadGcode(name, text) hook. Used to screenshot the viewer in a
+  "gcode loaded" state (model + slim timeline + telemetry card) for manual
+  or headless-Chrome visual verification. Query param:
+
+    ?file=<path relative to viewer/dev_smoke.html>   default: ../examples/01b_probe_safe_vase.gcode
+
+  Usage:  python serve.py   then open
+          http://localhost:8777/viewer/dev_smoke.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>dev smoke — Trident viewer</title>
+<style>
+  html,body { margin:0; height:100%; background:#0b0e13; }
+  iframe { display:block; width:100%; height:100%; border:none; }
+  #smoke-status { position:fixed; top:4px; left:4px; z-index:9999; font:11px monospace;
+    color:#8b97a7; background:rgba(0,0,0,.5); padding:2px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="smoke-status">loading iframe...</div>
+<iframe id="viewer-frame" src="index.html"></iframe>
+<script>
+  const params = new URLSearchParams(location.search);
+  const file = params.get('file') || '../examples/01b_probe_safe_vase.gcode';
+  const status = document.getElementById('smoke-status');
+  const frame = document.getElementById('viewer-frame');
+
+  frame.addEventListener('load', () => {
+    status.textContent = 'iframe loaded, fetching ' + file + ' ...';
+    fetch(file)
+      .then(r => {
+        if (!r.ok) throw new Error('fetch failed: ' + r.status + ' ' + r.statusText);
+        return r.text();
+      })
+      .then(text => {
+        const name = file.split('/').pop();
+        frame.contentWindow.loadGcode(name, text);
+        status.textContent = 'loaded ' + name + ' (' + text.length + ' bytes)';
+      })
+      .catch(err => {
+        status.textContent = 'ERROR: ' + err.message;
+        status.style.color = '#ff5d5d';
+      });
+  });
+</script>
+</body>
+</html>

@@ -713,14 +713,28 @@ function sparkSeek(e){
   window.addEventListener('mouseup', ()=>{ draggingSpark=false; });
 }
 
+// ---- telemetry card collapse (persisted across reloads) -------------------
+{
+  const TM_KEY = 'telemetry-collapsed';
+  const card = document.getElementById('telemetry-card');
+  const toggleBtn = document.getElementById('telemetry-toggle');
+  function setTelemetryCollapsed(collapsed){
+    card.classList.toggle('collapsed', collapsed);
+    toggleBtn.setAttribute('aria-expanded', String(!collapsed));
+    localStorage.setItem(TM_KEY, collapsed ? '1' : '0');
+  }
+  setTelemetryCollapsed(localStorage.getItem(TM_KEY) === '1');
+  toggleBtn.addEventListener('click', ()=> setTelemetryCollapsed(!card.classList.contains('collapsed')));
+}
+
 let lastData=null;
 let cuts=[0];   // extrude-segment indices at each spiral-turn boundary (+ the end)
 function load(name,text){
   lastData=parseGcode(text);
   cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
   buildGeometry(lastData); showStats(name,lastData);
-  document.getElementById('tl-wrap').style.display='block';
-  document.getElementById('telemetry-group').style.display='block';
+  document.getElementById('tl-wrap').style.display='';
+  document.getElementById('telemetry-card').style.display='';
   stopPlay(); setProgress(1);            // start fully drawn
   fitView();                             // frame the camera on the model
   // Build the sparkline after layout settles (offsetWidth needs a rendered frame).
