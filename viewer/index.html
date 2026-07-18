@@ -5,24 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="Cache-Control" content="no-store" />
 <title>Trident Non-Planar G-code Viewer</title>
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
-<div id="app">
-  <div id="canvas-wrap">
-    <div id="overlay"><div class="card">
-      <div style="font-size:14px;margin-bottom:6px">Drop a <b>.gcode</b> file here</div>
+<div id="app" class="app-shell">
+  <div id="canvas-wrap" class="canvas-wrap">
+    <div id="overlay" class="overlay"><div class="card">
+      <div class="card-title">Drop a <b>.gcode</b> file here</div>
       <div class="sub" style="margin:0">or use the picker on the right</div>
     </div></div>
-    <div id="stale-badge" style="display:none;position:absolute;top:40px;left:50%;
-      transform:translateX(-50%);z-index:6;padding:4px 12px;border-radius:6px;
-      background:rgba(224,64,47,.15);border:1px solid #e0402f;color:#ff8a7a;
-      font-size:11.5px;pointer-events:none">G-code is outdated &#8212; design changed
+    <div id="stale-badge" class="stale-badge">G-code is outdated &#8212; design changed
       since last generate</div>
-    <!-- Timeline wrap: sparkline on top, controls below -->
-    <div id="tl-wrap" style="display:none">
-      <canvas id="spark"></canvas>
-      <div id="timeline">
+    <!-- Machine readout strip: sparkline + scrub bar + live telemetry, one HUD -->
+    <div id="tl-wrap" class="machine-readout" style="display:none">
+      <canvas id="spark" class="spark"></canvas>
+      <div id="timeline" class="timeline">
         <button id="play" title="Play / pause">&#9654;</button>
         <input id="scrub" type="range" min="0" max="1000" value="1000">
         <select id="speed" title="Playback speed">
@@ -31,35 +28,45 @@
           <option value="0.1667">2&times;</option>
           <option value="0.5">4&times;</option>
         </select>
-        <span id="tl-read">100%</span>
+        <span id="tl-read" class="tl-read">100%</span>
+      </div>
+      <div id="telemetry-group" class="readout-telemetry" style="display:none">
+        <div class="stat"><span>Speed</span><span id="tm-speed" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Flow rate</span><span id="tm-flow" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Z height</span><span id="tm-z" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Layer height</span><span id="tm-lh" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Line width</span><span id="tm-lw" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Nozzle</span><span id="tm-nz" class="tm">&#8211;</span></div>
       </div>
     </div>
   </div>
-  <div id="splitter" title="Drag to resize"></div>
-  <div id="panel">
-    <div id="panel-scroll">
+  <div id="splitter" class="splitter" title="Drag to resize"></div>
+  <div id="panel" class="panel">
+    <div id="panel-scroll" class="panel-scroll">
     <h1>Trident Non-Planar Viewer</h1>
     <div class="sub">Continuous single-Z toolpath preview</div>
+    <div class="mobile-note">Best experienced on desktop &#8212; cage-handle drag, curve-editor
+      drag and per-turn arrow-key playback are pointer/keyboard interactions.</div>
 
-    <div id="mode-bar">
+    <div id="mode-bar" class="mode-bar">
       <button class="mode-btn" data-mode="design">Design</button>
       <button class="mode-btn" data-mode="viewer">G-code Viewer</button>
     </div>
 
-    <div id="mode-design">
+    <div id="mode-design" class="mode-panel">
     <div class="group" id="design-group">
       <h2>Design a vase</h2>
 
-      <div id="preset-bar">
+      <div id="preset-bar" class="preset-bar">
         <select id="preset-select"><option value="">Load preset...</option></select>
-        <button id="undo-btn" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
-        <button id="redo-btn" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
-        <button id="save-design" title="Save design as JSON">Save</button>
-        <button id="load-design" title="Load design from JSON">Load</button>
+        <button id="undo-btn" class="btn btn-icon" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
+        <button id="redo-btn" class="btn btn-icon" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
+        <button id="save-design" class="btn btn-sm" title="Save design as JSON">Save</button>
+        <button id="load-design" class="btn btn-sm" title="Load design from JSON">Load</button>
         <input type="file" id="load-design-file" accept=".json" hidden>
       </div>
 
-      <div id="step-bar">
+      <div id="step-bar" class="step-bar">
         <button class="step-item" data-step="model"><span class="step-num">1</span><span class="step-label">Model</span></button>
         <button class="step-item" data-step="texture"><span class="step-num">2</span><span class="step-label">Texture</span></button>
         <button class="step-item" data-step="print"><span class="step-num">3</span><span class="step-label">Print</span></button>
@@ -80,11 +87,11 @@
         <div class="drow"><span>XY twist (turns)</span><input type="number" id="d-xytwist" min="-3" max="3" step="0.25"></div>
 
         <hr>
-        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px">Asymmetry</h3>
+        <h3 class="section-heading">Asymmetry</h3>
         <div class="drow"><span>Lean (mm)</span><input type="number" id="d-spine" min="0" max="20" step="1"></div>
         <div class="drow"><span>Lean direction (deg)</span><input type="number" id="d-spinedeg" min="0" max="360" step="15"></div>
         <div class="drow"><span>Ovality</span><input type="number" id="d-ovality" min="-0.4" max="0.4" step="0.05"></div>
-        <div class="hint" style="margin-top:-2px;margin-bottom:2px">Lean bends the vase so the top
+        <div class="hint tight-top">Lean bends the vase so the top
           shifts sideways; ovality squashes the cross-section into an ellipse.</div>
 
         <div id="star-rows" style="display:none">
@@ -94,9 +101,9 @@
 
         <div class="drow" style="margin-top:8px"><span>Bottom</span>
           <span>
-            <label style="cursor:pointer"><input type="radio" name="d-bottom" value="solid"> Solid</label>
+            <label class="radio-inline"><input type="radio" name="d-bottom" value="solid"> Solid</label>
             &nbsp;
-            <label style="cursor:pointer"><input type="radio" name="d-bottom" value="open"> Open</label>
+            <label class="radio-inline"><input type="radio" name="d-bottom" value="open"> Open</label>
           </span>
         </div>
         <div class="drow" id="row-base"><span>Base layers</span><input type="number" id="d-base" min="0" max="3" step="1"></div>
@@ -113,21 +120,21 @@
         <div class="drow" id="row-spacing"><span>Base line spacing &times;</span><input type="number" id="d-spacing" min="0.9" max="1.5" step="0.05"></div>
 
         <hr>
-        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px">Or import an STL</h3>
+        <h3 class="section-heading">Or import an STL</h3>
         <div id="import-panel">
           <div class="import-drop" id="stl-drop">
             Drop an STL file here<br>or click to browse
             <input type="file" id="stl-file" accept=".stl" hidden>
           </div>
 
-          <div id="mesh-info" style="display:none">
-            <div class="drow"><span>Mesh</span><span id="mesh-name">-</span></div>
+          <div id="mesh-info" class="mesh-info" style="display:none">
+            <div class="drow"><span>Mesh</span><span id="mesh-name" class="mesh-name">-</span></div>
             <div class="drow"><span>Triangles</span><span id="mesh-tris">-</span></div>
             <div class="drow"><span>Size (mm)</span><span id="mesh-size">-</span></div>
             <div class="drow"><span>Height (mm)</span><span id="mesh-height">-</span></div>
             <div class="drow"><span>Scale</span><input type="number" id="mesh-scale" min="0.1" max="10" step="0.1" value="1.0"></div>
             <div class="drow"><span>Layer height</span><input type="number" id="mesh-lh" min="0.1" max="0.6" step="0.05" value="0.3"></div>
-            <button id="mesh-clear" style="margin-top:8px;width:100%">Clear mesh</button>
+            <button id="mesh-clear" class="btn btn-block mt-2">Clear mesh</button>
             <div class="hint" style="margin-top:6px">
               Works best with vase-like shapes (single outer wall).
               Use the Texture and Waves tabs to add surface patterns.
@@ -138,14 +145,14 @@
 
       <!-- ---- Step 2: Texture (Z waves + surface texture) ---- -->
       <div class="step-panel" id="step-texture">
-        <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px">Z waves</h3>
+        <h3 class="section-heading">Z waves</h3>
         <div class="drow"><span>Z waves</span><input type="number" id="d-waves" min="0" max="12" step="1"></div>
         <div class="drow"><span>Z twist (turns)</span><input type="number" id="d-ztwist" min="0" max="2" step="0.25"></div>
 
         <div class="cv-editor">
           <div class="cv-head"><b>Wave amplitude over height</b><span class="cv-reset" id="amp-reset">reset</span></div>
           <canvas id="amp-curve" width="360" height="100"></canvas>
-          <div id="slope-read" style="font-size:10.5px;color:var(--muted);margin-top:3px"></div>
+          <div id="slope-read" class="cv-note"></div>
         </div>
 
         <hr>
@@ -188,7 +195,7 @@
             </select></div>
           <div class="drow"><span>Blobs per turn</span><input type="number" id="d-blob-per-turn" min="1" max="36" step="1"></div>
           <div class="drow"><span>Spacing (mm)</span><input type="number" id="d-blob-spacing" min="0" max="20" step="0.5"></div>
-          <div class="hint" style="margin-top:-4px;margin-bottom:2px">0 = use per-turn count</div>
+          <div class="hint tight-top">0 = use per-turn count</div>
           <div class="drow"><span>Turn stride</span><input type="number" id="d-blob-stride" min="1" max="10" step="1"></div>
           <div class="drow"><span>Alignment</span>
             <select id="d-blob-align">
@@ -220,7 +227,7 @@
               <option value="custom">Custom</option>
             </select></div>
           <div class="drow"><span>Stitch spacing (mm)</span><input type="number" id="d-loop-spacing" min="0" max="20" step="0.5"></div>
-          <div class="hint" style="margin-top:-4px;margin-bottom:2px">0 = use per-turn count</div>
+          <div class="hint tight-top">0 = use per-turn count</div>
           <div class="drow"><span>Loops per turn</span><input type="number" id="d-loop-per-turn" min="1" max="48" step="1"></div>
           <div class="drow"><span>Row height (mm)</span><input type="number" id="d-loop-row" min="1" max="6" step="0.5"></div>
           <div class="drow"><span>Loop height (mm)</span><input type="number" id="d-loop-up" min="1" max="8" step="0.5"></div>
@@ -263,7 +270,7 @@
 
         <div class="cv-editor" id="sil-section">
           <div class="cv-head"><b>Silhouette</b><span class="cv-reset" id="sil-reset">reset</span></div>
-          <div id="sil-mode-bar">
+          <div id="sil-mode-bar" class="sil-mode-bar">
             <button class="sil-mode-btn" data-silmode="sym">Symmetrical</button>
             <button class="sil-mode-btn" data-silmode="asym">Unsymmetrical (3D)</button>
           </div>
@@ -276,7 +283,7 @@
             <div class="hint" style="margin-top:2px">Drag the orange points ON THE MODEL (left) to bulge
               or dent local regions — each point affects only its side. Points appear when this mode is
               active and a draft preview is visible.</div>
-            <button id="cage-reset" style="margin-top:6px;width:100%">Reset unsymmetrical changes</button>
+            <button id="cage-reset" class="btn btn-block mt-2">Reset unsymmetrical changes</button>
             <div class="hint" id="cage-note" style="margin-top:4px">Applies to parametric designs
               (not loop fabric or STL mode).</div>
           </div>
@@ -311,36 +318,26 @@
         <div class="group" id="printer-group">
           <h2>Printer</h2>
           <div class="drow"><span>Printer</span>
-            <select id="d-printer"></select></div>
+            <select id="d-printer" class="printer-select"></select></div>
         </div>
 
-        <button id="gen-btn">Generate &amp; preview</button>
-        <div id="gen-status"></div>
-        <pre id="gen-report"></pre>
-        <button id="dl-btn">Download .gcode</button>
+        <button id="gen-btn" class="btn btn-primary btn-block mt-4">Generate &amp; preview</button>
+        <div id="gen-status" class="gen-status"></div>
+        <pre id="gen-report" class="gen-report"></pre>
+        <button id="dl-btn" class="btn btn-block mt-2" style="display:none">Download .gcode</button>
       </div>
 
-      <div id="step-nav">
-        <button id="step-back">Back</button>
-        <button id="step-next">Next</button>
+      <div id="step-nav" class="step-nav">
+        <button id="step-back" class="btn">Back</button>
+        <button id="step-next" class="btn btn-primary">Next</button>
       </div>
     </div>
     </div>
 
-    <div id="mode-viewer">
+    <div id="mode-viewer" class="mode-panel">
     <div class="drop" id="drop">
       Click to choose a .gcode file<br>or drag &amp; drop anywhere
       <input type="file" id="file" accept=".gcode,.gco,.g,.nc,.txt" hidden>
-    </div>
-
-    <div class="group" id="telemetry-group" style="display:none">
-      <h2>Live telemetry <span style="color:var(--muted);font-weight:400;text-transform:none">&#8212; at playhead</span></h2>
-      <div class="stat"><span>Speed</span><span id="tm-speed" class="tm">&#8211;</span></div>
-      <div class="stat"><span>Flow rate</span><span id="tm-flow" class="tm">&#8211;</span></div>
-      <div class="stat"><span>Z height</span><span id="tm-z" class="tm">&#8211;</span></div>
-      <div class="stat"><span>Layer height</span><span id="tm-lh" class="tm">&#8211;</span></div>
-      <div class="stat"><span>Line width</span><span id="tm-lw" class="tm">&#8211;</span></div>
-      <div class="stat"><span>Nozzle</span><span id="tm-nz" class="tm">&#8211;</span></div>
     </div>
 
     <div class="group" id="stats-group" style="display:none">
@@ -351,7 +348,7 @@
       <div class="stat"><span>Height (Z)</span><span id="s-height">&#8211;</span></div>
       <div class="stat"><span>Footprint</span><span id="s-foot">&#8211;</span></div>
       <div class="stat"><span>Filament</span><span id="s-fil">&#8211;</span></div>
-      <div class="stat"><span>Max Z-rate</span><span id="s-zrate">&#8211;</span></div>
+      <div class="stat"><span>Max Z-rate</span><span id="s-zrate" class="tm">&#8211;</span></div>
       <div class="stat"><span>Est. time</span><span id="s-time" class="tm">&#8211;</span></div>
       <div class="stat"><span>Risky moves</span><span id="s-risk" class="tm">&#8211;</span></div>
     </div>
@@ -359,7 +356,7 @@
     <div class="group">
       <h2>Display</h2>
       <label class="row"><span>Color</span>
-        <select id="t-colormode" style="width:110px;background:var(--input-bg);color:var(--txt);border:1px solid var(--input-border);border-radius:6px;padding:3px 5px;font-size:12px">
+        <select id="t-colormode" class="colormode-select">
           <option value="height">By height</option>
           <option value="overhang">By overhang</option>
           <option value="plain">Plain</option>
@@ -374,9 +371,7 @@
       <label class="row"><span>True bead width</span><input type="checkbox" id="t-truewidth" checked></label>
       <label class="row" id="row-width" style="opacity:.45"><span>Line thickness (px)</span>
         <input type="range" id="t-width" min="1" max="9" step="0.5" value="2" style="width:110px"></label>
-      <button id="fit-view" style="width:100%;margin-top:8px;padding:6px 0;border:1px solid var(--line);
-        border-radius:8px;background:#1c2230;color:var(--txt);font-size:12px;cursor:pointer">
-        Fit view to model &nbsp;(F)</button>
+      <button id="fit-view" class="btn btn-block mt-2">Fit view to model &nbsp;(F)</button>
       <div class="legend" id="legend"></div>
       <div class="legend-labels" id="legend-labels"><span id="z-lo">0</span><span id="z-mid">height (mm)</span><span id="z-hi">&#8211;</span></div>
     </div>
