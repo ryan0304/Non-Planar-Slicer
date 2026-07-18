@@ -581,8 +581,10 @@ function showStats(name,d){
   set('s-fil',d.fil>0?(d.fil/1000).toFixed(2)+' m':'n/a');
   const zr=d.maxZrate;
   set('s-zrate',zr.toFixed(1)+' mm/s'+(zr>25.1?' !':' ok'));
+  document.getElementById('s-zrate').classList.toggle('state-danger', zr>25.1);
   set('s-time', d.estTime || '--');
   set('s-risk', d.riskyCount != null ? d.riskyCount.toLocaleString() : '--');
+  document.getElementById('s-risk').classList.toggle('state-warn', !!d.riskyCount);
   // Legend labels are owned by updateLegend so they stay correct in every
   // colour mode (height z-range vs overhang angle scale vs hidden for plain).
   updateLegend(document.getElementById('t-colormode').value, d);
@@ -593,12 +595,12 @@ function showStats(name,d){
 // visible canvas on top of a blitted copy each setProgress call.
 let sparkOffscreen = null;
 
-const SPARK_FLOW_MAX_REF = 17;    // red reference line at 17 mm^3/s
+const SPARK_FLOW_MAX_REF = 17;    // melt-ceiling reference line at 17 mm^3/s
 const SPARK_BUCKETS = 600;
-const SPARK_BG = 'rgba(14,17,22,0.85)';
+const SPARK_BG = 'rgba(21,26,34,0.85)';
 const SPARK_LINE_COL = '#4cc2ff';
 const SPARK_FILL_COL = 'rgba(76,194,255,0.18)';
-const SPARK_REF_COL = '#e0402f';
+const SPARK_REF_COL = '#ffb454';  // mirrors --warn in style.css (safety-state color, not decoration)
 const SPARK_CURSOR_COL = 'rgba(255,255,255,0.75)';
 
 function buildSparkline(d){
@@ -783,14 +785,16 @@ function setProgress(p){
     }
   }
   const z = (lastData? lastData.minz:0) + progress*((lastData? (lastData.maxz-lastData.minz):0));
-  let layerStr='';
+  let layerHtml='';
   if(cuts && cuts.length>1){
     const tot=cuts.length-1;
     const cur=Math.min(tot, cuts.filter(c=>c<=k).length);
-    layerStr=` L${cur}/${tot}`;
+    // Turn/revolution counter gets visual primacy -- per-spiral-turn stepping
+    // (arrow keys) is this tool's signature playback mode.
+    layerHtml=` &middot; <span class="turn-count">L${cur}/${tot}</span>`;
   }
-  document.getElementById('tl-read').textContent =
-    `Z ${z.toFixed(1)}mm${layerStr} ${Math.round(progress*100)}%`;
+  document.getElementById('tl-read').innerHTML =
+    `Z ${z.toFixed(1)}mm${layerHtml} &middot; ${Math.round(progress*100)}%`;
   document.getElementById('scrub').value = Math.round(progress*1000);
   updateTelemetry(k, z);
   drawSparkCursor(progress);
@@ -807,6 +811,8 @@ function updateTelemetry(k, z){
   set('tm-speed', spd ? spd.toFixed(0)+' mm/s' : '--');
   const flowWarn = flow>17 ? ' !' : '';   // 17 mm^3/s ~ typical melt ceiling
   set('tm-flow', flow ? flow.toFixed(1)+' mm3/s'+flowWarn : '--');
+  const tmFlowEl = document.getElementById('tm-flow');
+  if(tmFlowEl) tmFlowEl.classList.toggle('state-danger', flow>17);
   set('tm-z', z.toFixed(2)+' mm');
   set('tm-lh', lastData.meta.layerHeight!=null ? lastData.meta.layerHeight.toFixed(2)+' mm' : '--');
   set('tm-lw', lastData.meta.lineWidth!=null ? lastData.meta.lineWidth.toFixed(2)+' mm' : '--');

@@ -705,7 +705,8 @@
   // loop fabric geometry.
   function updateCageNote(){
     var noteEl = document.getElementById('cage-note');
-    if(noteEl) noteEl.style.color = (design.pattern === 'loops') ? '#ff8a7a' : '';
+    // Mirrors --warn in style.css (safety/constraint-state color, not decoration).
+    if(noteEl) noteEl.style.color = (design.pattern === 'loops') ? '#ffb454' : '';
   }
 
   // ---- Silhouette mode: Symmetrical (curve editor) vs Unsymmetrical/3D (cage) ----
@@ -784,7 +785,8 @@
     var over = peak > SLOPE_LIMIT + 1e-9;
     el.textContent = 'peak wave slope: ' + peak.toFixed(2) + ' / ' + SLOPE_LIMIT.toFixed(2) +
       (over ? '  TOO STEEP - waves may collapse' : '  ok');
-    el.style.color = over ? '#e0654f' : '#5fd08a';
+    // Safety-state readout: mirrors --danger / --ok in style.css (probe/collapse risk).
+    el.style.color = over ? '#ff5d5d' : '#3fdca0';
   }
 
   // ---- bind inputs to design state ----------------------------------------
