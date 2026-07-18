@@ -61,7 +61,7 @@ html,body {
 }
 
 /* Tabular, monospaced treatment for read-only machine/measured output only. */
-.mono, .tm, .gen-report, .tl-read, .readout-value, .step-summary {
+.tm, .gen-report, .tl-read {
   font-family:var(--font-mono);
   font-variant-numeric:tabular-nums;
 }
@@ -101,13 +101,11 @@ h1 { font-size:15px; margin:0 0 var(--sp-1); letter-spacing:.3px; }
   border-bottom:1px solid var(--line); }
 .stat span:first-child { color:var(--ink-muted); }
 .stat .tm { color:var(--accent); font-weight:600; }
-.stat .tm.state-ok { color:var(--ok); }
 .stat .tm.state-warn { color:var(--warn); }
 .stat .tm.state-danger { color:var(--danger); }
 input[type=range] { accent-color:var(--accent); }
 .group { margin-top:var(--sp-4); }
 .group h2 { font-size:11px; margin:0 0 var(--sp-2); font-weight:600; }
-.group h2 .h2-note { color:var(--ink-muted); font-weight:400; text-transform:none; letter-spacing:0; }
 label.row { display:flex; align-items:center; justify-content:space-between; font-size:12.5px;
   padding:5px 0; cursor:pointer; }
 label.radio-inline { cursor:pointer; }
@@ -193,7 +191,8 @@ input[type=checkbox] { accent-color:var(--accent); }
 /* ---- Design a vase panel ---- */
 .drow { display:flex; align-items:center; justify-content:space-between; font-size:12px;
   padding:4px 0; gap:8px; }
-.drow > span { color:var(--ink-muted); white-space:nowrap; }
+.drow > span { color:var(--ink-muted); white-space:nowrap; transition:color .15s; }
+.drow:hover > span:first-child { color:var(--ink); }
 .drow input[type=number], .drow select { background:var(--bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
 .drow select { width:108px; padding-right:3px; }
@@ -201,7 +200,7 @@ input[type=checkbox] { accent-color:var(--accent); }
 .printer-select { width:auto !important; min-width:140px; max-width:200px; padding-right:20px; }
 .colormode-select { width:110px; }
 .drow input[type=range] { width:92px; accent-color:var(--accent); }
-.cv-editor { margin-top:10px; }
+.cv-editor { margin-top:var(--sp-3); }
 .cv-editor .cv-head { display:flex; align-items:center; justify-content:space-between;
   font-size:11px; margin-bottom:3px; }
 .cv-editor .cv-head b { color:var(--ink); font-weight:600; text-transform:none; letter-spacing:0; }
@@ -248,9 +247,6 @@ input[type=checkbox] { accent-color:var(--accent); }
   border:1px solid var(--line); border-radius:50%; color:var(--ink-muted); font-size:10px;
   font-weight:600; line-height:1; font-family:var(--font-mono); transition:color .15s, border-color .15s, background .15s; }
 .step-label { font-size:10px; transition:color .15s; }
-.step-summary { display:block; font-size:9px; color:var(--ink-muted); letter-spacing:0;
-  text-transform:none; margin-top:1px; max-width:72px; overflow:hidden; text-overflow:ellipsis;
-  white-space:nowrap; }
 .step-item.done { color:var(--ink); }
 .step-item.done .step-num { border-color:var(--accent); color:var(--accent); background:none; }
 .step-item.active { color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
@@ -262,7 +258,7 @@ input[type=checkbox] { accent-color:var(--accent); }
 @keyframes step-fade-in { from { opacity:0; } to { opacity:1; } }
 
 /* ---- section separators inside step panels ---- */
-.step-panel hr { border:none; border-top:1px solid var(--line); margin:14px 0 10px; }
+.step-panel hr { border:none; border-top:1px solid var(--line); margin:var(--sp-3) 0 var(--sp-2); }
 
 /* ---- step nav (Back / Next) ---- */
 .step-nav { display:flex; justify-content:space-between; gap:8px; margin-top:var(--sp-4);
