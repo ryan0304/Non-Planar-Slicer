@@ -349,7 +349,8 @@ height-coloring, travels, and auto-spin from the panel.
 **Print-process playback:** a timeline bar at the bottom replays the print the way
 it's actually laid down — drag the slider to scrub, or hit play to watch the path
 draw in and a nozzle marker travel along the toolpath. The readout shows the
-current Z height, layer/turn number, and percentage; a speed selector (0.5×–4×)
+current Z height, layer/turn number, and elapsed/total print time (e.g.
+`4:12 / 17:30`); a speed selector (1×–64×, where 1× is real print time)
 controls playback. Keyboard: **space** = play/pause, **← →** step one spiral turn
 at a time, **Home/End** = jump to start/finish. This is the layer-by-layer /
 nozzle-movement preview.

@@ -135,10 +135,11 @@ let animSeg = 0;        // number of extrude segments in the current path
 let extArr = null;      // raw world-space segment endpoints (for nozzle lookup)
 let lineMat = null;     // fat-line material (for width + resolution updates)
 let lineWidthPx = 2;    // on-screen path thickness (thin enough to see layers)
-let progress = 1;       // 0..1 fraction of the print drawn
+let progress = 1;       // 0..1 fraction of the print drawn (segment-based; master variable)
 let xrayOn = false;     // X-ray view: transparent path + dimmed bed (see-through)
 let playing = false;
-let perSec = 0.0667;    // progress per second (from the speed selector)
+let speedMult = 8;      // playback speed multiplier (1x = real print time), from the speed selector
+let playT = 0;          // play clock in seconds, along the extrude-only segT[] timeline
 
 // viridis-ish ramp
 function ramp(t){
@@ -286,33 +287,53 @@ function overhangColor(deg){
   return [yellow[0]+(red[0]-yellow[0])*t, yellow[1]+(red[1]-yellow[1])*t, yellow[2]+(red[2]-yellow[2])*t];
 }
 
-// Estimate total print time (seconds) summing dist/effective_speed for every move.
-// effective_speed = min(commandedSpeed, sqrt(dist * ACCEL)) approximates
-// segments that never reach commanded speed (short moves stay slow).
+// Effective duration (seconds) of extrude segment s. Shared physics for both
+// the print-time estimate and the time-based playback clock, so they always
+// agree: effective_speed = min(commandedSpeed, sqrt(dist * ACCEL)) approximates
+// segments that never reach commanded speed (short moves stay slow), and the
 // Z-component speed is additionally capped at MAX_Z_SPEED.
+function segDuration(ext, segSpeed, s){
+  const base = s * 6;
+  const dx = ext[base+3] - ext[base+0];
+  const dy = ext[base+4] - ext[base+1];  // world Y = printer Z
+  const dz = ext[base+5] - ext[base+2];
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  if(dist < 1e-9) return 0;
+  let spd = segSpeed[s] || 1;
+  // Acceleration-limited effective speed for short moves.
+  const accelSpd = Math.sqrt(dist * ACCEL);
+  spd = Math.min(spd, accelSpd);
+  // Z-axis speed cap: if the Z fraction of speed exceeds MAX_Z_SPEED, scale down.
+  const zFrac = Math.abs(dy) / dist;
+  const maxSpd = zFrac > 1e-6 ? MAX_Z_SPEED / zFrac : Infinity;
+  spd = Math.min(spd, maxSpd);
+  if(spd < 1e-9) spd = 1;
+  return dist / spd;
+}
+
+// Binary search a cumulative, ascending time array `segT` (length nSeg+1,
+// segT[0]=0) for the largest index k with segT[k] <= t. Used to map the
+// play clock (seconds) to a segment count for setProgress. Clamps t outside
+// [segT[0], segT[last]] to the nearest end.
+function timeToSegIndex(segT, t){
+  const n = segT.length;
+  if(n === 0) return 0;
+  if(t <= segT[0]) return 0;
+  if(t >= segT[n-1]) return n-1;
+  let lo = 0, hi = n-1;
+  while(hi - lo > 1){
+    const mid = (lo+hi) >> 1;
+    if(segT[mid] <= t) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
+// Estimate total print time (seconds) summing dist/effective_speed for every move.
 function computeEstTime(ext, trv, segSpeed, nExtSeg){
   let total = 0;
 
   // Extrude segments -- segSpeed[] has one entry per extrude seg.
-  const nExt = nExtSeg;
-  for(let s = 0; s < nExt; s++){
-    const base = s * 6;
-    const dx = ext[base+3] - ext[base+0];
-    const dy = ext[base+4] - ext[base+1];  // world Y = printer Z
-    const dz = ext[base+5] - ext[base+2];
-    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-    if(dist < 1e-9) continue;
-    let spd = segSpeed[s] || 1;
-    // Acceleration-limited effective speed for short moves.
-    const accelSpd = Math.sqrt(dist * ACCEL);
-    spd = Math.min(spd, accelSpd);
-    // Z-axis speed cap: if the Z fraction of speed exceeds MAX_Z_SPEED, scale down.
-    const zFrac = Math.abs(dy) / dist;
-    const maxSpd = zFrac > 1e-6 ? MAX_Z_SPEED / zFrac : Infinity;
-    spd = Math.min(spd, maxSpd);
-    if(spd < 1e-9) spd = 1;
-    total += dist / spd;
-  }
+  for(let s = 0; s < nExtSeg; s++) total += segDuration(ext, segSpeed, s);
 
   // Travel segments -- trv[] has no per-segment speed; use a nominal travel speed.
   // We cannot recover per-travel speed after parsing, so skip or use a default.
@@ -342,6 +363,18 @@ function fmtTime(secs){
   if(h > 0) return h + 'h ' + m + 'm';
   if(m > 0) return m + 'm ' + s + 's';
   return s + 's';
+}
+
+// Format seconds as a clock readout: "M:SS" (e.g. "4:12"), or "H:MM:SS" once
+// past an hour (e.g. "1:04:12"). Used for the elapsed/total playback readout.
+function fmtClock(secs){
+  secs = Math.max(0, Math.round(secs));
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const ss = String(s).padStart(2, '0');
+  if(h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + ss;
+  return m + ':' + ss;
 }
 
 function parseGcode(text){
@@ -414,8 +447,14 @@ function parseGcode(text){
   const estTimeSec = computeEstTime(extFlat, trvFlat, segSpeed, nExtSeg);
   const estTime = fmtTime(estTimeSec);
 
+  // Cumulative per-segment time (seconds), extrude-only -- the timeline that
+  // time-based playback walks. segT[0]=0, segT[nExtSeg]=total extrude-only
+  // path time (differs from estTimeSec by the excluded travel time).
+  const segT = new Float64Array(nExtSeg + 1);
+  for(let s = 0; s < nExtSeg; s++) segT[s+1] = segT[s] + segDuration(extFlat, segSpeed, s);
+
   return {ext:extFlat,extCol,trv:trvFlat,segSpeed,segFlow,meta,minz,maxz,minx,maxx,miny,maxy,
-          fil,extrudeCount,travelCount,maxZrate,riskFlags,riskyCount,overhang,estTime,estTimeSec};
+          fil,extrudeCount,travelCount,maxZrate,riskFlags,riskyCount,overhang,estTime,estTimeSec,segT};
 }
 
 // Swap the Display-panel legend to match the active colour mode: height shows
@@ -784,11 +823,27 @@ window.__previewState = () => ({
 });
 
 // ---- print-process playback ------------------------------------------------
-function setProgress(p){
+// `progress` (0..1 over extrude segments) stays the master variable that every
+// downstream consumer (instance reveal, nozzle marker, sparkline cursor,
+// telemetry lookup) reads -- unchanged from before. `playT` is a parallel
+// clock in seconds along lastData.segT, kept in sync here.
+//
+// `fromClock` is true only when playLoop calls this: the play loop already
+// advanced playT itself (a continuous clock) and computed the matching
+// segment index k via binary search, so resyncing playT = segT[k] here would
+// snap the clock backward to the start of segment k every single frame --
+// for any segment whose duration exceeds one animation frame (typical at low
+// speedMult, or on coarse/slow moves) that snap-back would out-race the next
+// frame's dt*speedMult increment and playback would stall. Every OTHER
+// progress-setter (scrub, sparkline seek, per-turn stepping, Home/End, load)
+// only knows a target segment fraction, not a time, so those DO resync playT
+// from segT[k] -- that direction is safe and idempotent (segT[k] is exactly
+// the time timeToSegIndex would map back to k).
+function setProgress(p, fromClock){
   progress = Math.min(1, Math.max(0, p));
   let k=0;
+  if(animSeg>0) k = Math.round(progress*animSeg);
   if(pathObj && animSeg>0){
-    k = Math.round(progress*animSeg);
     pathObj.geometry.instanceCount = k;             // reveal only printed segments
     if(k>0 && progress<1){
       const i=(k-1)*6+3;                            // end of last drawn segment
@@ -798,6 +853,11 @@ function setProgress(p){
       nozzle.visible=false;                         // hide at 0% and when finished
     }
   }
+  const segT = lastData && lastData.segT;
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(!fromClock) playT = (segT && segT.length) ? segT[Math.min(k, segT.length-1)] : 0;
+  document.getElementById('play').disabled = !(total > 0);
+
   const z = (lastData? lastData.minz:0) + progress*((lastData? (lastData.maxz-lastData.minz):0));
   let layerHtml='';
   if(cuts && cuts.length>1){
@@ -807,9 +867,19 @@ function setProgress(p){
     // (arrow keys) is this tool's signature playback mode.
     layerHtml=` &middot; <span class="turn-count">L${cur}/${tot}</span>`;
   }
+  // Elapsed/total print time is strictly more informative than a bare percent
+  // (e.g. "4:12 / 17:30" tells you how long the real print has left); fall
+  // back to percent only when there's no usable timeline (zero extrude
+  // segments) to avoid a div-by-zero readout.
+  const timeHtml = total > 0
+    ? ` &middot; ${fmtClock(playT)} / ${fmtClock(total)}`
+    : ` &middot; ${Math.round(progress*100)}%`;
   document.getElementById('tl-read').innerHTML =
-    `Z ${z.toFixed(1)}mm${layerHtml} &middot; ${Math.round(progress*100)}%`;
-  document.getElementById('scrub').value = Math.round(progress*1000);
+    `Z ${z.toFixed(1)}mm${layerHtml}${timeHtml}`;
+  // Scrub bar now maps to TIME fraction, not segment fraction, so dragging
+  // feels uniform in time regardless of how segment density varies.
+  const timeFrac = total > 0 ? Math.min(1, playT/total) : progress;
+  document.getElementById('scrub').value = Math.round(timeFrac*1000);
   updateTelemetry(k, z);
   drawSparkCursor(progress);
   render();
@@ -838,17 +908,39 @@ let _lastT=0;
 function playLoop(t){
   if(!playing) return;
   if(!_lastT)_lastT=t; const dt=(t-_lastT)/1000; _lastT=t;
-  setProgress(progress + perSec*dt);
-  if(progress>=1){ stopPlay(); return; }
+  const segT = lastData && lastData.segT;
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(total<=0 || animSeg<=0){ stopPlay(); return; }   // guard: zero-extrude-segment file
+  playT = Math.min(total, playT + dt*speedMult);
+  const k = timeToSegIndex(segT, playT);
+  setProgress(k/animSeg, true);          // fromClock: don't snap playT back to segT[k]
+  if(playT>=total){ stopPlay(); return; }
   requestAnimationFrame(playLoop);
 }
 document.getElementById('play').addEventListener('click',()=>{
   if(playing){ stopPlay(); return; }
-  if(progress>=1) progress=0;             // replay from the start
+  const segT = lastData && lastData.segT;
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(total<=0) return;                    // guard: nothing to play
+  if(progress>=1){ progress=0; playT=0; } // replay from the start
   playing=true; _lastT=0; updatePlayBtn(); requestAnimationFrame(playLoop);
 });
-document.getElementById('scrub').addEventListener('input',e=>{ stopPlay(); setProgress(e.target.value/1000); });
-document.getElementById('speed').addEventListener('change',e=>{ perSec=parseFloat(e.target.value); });
+document.getElementById('scrub').addEventListener('input',e=>{
+  stopPlay();
+  const segT = lastData && lastData.segT;
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(total>0){
+    // Scrub bar is a time fraction now: derive playT directly from it (more
+    // precise than round-tripping through a segment index) and pass
+    // fromClock so setProgress doesn't re-snap it to segT[k].
+    playT = (e.target.value/1000) * total;
+    const k = timeToSegIndex(segT, playT);
+    setProgress(animSeg>0 ? k/animSeg : 0, true);
+  } else {
+    setProgress(e.target.value/1000);
+  }
+});
+document.getElementById('speed').addEventListener('change',e=>{ speedMult=parseFloat(e.target.value); });
 
 // ---- per-layer (per-turn) stepping ----------------------------------------
 function nearestCut(){
