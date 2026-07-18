@@ -375,6 +375,7 @@ separates the turns.
 | `--radius` / `--height` | base radius and total height (mm) |
 | `--layer-height` | spiral pitch — Z rise per turn (mm) |
 | `--line-width` | bead width; go wide (1–2 mm) for genuinely *thick* continuous prints |
+| `--line-width-curve` | JSON `[[t,mult],...]` multiplying `--line-width` over height (see "Variable line width along the path") |
 | `--xy-twist` | rotate the cross-section over height (turns) — twisted column |
 | `--z-amp` | non-planar wave amplitude (mm); `0` = flat top |
 | `--z-waves` | number of waves around the perimeter |
@@ -435,6 +436,28 @@ local layer height ever falls outside `[0.25, 1.5]x` nominal it is clamped and a
 `; WARNING:` line is written into the G-code (and printed by `generate.py`). With
 `--z-amp 0 --z-twist 0` the output is byte-for-byte identical to before, so flat
 prints are unaffected.
+
+### Variable line width along the path
+
+Bead width can be curved over height too, independent of the fixed `--line-width`
+value -- a wide base for grip, a thin waist, a flared rim, or anything a curve
+can express:
+
+```bash
+python generate.py --line-width-curve "[[0,1.0],[0.5,1.6],[1,0.7]]" --out vase.gcode
+```
+
+The curve is `[[t, multiplier], ...]` control points (`t` = height fraction
+`0..1`), piecewise-linear interpolated, multiplying the nominal `--line-width`
+at that height. In the app it's a third draggable curve editor on the Print
+step, right beside the amplitude and silhouette curves. Either way, width is
+clamped to `[0.5, 2.0]x` nominal before it reaches the G-code -- and that
+clamp is the same one the E-volume calculation itself uses, so the
+volumetric-flow speed cap always tracks the *actual* bead cross-section, not
+the nominal one: a widened region is auto-slowed to respect the melt limit
+exactly the way a thick fixed-width print already is. A flat curve (or
+omitting `--line-width-curve` entirely) reproduces byte-for-byte identical
+output to before, so existing prints are unaffected.
 
 ## Safety model
 
@@ -556,5 +579,5 @@ regression_ref/                 reference G-code checked by tools/check_regressi
 - [x] Calibration suite (`calibrate.py`) — live-Z disk, flow ladder, Z-amp ladder
 - [x] Asymmetric shaping (3D control cage, spine offset, ovality), blob and loop-fabric
       textures, multi-printer profiles, mesh upload, undo/redo — app-only so far
-- [ ] Variable line width along the path
+- [x] Variable line width along the path
 - [ ] Feasibility study + prototype for true dynamic tri-Z bed tilt
