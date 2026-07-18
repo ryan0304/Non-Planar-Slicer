@@ -48,10 +48,17 @@ html,body {
   overflow:hidden;
 }
 
-/* Tabular, monospaced treatment for every measured/data value. */
-.mono, .tm, .drow input[type=number], .drow select, .gen-report, .tl-read,
-.readout-value, .machine-readout, .step-summary {
+/* Tabular, monospaced treatment for read-only machine/measured output only. */
+.mono, .tm, .gen-report, .tl-read, .readout-value, .step-summary {
   font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums;
+}
+
+/* Every editable control uses the UI sans, not mono -- inputs should read like
+   the labels beside them. tabular-nums keeps typed numerals from jittering
+   width without switching typeface. */
+input, select, textarea {
+  font-family:var(--font-ui);
   font-variant-numeric:tabular-nums;
 }
 
@@ -141,7 +148,7 @@ input[type=checkbox] { accent-color:var(--accent); }
   background:var(--accent); color:var(--ink-on-accent); font-size:12px; font-weight:700; }
 .timeline input[type=range] { flex:1; accent-color:var(--accent); cursor:pointer; }
 .timeline select { background:var(--bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:3px 4px; font-size:12px; font-family:var(--font-mono); }
+  border-radius:6px; padding:3px 4px; font-size:12px; }
 .tl-read { font-size:12px; color:var(--ink-muted); min-width:150px; text-align:right; }
 .tl-read .turn-count { color:var(--ink); font-weight:700; font-size:13px; }
 
