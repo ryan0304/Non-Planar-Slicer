@@ -41,6 +41,18 @@
 
 * { box-sizing:border-box; }
 
+/* =========================================================================
+   Focus-visible discipline (global). Mouse/touch activation must never
+   leave a lingering outline; keyboard navigation must always show one.
+   Specific components may override the visible treatment (e.g.
+   .telemetry-toggle, .drow input/select use a border-color cue instead) --
+   those overrides win on specificity and still satisfy the same contract.
+   ========================================================================= */
+a, button, .btn, [tabindex] { outline:none; }
+a:focus-visible, button:focus-visible, .btn:focus-visible, [tabindex]:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+
 html,body {
   margin:0; height:100%;
   background:var(--bg); color:var(--ink);
@@ -184,6 +196,7 @@ input[type=checkbox] { accent-color:var(--accent); }
 .drow > span { color:var(--ink-muted); white-space:nowrap; }
 .drow input[type=number], .drow select { background:var(--bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
+.drow select { width:108px; padding-right:3px; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
 .printer-select { width:auto !important; min-width:140px; max-width:200px; padding-right:20px; }
 .colormode-select { width:110px; }
@@ -206,9 +219,11 @@ input[type=checkbox] { accent-color:var(--accent); }
 .sil-mode-btn.active { color:var(--ink); border-bottom-color:var(--accent); }
 
 /* ---- preset bar ---- */
-.preset-bar { display:flex; gap:6px; align-items:center; margin-bottom:10px; }
-.preset-bar select { flex:1; background:var(--bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:4px 6px; font-size:11.5px; }
+.preset-bar { display:flex; gap:4px; align-items:center; margin-bottom:10px; }
+.preset-bar select { flex:1 1 0; min-width:0; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:6px; padding:4px 4px; font-size:11.5px; }
+.preset-bar .btn { padding-left:8px; padding-right:8px; }
+.preset-bar .btn-icon { padding-left:6px; padding-right:6px; }
 
 /* ---- top-level mode bar (Design / G-code Viewer) ---- */
 .mode-bar { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:var(--sp-4); }
