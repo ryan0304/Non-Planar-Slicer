@@ -35,6 +35,7 @@
         <div class="stat"><span>Layer height</span><span id="tm-lh" class="tm">&#8211;</span></div>
         <div class="stat"><span>Line width</span><span id="tm-lw" class="tm">&#8211;</span></div>
         <div class="stat"><span>Nozzle</span><span id="tm-nz" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Nozzle temp</span><span id="tm-temp" class="tm">&#8211;</span></div>
       </div>
     </div>
     <!-- Machine readout strip: sparkline + scrub bar only, slim -->
@@ -140,7 +141,7 @@
         <div class="drow" id="row-base"><span>Base layers</span><input type="number" id="d-base" min="0" max="3" step="1"></div>
         <div class="drow"><span>Brim loops</span><input type="number" id="d-brim" min="0" max="5" step="1"></div>
         <div class="drow" id="row-basestyle"><span>Base style</span>
-          <select id="d-basestyle">
+          <select id="d-basestyle" class="mid-select">
             <option value="spiral">Spiral disk</option>
             <option value="concentric">Concentric rings</option>
           </select></div>
@@ -204,7 +205,7 @@
         <h3 class="section-heading" id="sec-head-texturepattern">Texture pattern</h3>
         <div id="sec-body-texturepattern">
         <div class="drow"><span>Texture pattern</span>
-          <select id="d-pattern">
+          <select id="d-pattern" class="wide-select">
             <option value="">none</option>
             <option value="blobs">&#9679; blobs (raised dots)</option>
             <option value="loops">&#8767; loops (hanging strands)</option>
@@ -379,8 +380,10 @@
           </select></div>
         <div class="hint tight-top" id="nozzle-flow-hint"></div>
         <div class="drow"><span>Print speed (mm/s)</span><input type="number" id="d-speed" min="20" max="90" step="1"></div>
-        <div class="drow"><span>Filament</span><select id="d-filament"></select></div>
+        <div class="drow stacked"><span>Filament</span><select id="d-filament"></select></div>
         <div class="drow"><span>Line width override</span><input type="number" id="d-lwoverride" min="0.1" max="1.2" step="0.05" placeholder="auto"></div>
+        <div class="drow"><span>Nozzle temp (C)</span><input type="number" id="d-nozzletemp" class="wide-input" min="150" max="320" step="5" placeholder="auto (filament)"></div>
+        <div class="hint" style="margin-top:2px">Leave blank to use the selected filament's temperature; set it to override.</div>
 
         <div class="cv-editor">
           <div class="cv-head"><b>Line width over height</b><span class="cv-reset" id="width-reset">reset</span></div>
@@ -517,7 +520,7 @@
           <div class="hint">Exposes or protects points using a procedural channel &#8212; gates every
             deformation modifier below (Point FFD / Smooth / Radial Push). By itself it moves nothing.</div>
           <div class="drow"><span>Channel</span>
-            <select id="pe-mask-channel">
+            <select id="pe-mask-channel" class="wide-select">
               <option value="checker">Checker</option>
               <option value="stripes_v">Stripes (vertical)</option>
               <option value="stripes_h">Stripes (horizontal)</option>

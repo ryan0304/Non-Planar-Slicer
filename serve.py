@@ -400,6 +400,25 @@ def _parse_overhang_fan(body):
     return fan_min, fan_max
 
 
+def _parse_nozzle_temp(body):
+    """User-requested nozzle temp override, clamped to 150-320 C.
+
+    Returns None when absent/null/empty/0 -- meaning "don't touch it", so the
+    profile's (and any selected filament's) own default keeps flowing through
+    unchanged. Only a genuine, non-zero value becomes an override.
+    """
+    raw = body.get("nozzle_temp")
+    if raw is None or raw == "":
+        return None
+    try:
+        temp = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if temp == 0:
+        return None
+    return max(150.0, min(temp, 320.0))
+
+
 def _parse_blob_spec(body, radius: float | None = None) -> BlobSpec | None:
     """Extract blob parameters from the request body.
 
@@ -585,6 +604,13 @@ def generate_design(body):
         except KeyError as e:
             raise KeyError(str(e))
         writer_kwargs.update(fs.writer_kwargs())
+
+    # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
+    # nozzle_temp, which would otherwise silently clobber an explicit user
+    # override. The user's choice must win over the filament's default.
+    nozzle_temp = _parse_nozzle_temp(body)
+    if nozzle_temp is not None:
+        writer_kwargs["nozzle_temp"] = nozzle_temp
 
     writer = GcodeWriter(**writer_kwargs)
 
@@ -829,6 +855,13 @@ def generate_mesh_texture_design(body):
         except KeyError as e:
             raise KeyError(str(e))
         writer_kwargs.update(fs.writer_kwargs())
+
+    # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
+    # nozzle_temp, which would otherwise silently clobber an explicit user
+    # override. The user's choice must win over the filament's default.
+    nozzle_temp = _parse_nozzle_temp(body)
+    if nozzle_temp is not None:
+        writer_kwargs["nozzle_temp"] = nozzle_temp
 
     writer = GcodeWriter(**writer_kwargs)
 

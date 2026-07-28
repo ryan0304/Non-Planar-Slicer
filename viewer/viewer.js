@@ -385,7 +385,7 @@ function parseGcode(text){
   let curFan=0, minFan=Infinity, maxFan=-Infinity, fanEverOn=false;   // sticky M106/M107 state (0..1)
   const ext=[], extCol=[], trv=[];          // world-space vertex arrays
   const segSpeed=[], segFlow=[];            // per-extrude-segment telemetry
-  const meta={lineWidth:null, layerHeight:null, nozzle:null};
+  const meta={lineWidth:null, layerHeight:null, nozzle:null, nozzleTemp:null};
 
   for (let raw of text.split('\n')){
     const line=raw.trim(); if(!line) continue;
@@ -406,6 +406,20 @@ function parseGcode(text){
     if(up.startsWith('M107')){ curFan=0; continue; }
     if(up.startsWith('M83')) { relE=true; continue; }
     if(up.startsWith('M82')) { relE=false; continue; }
+    // Nozzle temp: Bambu-style profiles emit M104/M109 S<temp>; the Trident
+    // (default) profile emits PRINT_START EXTRUDER=<temp> ... instead. S0 is
+    // the heater-off line in the end G-code, not a real target -- ignored so
+    // it doesn't clobber the value read from the start of the file.
+    if(up.startsWith('M104')||up.startsWith('M109')){
+      const m=up.match(/S([\d.]+)/);
+      if(m){ const t=parseFloat(m[1]); if(t>0) meta.nozzleTemp=t; }
+      continue;
+    }
+    if(up.startsWith('PRINT_START')){
+      const m=up.match(/EXTRUDER=([\d.]+)/);
+      if(m) meta.nozzleTemp=parseFloat(m[1]);
+      continue;
+    }
     if(!(up.startsWith('G0')||up.startsWith('G1'))) continue;
     let nx=x,ny=y,nz=z,e=null,f=null;
     for(const tok of line.split(/\s+/).slice(1)){
@@ -922,6 +936,7 @@ function updateTelemetry(k, z){
   set('tm-lh', lastData.meta.layerHeight!=null ? lastData.meta.layerHeight.toFixed(2)+' mm' : '--');
   set('tm-lw', lastData.meta.lineWidth!=null ? lastData.meta.lineWidth.toFixed(2)+' mm' : '--');
   set('tm-nz', lastData.meta.nozzle!=null ? lastData.meta.nozzle.toFixed(2)+' mm' : '--');
+  set('tm-temp', lastData.meta.nozzleTemp!=null ? Math.round(lastData.meta.nozzleTemp)+' C' : '--');
 }
 function updatePlayBtn(){ document.getElementById('play').textContent = playing?'||':'>'; }
 function stopPlay(){ playing=false; updatePlayBtn(); }

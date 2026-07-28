@@ -288,6 +288,27 @@ label.radio-inline { cursor:pointer; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
 .printer-select { width:auto !important; min-width:140px; max-width:200px; padding-right:20px; }
 .colormode-select { width:110px; }
+
+/* Controls whose own content needs more room than the default 92/116px track.
+   Widths are measured against the widest option (or placeholder) each one has
+   to display, so the text is not clipped: base style needs 110px, the pattern
+   list 162px, and the nozzle-temp placeholder 98px. All still fit inline
+   alongside their labels inside the 292px row.
+
+   Selectors are qualified with .drow so they outrank the base `.drow select` /
+   `.drow input[type=number]` tracks above -- a bare .mid-select loses to
+   `.drow select` on specificity and silently does nothing. */
+.drow select.mid-select  { width:134px; }
+.drow select.wide-select { width:178px; }
+.drow input.wide-input   { width:112px; }
+
+/* Orca filament names reach 400px+ ("Creality Generic PLA Matte @..."), which no
+   inline track in a 340px panel can hold. Give the row its own line so the
+   select spans the full width, and keep a title tooltip for the few that still
+   overrun -- a <select> cannot show a text-overflow ellipsis of its own. */
+.drow.stacked { flex-direction:column; align-items:stretch; gap:var(--sp-1); }
+.drow.stacked > span:first-child { white-space:normal; }
+.drow.stacked select { width:100%; }
 .drow input[type=range] { width:92px; }
 .cv-editor { margin-top:var(--sp-3); background:var(--surface-raised); border:1px solid var(--line);
   border-radius:var(--radius-lg); padding:var(--sp-3); }

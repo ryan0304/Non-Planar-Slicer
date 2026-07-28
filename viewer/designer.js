@@ -14,7 +14,7 @@
     base_style: "spiral", skirt: 0,
     bottom: "solid",
     star_points: 5, star_depth: 0.35,
-    print_speed: 40, filament: "", line_width: null,
+    print_speed: 40, filament: "", line_width: null, nozzle_temp: null,
     pattern: "", pattern_amp: 1.0, pattern_waves: 12,
     pattern_bands: 6, pattern_twist: 0, pattern_phase: 0,
     pattern_fade_in: 0.10, pattern_fade_out: 0, pattern_alternate: false,
@@ -658,7 +658,17 @@
     });
     if(design.filament){ famSel.value = design.filament; }
     else if(j.default){ famSel.value = j.default; design.filament = j.default; }
+    syncFilamentTitle();
   }).catch(function(){ /* no orca: keep generic PLA */ });
+
+  // Orca filament names run past 400px, wider than the whole panel, and a
+  // <select> cannot ellipsize its own closed state -- so mirror the selection
+  // into the title attribute, making the full name reachable on hover.
+  function syncFilamentTitle(){
+    var o = famSel.options[famSel.selectedIndex];
+    famSel.title = o ? o.textContent : '';
+  }
+  famSel.addEventListener('change', syncFilamentTitle);
 
   // ---- curve editor ------------------------------------------------------
   // Variable-count control points {t, v}. First point pinned to t=0, last to
@@ -1714,6 +1724,18 @@
     });
   })();
 
+  // Blank = auto (selected filament's own temp); only a real value overrides.
+  (function(){
+    var el = document.getElementById('d-nozzletemp');
+    if(!el) return;
+    if(design.nozzle_temp != null) el.value = design.nozzle_temp;
+    el.addEventListener('input', function(){
+      var v = parseFloat(el.value);
+      design.nozzle_temp = (el.value === '' || Number.isNaN(v)) ? null : v;
+      persistDesign();
+    });
+  })();
+
   // Live "flow line width" readout mirroring serve.py: line_width = round(nozzle*1.125, 3),
   // or the explicit override. Purely informational; stale tracking is already handled
   // by bindSelect('d-nozzle') -> persistDesign().
@@ -1997,6 +2019,8 @@
     document.getElementById('d-speed').value = design.print_speed;
     var lwEl = document.getElementById('d-lwoverride');
     if(lwEl) lwEl.value = design.line_width != null ? design.line_width : '';
+    var nozzleTempEl = document.getElementById('d-nozzletemp');
+    if(nozzleTempEl) nozzleTempEl.value = design.nozzle_temp != null ? design.nozzle_temp : '';
     var bottomRadios = document.querySelectorAll('input[name="d-bottom"]');
     bottomRadios.forEach(function(r){ r.checked = r.value === design.bottom; });
     var nozzleEl = document.getElementById('d-nozzle');
@@ -2265,6 +2289,12 @@
     }
     if(design.fan_off_layers > 0){
       body.fan_off_layers = Math.round(design.fan_off_layers);
+    }
+    // Only sent when the user actually set an override -- absent means
+    // "use the profile/filament default", same contract as serve.py's
+    // _parse_nozzle_temp().
+    if(design.nozzle_temp != null && design.nozzle_temp !== ''){
+      body.nozzle_temp = design.nozzle_temp;
     }
     // Point Edit Modifiers: each block is only sent when its modifier is
     // enabled AND would actually do something (server tolerates malformed/
