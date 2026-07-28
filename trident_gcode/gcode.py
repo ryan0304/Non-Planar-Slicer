@@ -66,6 +66,7 @@ class GcodeWriter:
     _max_z_rate: float = 0.0
     _lh_clamp_events: int = 0
     _width_clamp_events: int = 0
+    _last_fan_frac: float | None = None
     _blob_count: int = 0
     _moves: list = field(default_factory=list)   # (x,y,z,extruding,speed_mm_s) per move
     _bounds: list[float] = field(
@@ -193,6 +194,20 @@ class GcodeWriter:
         fraction = min(1.0, max(0.0, fraction))
         s = int(round(fraction * 255))
         self._emit(f"M106 S{s}  ; fan {fraction:.0%}")
+        self._last_fan_frac = fraction
+
+    def set_fan_if_changed(self, fraction: float, threshold: float = 0.03) -> None:
+        """Like set_fan(), but only emits M106 when the fraction has moved by
+        more than ``threshold`` since the last emitted value.
+
+        Used for continuously-modulated fan speed (e.g. overhang-adaptive
+        cooling, evaluated once per wall point) so the fan doesn't get one
+        M106 line per point -- only when the commanded speed actually moves
+        enough to matter.
+        """
+        fraction = min(1.0, max(0.0, fraction))
+        if self._last_fan_frac is None or abs(fraction - self._last_fan_frac) >= threshold:
+            self.set_fan(fraction)
 
     def dwell(self, ms: int) -> None:
         """Emit G4 dwell. No position change."""

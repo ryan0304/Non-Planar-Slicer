@@ -29,6 +29,8 @@ class GcodeAnalysis:
     probe_worst_mm: float = 0.0      # deepest keep-out violation (mm above the clearance)
     blob_count: int = 0              # E-only extrusion moves (heuristic blob detection)
     dwell_time_s: float = 0.0       # total G4 dwell time
+    min_fan_speed: float | None = None   # 0..1, over extruding moves only; None = no M106 seen
+    max_fan_speed: float | None = None   # 0..1, over extruding moves only; None = no M106 seen
     issues: list = field(default_factory=list)
 
     @property
@@ -50,6 +52,12 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
     a = GcodeAnalysis()
     x = y = z = e = 0.0
     curF = 0.0
+    cur_fan = 0.0            # sticky M106/M107 state (0..1); fan defaults off
+    fan_ever_on = False      # True once the first M106 is seen -- gates min/max
+                             # tracking so the deliberate fan-off adhesion window
+                             # before it (M107 in start_gcode, no M106 yet) doesn't
+                             # drag min_fan_speed down to 0 regardless of what the
+                             # print actually ramps between once the fan is live
     rel_e = False           # M82 absolute / M83 relative
     abs_xyz = True          # G90/G91
     have = False
@@ -127,6 +135,16 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
                 a.dwell_time_s += dwell_s
                 a.est_time_s += dwell_s
                 continue
+            if head == "M106":                      # part-cooling fan on, S0-255
+                for tok in up.split()[1:]:
+                    if tok[:1] == "S":
+                        try: cur_fan = min(1.0, max(0.0, float(tok[1:]) / 255.0))
+                        except ValueError: pass
+                fan_ever_on = True
+                continue
+            if head == "M107":                      # part-cooling fan off
+                cur_fan = 0.0
+                continue
             if head not in ("G0", "G1"):
                 continue
 
@@ -159,6 +177,9 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
                         a.extrude_moves += 1
                         a.filament_mm += de
                         seen_xy_extrude = True
+                        if fan_ever_on:
+                            a.min_fan_speed = cur_fan if a.min_fan_speed is None else min(a.min_fan_speed, cur_fan)
+                            a.max_fan_speed = cur_fan if a.max_fan_speed is None else max(a.max_fan_speed, cur_fan)
                         flow = de * fil_area * speed / dist
                         a.max_flow = max(a.max_flow, flow)
 
@@ -353,6 +374,10 @@ def format_report(a: GcodeAnalysis, profile: PrinterProfile = TRIDENT) -> str:
         f"  probe keep-out  : {a.probe_hits} risky moves"
         + (f" (worst +{a.probe_worst_mm:.1f} mm)  [HIT RISK]" if a.probe_hits else "  [ok]"),
     ]
+    if a.min_fan_speed is not None:
+        lines.append(
+            f"  fan speed       : {a.min_fan_speed:.0%} - {a.max_fan_speed:.0%}"
+        )
     if a.blob_count > 0 or a.dwell_time_s > 0:
         blob_fil_m = 0.0
         if a.blob_count > 0:

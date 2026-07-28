@@ -62,8 +62,43 @@
     loop_waves: 12,
     loop_fade_in: 0.10,
     loop_fade_out: 0,
-    overhang_flow_k: 0.0
+    overhang_flow_k: 0.0,
+    // Overhang-adaptive part-cooling fan (0-100%, UI convention -- converted
+    // to a 0..1 fraction in the /api/generate body). Both at 100 = off
+    // (today's constant full-fan default, byte-identical output).
+    fan_overhang_min: 100,
+    fan_overhang_max: 100,
+    // Total layers (base + wall) to keep the fan off from the start of the
+    // print. 0 = today's default (off through any base, or the wall's first
+    // turn otherwise) -- see _fan_on_threshold() in continuous_spiral.py.
+    fan_off_layers: 0,
+    // ---- Point Edit Modifiers (post-slice deformation; see point_edit.py) ----
+    point_mask_enable: false,
+    point_mask_channel: 'checker',
+    point_mask_scale_u: 8,
+    point_mask_scale_v: 6,
+    point_mask_invert: false,
+    point_protection_enable: false,
+    point_protection_bottom: 0,
+    point_protection_top: 0,
+    point_protection_falloff: 0.08,
+    point_ffd_enable: false,
+    point_ffd_grid: null,
+    point_ffd_strength: 1.0,
+    point_smooth_enable: false,
+    point_smooth_iterations: 2,
+    point_smooth_theta: 0.5,
+    point_smooth_t: 0.5,
+    point_smooth_strength: 1.0,
+    point_radial_push_enable: false,
+    point_radial_push_amp: 1.0,
+    point_radial_push_strength: 1.0
   };
+
+  // Snapshot of the shipped defaults, taken before any saved state is merged
+  // in below -- lets the active-summary chip row (see updateActiveSummary())
+  // tell "user changed this" apart from "this just happens to have a value".
+  var DEFAULT_DESIGN = JSON.parse(JSON.stringify(design));
 
   // Legacy migration: designs saved before blob_align existed only carry
   // blob_stagger. Derive the equivalent alignment so old saves keep behaving
@@ -129,6 +164,7 @@
     lastSnap = snap;
     updateHistButtons();
     updateStaleBadge();
+    updateActiveSummary();
     try { localStorage.setItem('design-state', snap); } catch(e){}
   }
 
@@ -365,6 +401,179 @@
     return activate;
   })();
 
+  // ---- collapsible sidebar sections ---------------------------------------
+  // Every h3.section-heading / .group h2 that owns a '#sec-body-*' (or, for
+  // the STL importer, the pre-existing '#import-panel') container becomes a
+  // real keyboard-operable disclosure toggle. Open/closed state persists
+  // under one localStorage key so a user's choices survive a reload; a
+  // section not yet visited falls back to the `defaultOpen` passed at
+  // registration time. Collapsing uses display:none on the BODY container
+  // only -- the heading (and its bound listeners) and every input inside the
+  // body stay in the DOM untouched, so nothing about live-preview wiring
+  // changes.
+  var SECTIONS_KEY = 'trident_sections';
+  var sectionState = {};
+  try { sectionState = JSON.parse(localStorage.getItem(SECTIONS_KEY) || '{}') || {}; } catch(e){ sectionState = {}; }
+  var sectionsByKey = {};
+  var sectionList = [];
+
+  function persistSectionState(){
+    try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(sectionState)); } catch(e){}
+  }
+
+  function setSectionOpen(sec, open, skipPersist){
+    sec.headingEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+    sec.headingEl.classList.toggle('sec-closed', !open);
+    sec.bodyEl.style.display = open ? '' : 'none';
+    if(!skipPersist){
+      sectionState[sec.key] = open;
+      persistSectionState();
+    }
+  }
+
+  function registerSection(key, headingEl, bodyEl, defaultOpen){
+    if(!headingEl || !bodyEl) return null;
+    headingEl.classList.add('sec-toggle');
+    headingEl.setAttribute('role', 'button');
+    if(!headingEl.hasAttribute('tabindex')) headingEl.setAttribute('tabindex', '0');
+    if(bodyEl.id) headingEl.setAttribute('aria-controls', bodyEl.id);
+    var chevron = document.createElement('span');
+    chevron.className = 'sec-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    chevron.innerHTML = '&#9662;';
+    headingEl.appendChild(chevron);
+
+    var sec = { key: key, headingEl: headingEl, bodyEl: bodyEl };
+    var open = sectionState.hasOwnProperty(key) ? !!sectionState[key] : !!defaultOpen;
+    setSectionOpen(sec, open, true);
+
+    function toggle(){ setSectionOpen(sec, sec.bodyEl.style.display === 'none'); }
+    headingEl.addEventListener('click', toggle);
+    headingEl.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){
+        e.preventDefault();
+        toggle();
+      }
+    });
+
+    sectionsByKey[key] = sec;
+    sectionList.push(sec);
+    return sec;
+  }
+
+  // Force a section open by its registration key (used by the active-summary
+  // chip row -- clicking a chip must reveal the control it summarizes).
+  function expandSectionByKey(key){
+    var sec = sectionsByKey[key];
+    if(sec) setSectionOpen(sec, true);
+  }
+
+  // Force open whichever registered section(s) contain the given element (used
+  // by the parameter search -- jumping to a control inside a collapsed
+  // section must expand that section first).
+  function expandSectionsContaining(el){
+    if(!el) return;
+    for(var i = 0; i < sectionList.length; i++){
+      if(sectionList[i].bodyEl.contains(el)) setSectionOpen(sectionList[i], true);
+    }
+  }
+
+  registerSection('shape', document.getElementById('sec-head-shape'), document.getElementById('sec-body-shape'), true);
+  registerSection('asymmetry', document.getElementById('sec-head-asymmetry'), document.getElementById('sec-body-asymmetry'), false);
+  registerSection('importstl', document.getElementById('sec-head-importstl'), document.getElementById('import-panel'), false);
+  registerSection('zwaves', document.getElementById('sec-head-zwaves'), document.getElementById('sec-body-zwaves'), false);
+  registerSection('texturepattern', document.getElementById('sec-head-texturepattern'), document.getElementById('sec-body-texturepattern'), true);
+  registerSection('cooling', document.getElementById('sec-head-cooling'), document.getElementById('sec-body-cooling'), true);
+  registerSection('printer', document.getElementById('sec-head-printer'), document.getElementById('sec-body-printer'), true);
+  registerSection('printstats', document.getElementById('sec-head-printstats'), document.getElementById('sec-body-printstats'), true);
+  registerSection('display', document.getElementById('sec-head-display'), document.getElementById('sec-body-display'), true);
+
+  // ---- hint-density toggle --------------------------------------------------
+  // Every .hint block defaults visible -- hiding them is opt-in and
+  // persisted, so nothing changes for existing users unless they click it.
+  (function(){
+    var HINTS_KEY = 'trident_hints_visible';
+    var btn = document.getElementById('toggle-hints');
+    if(!btn) return;
+    var visible = true;
+    try {
+      var saved = localStorage.getItem(HINTS_KEY);
+      if(saved !== null) visible = saved === '1';
+    } catch(e){}
+    function apply(){
+      document.body.classList.toggle('hints-hidden', !visible);
+      btn.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    }
+    apply();
+    btn.addEventListener('click', function(){
+      visible = !visible;
+      apply();
+      try { localStorage.setItem(HINTS_KEY, visible ? '1' : '0'); } catch(e){}
+    });
+  })();
+
+  // ---- active-summary chip row ---------------------------------------------
+  // Compact read-only chips at the top of the Design panel: one per NON-
+  // DEFAULT / active setting, so the user can see what's switched on without
+  // hunting through (possibly collapsed) sections. Recomputed from
+  // updateActiveSummary() below, called at the end of persistDesign() --
+  // the single choke point every real design mutation already funnels
+  // through -- rather than inventing a second update path.
+  function computeActiveChips(){
+    var chips = [];
+    if(design.shape !== DEFAULT_DESIGN.shape || design.radius !== DEFAULT_DESIGN.radius ||
+       design.height !== DEFAULT_DESIGN.height){
+      chips.push({ text: design.shape + ' ' + design.radius + '×' + design.height + 'mm',
+                   step: 'model', section: 'shape' });
+    }
+    if(design.pattern){
+      chips.push({ text: 'pattern: ' + design.pattern, step: 'texture', section: 'texturepattern' });
+    }
+    if(Math.round(design.z_waves || 0) !== Math.round(DEFAULT_DESIGN.z_waves || 0)){
+      var zw = Math.round(design.z_waves || 0);
+      chips.push({ text: zw + ' Z-wave' + (zw === 1 ? '' : 's'), step: 'texture', section: 'zwaves' });
+    }
+    if(design.sil_mode === 'asym'){
+      chips.push({ text: 'asymmetric cage', step: 'texture', section: null });
+    }
+    if(design.spine_mm){
+      chips.push({ text: 'lean ' + design.spine_mm + 'mm', step: 'model', section: 'asymmetry' });
+    }
+    if(design.ovality){
+      chips.push({ text: 'oval ' + design.ovality, step: 'model', section: 'asymmetry' });
+    }
+    if(typeof pointEditAnyEnabled === 'function' && pointEditAnyEnabled()){
+      var peCount = [pointEditMaskMeaningful(), pointEditProtectionMeaningful(), pointEditFFDMeaningful(),
+                     pointEditSmoothMeaningful(), pointEditRadialPushMeaningful()].filter(Boolean).length;
+      chips.push({ text: peCount + ' point-edit mod' + (peCount === 1 ? '' : 's'),
+                   step: 'texture', openPE: true });
+    }
+    if(typeof meshState !== 'undefined' && meshState && meshState.mesh_id){
+      chips.push({ text: 'STL: ' + (meshState.filename || 'imported'), step: 'model', section: 'importstl' });
+    }
+    return chips.slice(0, 8);
+  }
+
+  function updateActiveSummary(){
+    var host = document.getElementById('active-summary');
+    if(!host) return;
+    var chips = computeActiveChips();
+    host.innerHTML = '';
+    chips.forEach(function(c){
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.textContent = c.text;
+      btn.addEventListener('click', function(){
+        if(window.setAppMode) window.setAppMode('design');
+        if(c.step) activateStep(c.step);
+        if(c.section) expandSectionByKey(c.section);
+        if(c.openPE && window.__openPointEditModal) window.__openPointEditModal();
+      });
+      host.appendChild(btn);
+    });
+  }
+
   // ---- printer dropdown ---------------------------------------------------
   var printerSel = document.getElementById('d-printer');
   var PRINTER_BEDS = {};   // key -> [bed_x, bed_y]
@@ -478,7 +687,7 @@
 
     function draw(){
       ctx.clearRect(0,0,W,H);
-      var accent = css('--accent') || '#4cc2ff';
+      var accent = css('--accent') || '#5a8aff';
       // filled area under the polyline
       ctx.beginPath();
       ctx.moveTo(px(pts[0].t), py(pts[0].v));
@@ -486,7 +695,7 @@
       ctx.lineTo(px(pts[pts.length-1].t), H-PADB);
       ctx.lineTo(px(pts[0].t), H-PADB);
       ctx.closePath();
-      ctx.fillStyle = 'rgba(76,194,255,0.14)';
+      ctx.fillStyle = 'rgba(47,107,255,0.14)';
       ctx.fill();
       // polyline
       ctx.beginPath();
@@ -497,7 +706,7 @@
       ctx.setLineDash([4,3]);
       ctx.beginPath();
       ctx.moveTo(PADL, py(refVal)); ctx.lineTo(W-PADR, py(refVal));
-      ctx.strokeStyle = (refLabel.indexOf('probe')>=0) ? 'rgba(224,101,79,0.85)' : (css('--muted')||'#8b97a7');
+      ctx.strokeStyle = (refLabel.indexOf('probe')>=0) ? 'rgba(224,101,79,0.85)' : (css('--muted')||'#888888');
       ctx.lineWidth = 1; ctx.stroke();
       ctx.setLineDash([]);
       // control points
@@ -506,7 +715,7 @@
         ctx.fillStyle = accent; ctx.fill();
       }
       // labels (ASCII)
-      ctx.fillStyle = css('--muted')||'#8b97a7';
+      ctx.fillStyle = css('--muted')||'#888888';
       ctx.font = '9px sans-serif';
       ctx.fillText(refLabel, PADL+2, py(refVal)-2);
       ctx.fillText('bottom', PADL, H-2);
@@ -997,7 +1206,14 @@
                  loop_row:2.5, loop_up:3.2, loop_out:0,
                  loop_flow:1.2, loop_speed:10, loop_cuff:3,
                  loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'spike', loop_dwell:400, loop_lean:20, loop_coast:0.8 },
+                 // Peak pause (dwell) without a retract lets the tip ooze at full
+                 // melt pressure for the whole hold -- by the time the descent
+                 // resumes, pressure has bled off and the first several segments
+                 // come out starved (looks like "no extrusion until the bottom").
+                 // Pairing the pause with a retract/unretract keeps pressure
+                 // controlled through the hold instead.
+                 loop_mode:'spike', loop_dwell:400, loop_lean:20, loop_coast:0.8,
+                 loop_retract:0.3 },
     chainmail: { loop_spacing_mm:4.0, loop_per_turn:0, loop_align:'stagger',
                  loop_row:2.5, loop_up:3.5, loop_out:0.5,
                  loop_flow:1.2, loop_speed:10, loop_cuff:3,
@@ -1170,6 +1386,319 @@
     });
   })();
 
+  // Overhang-adaptive fan sliders (min ramps up to max at a steep overhang).
+  (function(){
+    function bindFanSlider(id, readId, field){
+      var slider = document.getElementById(id);
+      var read = document.getElementById(readId);
+      if(!slider) return;
+      slider.value = design[field] != null ? design[field] : 100;
+      if(read) read.textContent = slider.value + '%';
+      slider.addEventListener('input', function(){
+        design[field] = parseFloat(slider.value);
+        if(read) read.textContent = slider.value + '%';
+        persistDesign();
+      });
+    }
+    bindFanSlider('d-fan-min', 'fan-min-read', 'fan_overhang_min');
+    bindFanSlider('d-fan-max', 'fan-max-read', 'fan_overhang_max');
+  })();
+
+  // Fan-off-layers numeric input.
+  (function(){
+    var el = document.getElementById('d-fan-off-layers');
+    if(!el) return;
+    el.value = design.fan_off_layers || 0;
+    el.addEventListener('input', function(){
+      var v = parseInt(el.value, 10);
+      design.fan_off_layers = Number.isNaN(v) ? 0 : Math.max(0, Math.min(v, 50));
+      persistDesign();
+    });
+  })();
+
+  // ---- Point Edit Modifiers: popup panel + live-preview wiring -------------
+  // "Purple modifiers" (Clay Studio Pro convention): operate on the already-
+  // sliced wall polyline, not the source geometry. Mirrors
+  // trident_gcode/point_edit.py exactly -- see preview_math.js's
+  // applyPointEditsPreview() for the client-side mirror math.
+  var PE_FFD_ROWS = 3, PE_FFD_COLS = 6;
+
+  function ensurePointFFDGrid(){
+    if(Array.isArray(design.point_ffd_grid) && design.point_ffd_grid.length &&
+       Array.isArray(design.point_ffd_grid[0])) return;
+    var grid = [];
+    for(var i = 0; i < PE_FFD_ROWS; i++){
+      var row = [];
+      for(var j = 0; j < PE_FFD_COLS; j++) row.push(0);
+      grid.push(row);
+    }
+    design.point_ffd_grid = grid;
+  }
+
+  // Single source of truth for "is this modifier actually going to do
+  // anything" -- enabled AND holds a non-default value. The POST-body
+  // assembly (buildRequestBody, below) gates on these exact same functions,
+  // so the rail dot can never show "on" for a modifier that silently sends
+  // nothing (e.g. Push enabled with amp_mm still at 0, or Smooth enabled
+  // with iterations at 0).
+  function pointEditMaskMeaningful(){
+    return !!(design.point_mask_enable && design.point_mask_channel &&
+              design.point_mask_channel !== 'none');
+  }
+  function pointEditProtectionMeaningful(){
+    return !!(design.point_protection_enable &&
+      ((design.point_protection_bottom||0) > 0 || (design.point_protection_top||0) > 0));
+  }
+  function pointEditFFDMeaningful(){
+    return !!(design.point_ffd_enable && design.point_ffd_grid &&
+      design.point_ffd_grid.some(function(r){ return r.some(function(v){ return Math.abs(v) > 1e-6; }); }));
+  }
+  function pointEditSmoothMeaningful(){
+    return !!(design.point_smooth_enable && Math.round(design.point_smooth_iterations || 0) > 0);
+  }
+  function pointEditRadialPushMeaningful(){
+    return !!(design.point_radial_push_enable && design.point_radial_push_amp);
+  }
+
+  function pointEditAnyEnabled(){
+    return pointEditMaskMeaningful() || pointEditProtectionMeaningful() ||
+           pointEditFFDMeaningful() || pointEditSmoothMeaningful() ||
+           pointEditRadialPushMeaningful();
+  }
+
+  function updatePointEditActiveDot(){
+    var dot = document.getElementById('pe-active-dot');
+    if(dot) dot.classList.toggle('active', pointEditAnyEnabled());
+    document.querySelectorAll('.pe-rail-item').forEach(function(btn){
+      var tab = btn.getAttribute('data-pe-tab');
+      var on = (tab === 'mask' && pointEditMaskMeaningful()) ||
+               (tab === 'protection' && pointEditProtectionMeaningful()) ||
+               (tab === 'ffd' && pointEditFFDMeaningful()) ||
+               (tab === 'smooth' && pointEditSmoothMeaningful()) ||
+               (tab === 'radial' && pointEditRadialPushMeaningful());
+      btn.classList.toggle('enabled', !!on);
+    });
+  }
+
+  // Point edit modifiers only reach the parametric wall spiral -- loop fabric
+  // and STL import ignore them server-side (mirrors updateCageNote()'s
+  // precedent for the same limitation on the asymmetric shape cage).
+  function updatePointEditScopeNote(){
+    var note = document.getElementById('pe-scope-note');
+    var btn = document.getElementById('point-edit-btn');
+    var outOfScope = design.pattern === 'loops' || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+    if(note) note.style.display = outOfScope ? '' : 'none';
+    if(btn) btn.classList.toggle('pe-out-of-scope', outOfScope);
+  }
+
+  function buildFFDGridUI(){
+    ensurePointFFDGrid();
+    var container = document.getElementById('pe-ffd-grid');
+    if(!container) return;
+    container.innerHTML = '';
+    var rows = design.point_ffd_grid.length, cols = design.point_ffd_grid[0].length;
+    container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+    // Build top-to-bottom (row rows-1 = top of print) for an intuitive layout.
+    for(var i = rows - 1; i >= 0; i--){
+      for(var j = 0; j < cols; j++){
+        (function(ri, ci){
+          var inp = document.createElement('input');
+          inp.type = 'number'; inp.step = '0.25'; inp.min = '-4'; inp.max = '4';
+          inp.value = design.point_ffd_grid[ri][ci];
+          var tFrac = rows > 1 ? ri/(rows-1) : 0;
+          inp.title = 'height t=' + tFrac.toFixed(2) + ', azimuth cell ' + ci + ' (mm radial push)';
+          inp.addEventListener('input', function(){
+            var v = parseFloat(inp.value);
+            design.point_ffd_grid[ri][ci] = Number.isNaN(v) ? 0 : Math.max(-4, Math.min(4, v));
+            persistDesign();
+            schedulePreview();
+            updatePointEditActiveDot();
+          });
+          container.appendChild(inp);
+        })(i, j);
+      }
+    }
+  }
+
+  // Re-syncs every Point Edit control from `design` -- called on load/undo/
+  // redo/preset-apply, mirroring applyDesignToUI()'s job for the rest of the panel.
+  function applyPointEditUIFromDesign(){
+    var set = function(id, v){ var el = document.getElementById(id); if(el && v != null) el.value = v; };
+    var chk = function(id, v){ var el = document.getElementById(id); if(el) el.checked = !!v; };
+    chk('pe-mask-enable', design.point_mask_enable);
+    set('pe-mask-channel', design.point_mask_channel || 'checker');
+    set('pe-mask-scaleu', design.point_mask_scale_u);
+    set('pe-mask-scalev', design.point_mask_scale_v);
+    chk('pe-mask-invert', design.point_mask_invert);
+    chk('pe-prot-enable', design.point_protection_enable);
+    set('pe-prot-bottom', design.point_protection_bottom);
+    set('pe-prot-top', design.point_protection_top);
+    set('pe-prot-falloff', design.point_protection_falloff);
+    chk('pe-ffd-enable', design.point_ffd_enable);
+    set('pe-ffd-strength', design.point_ffd_strength);
+    buildFFDGridUI();
+    chk('pe-smooth-enable', design.point_smooth_enable);
+    set('pe-smooth-iter', design.point_smooth_iterations);
+    set('pe-smooth-theta', design.point_smooth_theta);
+    set('pe-smooth-t', design.point_smooth_t);
+    set('pe-smooth-strength', design.point_smooth_strength);
+    chk('pe-push-enable', design.point_radial_push_enable);
+    set('pe-push-amp', design.point_radial_push_amp);
+    set('pe-push-strength', design.point_radial_push_strength);
+    updatePointEditActiveDot();
+    updatePointEditScopeNote();
+  }
+
+  (function(){
+    var modal = document.getElementById('point-edit-modal');
+    var openBtn = document.getElementById('point-edit-btn');
+    var closeBtn = document.getElementById('pe-modal-close');
+    var doneBtn = document.getElementById('pe-modal-done');
+    var backdrop = modal ? modal.querySelector('.pe-modal-backdrop') : null;
+    if(!modal || !openBtn) return;
+
+    function openModal(){
+      previewArmed = true;
+      modal.style.display = 'flex';
+    }
+    function closeModal(){ modal.style.display = 'none'; }
+    // Exposed so the active-summary "N point-edit mods" chip (see
+    // updateActiveSummary()) can open the modal directly rather than just
+    // switching to the Texture step.
+    window.__openPointEditModal = openModal;
+    openBtn.addEventListener('click', openModal);
+    if(closeBtn) closeBtn.addEventListener('click', closeModal);
+    if(doneBtn) doneBtn.addEventListener('click', closeModal);
+    if(backdrop) backdrop.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
+    });
+
+    // Rail tab switching.
+    var railBtns = Array.prototype.slice.call(document.querySelectorAll('.pe-rail-item'));
+    var panels = {};
+    railBtns.forEach(function(btn){
+      var name = btn.getAttribute('data-pe-tab');
+      panels[name] = document.querySelector('.pe-panel[data-pe-panel="' + name + '"]');
+    });
+    railBtns.forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var name = btn.getAttribute('data-pe-tab');
+        railBtns.forEach(function(b){ b.classList.toggle('active', b === btn); });
+        for(var k in panels){ if(panels[k]) panels[k].classList.toggle('active', k === name); }
+      });
+    });
+
+    function bindPEBool(id, field){
+      var el = document.getElementById(id);
+      if(!el) return;
+      el.checked = !!design[field];
+      el.addEventListener('change', function(){
+        design[field] = el.checked;
+        previewArmed = true;
+        persistDesign();
+        schedulePreview();
+        updatePointEditActiveDot();
+      });
+    }
+    function bindPENumber(id, field){
+      var el = document.getElementById(id);
+      if(!el) return;
+      if(design[field] != null) el.value = design[field];
+      el.addEventListener('input', function(){
+        var v = parseFloat(el.value);
+        if(Number.isNaN(v)) return;
+        design[field] = v;
+        previewArmed = true;
+        persistDesign();
+        schedulePreview();
+        updatePointEditActiveDot();
+      });
+    }
+    function bindPESelect(id, field){
+      var el = document.getElementById(id);
+      if(!el) return;
+      if(design[field]) el.value = design[field];
+      el.addEventListener('change', function(){
+        design[field] = el.value;
+        previewArmed = true;
+        persistDesign();
+        schedulePreview();
+      });
+    }
+
+    bindPEBool('pe-mask-enable', 'point_mask_enable');
+    bindPESelect('pe-mask-channel', 'point_mask_channel');
+    bindPENumber('pe-mask-scaleu', 'point_mask_scale_u');
+    bindPENumber('pe-mask-scalev', 'point_mask_scale_v');
+    bindPEBool('pe-mask-invert', 'point_mask_invert');
+
+    bindPEBool('pe-prot-enable', 'point_protection_enable');
+    bindPENumber('pe-prot-bottom', 'point_protection_bottom');
+    bindPENumber('pe-prot-top', 'point_protection_top');
+    bindPENumber('pe-prot-falloff', 'point_protection_falloff');
+
+    bindPEBool('pe-ffd-enable', 'point_ffd_enable');
+    bindPENumber('pe-ffd-strength', 'point_ffd_strength');
+
+    bindPEBool('pe-smooth-enable', 'point_smooth_enable');
+    bindPENumber('pe-smooth-iter', 'point_smooth_iterations');
+    bindPENumber('pe-smooth-theta', 'point_smooth_theta');
+    bindPENumber('pe-smooth-t', 'point_smooth_t');
+    bindPENumber('pe-smooth-strength', 'point_smooth_strength');
+
+    bindPEBool('pe-push-enable', 'point_radial_push_enable');
+    bindPENumber('pe-push-amp', 'point_radial_push_amp');
+    bindPENumber('pe-push-strength', 'point_radial_push_strength');
+
+    buildFFDGridUI();
+
+    var ffdResetBtn = document.getElementById('pe-ffd-reset');
+    if(ffdResetBtn) ffdResetBtn.addEventListener('click', function(){
+      ensurePointFFDGrid();
+      for(var i = 0; i < design.point_ffd_grid.length; i++){
+        for(var j = 0; j < design.point_ffd_grid[i].length; j++) design.point_ffd_grid[i][j] = 0;
+      }
+      buildFFDGridUI();
+      persistDesign();
+      schedulePreview();
+    });
+
+    var resetAllBtn = document.getElementById('pe-reset-all');
+    if(resetAllBtn) resetAllBtn.addEventListener('click', function(){
+      design.point_mask_enable = false;
+      design.point_mask_channel = 'checker';
+      design.point_mask_scale_u = 8;
+      design.point_mask_scale_v = 6;
+      design.point_mask_invert = false;
+      design.point_protection_enable = false;
+      design.point_protection_bottom = 0;
+      design.point_protection_top = 0;
+      design.point_protection_falloff = 0.08;
+      design.point_ffd_enable = false;
+      design.point_ffd_grid = null;
+      design.point_ffd_strength = 1.0;
+      design.point_smooth_enable = false;
+      design.point_smooth_iterations = 2;
+      design.point_smooth_theta = 0.5;
+      design.point_smooth_t = 0.5;
+      design.point_smooth_strength = 1.0;
+      design.point_radial_push_enable = false;
+      design.point_radial_push_amp = 1.0;
+      design.point_radial_push_strength = 1.0;
+      applyPointEditUIFromDesign();
+      persistDesign();
+      schedulePreview();
+    });
+
+    updatePointEditActiveDot();
+    updatePointEditScopeNote();
+  })();
+
+  // Pattern dropdown also affects the Point Edit scope note (loop fabric
+  // is out of scope for point edits, same as the asymmetric shape cage).
+  document.getElementById('d-pattern').addEventListener('change', updatePointEditScopeNote);
+
   // Print tab.
   bindSelect('d-nozzle', 'nozzle');
   bindNumber('d-speed', 'print_speed');
@@ -1183,6 +1712,27 @@
       design.line_width = (el.value === '' || Number.isNaN(v)) ? null : v;
       persistDesign();
     });
+  })();
+
+  // Live "flow line width" readout mirroring serve.py: line_width = round(nozzle*1.125, 3),
+  // or the explicit override. Purely informational; stale tracking is already handled
+  // by bindSelect('d-nozzle') -> persistDesign().
+  (function(){
+    var hint = document.getElementById('nozzle-flow-hint');
+    var nz = document.getElementById('d-nozzle');
+    var lwo = document.getElementById('d-lwoverride');
+    if(!hint || !nz) return;
+    function fmt(n){ return String(Math.round(n*1000)/1000); }
+    function compute(){
+      var ov = (lwo && lwo.value !== '') ? parseFloat(lwo.value) : NaN;
+      if(!Number.isNaN(ov)){ hint.textContent = 'Flow line width: ' + fmt(ov) + ' mm (override)'; return; }
+      // "auto (profile)": every current printer profile defaults to a 0.40 mm nozzle.
+      var nd = nz.value === '' ? 0.4 : parseFloat(nz.value);
+      hint.textContent = 'Flow line width: ' + fmt(nd*1.125) + ' mm  (nozzle ' + nd + ' × 1.125)';
+    }
+    nz.addEventListener('change', compute);
+    if(lwo) lwo.addEventListener('input', compute);
+    compute();
   })();
 
   // ---- show/hide dependent rows -------------------------------------------
@@ -1234,6 +1784,96 @@
 
   refreshShapeRows();
   refreshPatternRows();
+
+  // ---- parameter search (jump-to-control) ---------------------------------
+  (function(){
+    var input = document.getElementById('param-search-input');
+    var resultsEl = document.getElementById('param-search-results');
+    var scroll = document.getElementById('panel-scroll');
+    if(!input || !resultsEl || !scroll) return;
+
+    // conditional block -> the <select> id that controls its visibility
+    var BLOCK_CTRL = { 'star-rows':'d-shape', 'pattern-rows':'d-pattern',
+                       'blob-rows':'d-pattern', 'loop-rows':'d-pattern' };
+    var STEP_LABEL = { model:'Model', texture:'Texture', print:'Print', generate:'Generate' };
+
+    // build index once over every reachable row in the sidebar
+    var index = [];
+    Array.prototype.forEach.call(scroll.querySelectorAll('.drow, label.row'), function(row){
+      var span = row.querySelector(':scope > span');
+      var label = span ? (span.textContent || '').trim() : '';
+      if(!label) return;
+      var mp = row.closest('.mode-panel');
+      var mode = (mp && mp.id === 'mode-viewer') ? 'viewer' : 'design';
+      var sp = row.closest('.step-panel');
+      var step = sp ? sp.id.replace('step-','') : null;
+      var ctrl = null;
+      for(var b in BLOCK_CTRL){ var el = document.getElementById(b);
+        if(el && el.contains(row)){ ctrl = document.getElementById(BLOCK_CTRL[b]); break; } }
+      index.push({ row:row, lc:label.toLowerCase(), label:label, mode:mode, step:step, ctrl:ctrl });
+    });
+
+    var matches = [], activeIdx = -1;
+    function esc(s){ return s.replace(/[&<>"]/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+    function search(q){
+      q = q.trim().toLowerCase();
+      if(!q){ resultsEl.classList.remove('open'); return; }
+      var out = [];
+      for(var i=0;i<index.length && out.length<12;i++) if(index[i].lc.indexOf(q)>=0) out.push(index[i]);
+      out.sort(function(a,b){ return (a.lc.indexOf(q)===0?0:1) - (b.lc.indexOf(q)===0?0:1); });
+      matches = out; activeIdx = out.length ? 0 : -1;
+      resultsEl.innerHTML = '';
+      out.forEach(function(m,i){
+        var it = document.createElement('div');
+        it.className = 'param-search-item' + (i===0?' active':'');
+        it.setAttribute('role','option');
+        var crumb = m.mode==='viewer' ? 'Viewer' : (STEP_LABEL[m.step]||'Design');
+        it.innerHTML = '<span>'+esc(m.label)+'</span><span class="psi-crumb">'+crumb+'</span>';
+        it.addEventListener('mousedown', function(e){ e.preventDefault(); choose(m); });
+        it.addEventListener('mouseenter', function(){ setActive(i); });
+        resultsEl.appendChild(it);
+      });
+      resultsEl.classList.toggle('open', out.length>0);
+    }
+    function setActive(i){ var ch = resultsEl.children;
+      if(ch[activeIdx]) ch[activeIdx].classList.remove('active');
+      activeIdx = i; if(ch[i]) ch[i].classList.add('active'); }
+
+    function choose(m){
+      if(window.setAppMode) window.setAppMode(m.mode);      // reuse existing path
+      if(m.mode==='design' && m.step) activateStep(m.step); // reuse existing path
+      // A search hit inside a collapsed section would otherwise scroll to a
+      // display:none row and flash nothing. Expand first, synchronously, so the
+      // measurement below sees the real geometry.
+      expandSectionsContaining(m.row);
+      if(m.ctrl) expandSectionsContaining(m.ctrl);
+      requestAnimationFrame(function(){
+        var target = m.row;
+        if(m.ctrl && m.row.offsetParent === null)           // hidden conditional block
+          target = m.ctrl.closest('.drow') || m.ctrl;
+        var cr = scroll.getBoundingClientRect(), er = target.getBoundingClientRect();
+        scroll.scrollTop += (er.top - cr.top) - (scroll.clientHeight/2 - er.height/2);
+        target.classList.remove('param-search-hit'); void target.offsetWidth;
+        target.classList.add('param-search-hit');
+        setTimeout(function(){ target.classList.remove('param-search-hit'); }, 1400);
+      });
+      resultsEl.classList.remove('open'); input.blur();
+    }
+
+    input.addEventListener('input', function(){ search(input.value); });
+    input.addEventListener('keydown', function(e){
+      if(!matches.length) return;
+      if(e.key==='ArrowDown'){ e.preventDefault(); setActive(Math.min(activeIdx+1, matches.length-1)); }
+      else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(Math.max(activeIdx-1, 0)); }
+      else if(e.key==='Enter'){ e.preventDefault(); if(matches[activeIdx]) choose(matches[activeIdx]); }
+      else if(e.key==='Escape'){ resultsEl.classList.remove('open'); input.blur(); }
+    });
+    document.addEventListener('click', function(e){
+      if(!e.target.closest('#param-search')) resultsEl.classList.remove('open'); });
+  })();
+
   updateSlope();
   window.addEventListener('mousemove', function(){ if(document.getElementById('slope-read')) updateSlope(); });
 
@@ -1371,10 +2011,22 @@
     if(ohSlider){ ohSlider.value = design.overhang_flow_k || 0; }
     var ohRead = document.getElementById('overhang-k-read');
     if(ohRead) ohRead.textContent = (design.overhang_flow_k || 0).toFixed(2);
+    // Fan min/max (speed selected by wall lean)
+    var fanMinSlider = document.getElementById('d-fan-min');
+    if(fanMinSlider){ fanMinSlider.value = design.fan_overhang_min != null ? design.fan_overhang_min : 100; }
+    var fanMinRead = document.getElementById('fan-min-read');
+    if(fanMinRead) fanMinRead.textContent = (design.fan_overhang_min != null ? design.fan_overhang_min : 100) + '%';
+    var fanMaxSlider = document.getElementById('d-fan-max');
+    if(fanMaxSlider){ fanMaxSlider.value = design.fan_overhang_max != null ? design.fan_overhang_max : 100; }
+    var fanMaxRead = document.getElementById('fan-max-read');
+    if(fanMaxRead) fanMaxRead.textContent = (design.fan_overhang_max != null ? design.fan_overhang_max : 100) + '%';
+    var fanOffEl = document.getElementById('d-fan-off-layers');
+    if(fanOffEl) fanOffEl.value = design.fan_off_layers || 0;
     ampEditor.setProfile(design.amp_profile);
     silEditor.setProfile(design.radius_profile);
     widthEditor.setProfile(design.width_profile);
     ampEditor.draw(); silEditor.draw(); widthEditor.draw();
+    if(typeof applyPointEditUIFromDesign === 'function') applyPointEditUIFromDesign();
     persistDesign();
     refreshShapeRows();
     refreshPatternRows();
@@ -1486,6 +2138,67 @@
     var dy = data.bounds.max[1] - data.bounds.min[1];
     document.getElementById('mesh-size').textContent = dx.toFixed(1) + ' x ' + dy.toFixed(1);
     document.getElementById('mesh-height').textContent = data.height.toFixed(1);
+    showMeshCheck(data.vase_check);
+    if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
+  }
+
+  // We keep only the largest contour per layer, so holes and islands are dropped
+  // silently. The server flags that on upload; surface it here so the user finds
+  // out before printing rather than after.
+  function showMeshCheck(chk){
+    var box = document.getElementById('mesh-check');
+    var list = document.getElementById('mesh-check-notes');
+    if(!box || !list) return;
+    list.innerHTML = '';
+    if(!chk || chk.error){
+      box.style.display = chk && chk.error ? 'block' : 'none';
+      if(chk && chk.error){
+        box.className = 'mesh-check warn';
+        document.getElementById('mesh-check-icon').textContent = '!';
+        document.getElementById('mesh-check-title').textContent = chk.error;
+      }
+      return;
+    }
+    var notes = chk.notes || [];
+    var bad = !chk.compatible;
+    var warn = chk.compatible && notes.length > 0;
+    var info = !bad && !warn && chk.solid_cross_section;
+    // A clean star-convex vase needs no callout at all -- staying quiet when
+    // everything is fine keeps the warning meaningful when it does appear.
+    if(!bad && !warn && !info){
+      box.style.display = 'none';
+      return;
+    }
+    box.style.display = 'block';
+    var level = bad ? 'bad' : (warn ? 'warn' : 'info');
+    box.className = 'mesh-check ' + level;
+    document.getElementById('mesh-check-icon').textContent = bad ? '✗' : (warn ? '!' : 'i');
+    document.getElementById('mesh-check-title').textContent = bad
+      ? 'This STL is not vase-compatible'
+      : (warn ? 'This STL will print, with caveats' : 'This model will print hollow');
+    // Independent of severity: "prints hollow" is about what the user gets, while
+    // warn-level notes are about slicing fidelity. A solid part that also trips a
+    // caveat still needs to hear the hollow message -- it's the more consequential
+    // one -- so this is keyed off the flag itself, not off the info level.
+    if(chk.solid_cross_section && !bad){
+      var liInfo = document.createElement('li');
+      liInfo.textContent = 'This is a solid part, so the single-wall spiral traces only '
+        + 'its outline - no infill, open top. Use Export STL below and slice in Orca '
+        + 'if you want it solid.';
+      list.appendChild(liInfo);
+    }
+    for(var i = 0; i < notes.length; i++){
+      var li = document.createElement('li');
+      li.textContent = notes[i];
+      list.appendChild(li);
+    }
+    if(bad && chk.discarded_area_pct > 0){
+      var li2 = document.createElement('li');
+      li2.textContent = 'Up to ' + chk.discarded_area_pct
+        + '% of a layer’s area is dropped (worst at Z '
+        + chk.worst_height_mm + ' mm).';
+      list.appendChild(li2);
+    }
   }
 
   document.getElementById('mesh-clear').addEventListener('click', function(){
@@ -1494,7 +2207,9 @@
     meshState.info = null;
     document.getElementById('stl-drop').style.display = '';
     document.getElementById('mesh-info').style.display = 'none';
+    showMeshCheck(null);
     stlFile.value = '';
+    if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
   });
 
   // ---- generate ----------------------------------------------------------
@@ -1504,7 +2219,10 @@
   var dlBtn = document.getElementById('dl-btn');
   var lastGcode = null, lastName = null;
 
-  genBtn.addEventListener('click', function(){
+  // Shared by the Generate and Export STL buttons -- both send the same
+  // design snapshot to the server, just to different endpoints, so the body
+  // assembly lives in one place instead of drifting out of sync.
+  function buildGenerateBody(){
     var body = {
       printer: design.printer || 'trident',
       shape: design.shape,
@@ -1537,6 +2255,56 @@
     };
     if(design.cage && design.cage.some(function(r){ return r.some(function(v){ return Math.abs(v-1) > 1e-6; }); })){
       body.cage = design.cage;
+    }
+    // Overhang-adaptive fan: sliders are 0-100 (UI); only sent when not both
+    // at the 100/100 no-op default (server also tolerates them absent).
+    if((design.fan_overhang_min != null && design.fan_overhang_min < 100) ||
+       (design.fan_overhang_max != null && design.fan_overhang_max < 100)){
+      body.fan_min = Math.max(0, Math.min(design.fan_overhang_min != null ? design.fan_overhang_min : 100, 100)) / 100;
+      body.fan_max = Math.max(0, Math.min(design.fan_overhang_max != null ? design.fan_overhang_max : 100, 100)) / 100;
+    }
+    if(design.fan_off_layers > 0){
+      body.fan_off_layers = Math.round(design.fan_off_layers);
+    }
+    // Point Edit Modifiers: each block is only sent when its modifier is
+    // enabled AND would actually do something (server tolerates malformed/
+    // no-op input gracefully either way, but there's no reason to send inert
+    // payloads). Only the parametric wall honors these -- loop fabric and
+    // STL mode ignore them server-side and surface a warning in the report.
+    if(pointEditMaskMeaningful()){
+      body.point_mask = {
+        channel: design.point_mask_channel,
+        scale_u: design.point_mask_scale_u,
+        scale_v: design.point_mask_scale_v,
+        invert: !!design.point_mask_invert
+      };
+    }
+    if(pointEditProtectionMeaningful()){
+      body.point_protection = {
+        protect_bottom: design.point_protection_bottom || 0,
+        protect_top: design.point_protection_top || 0,
+        falloff: design.point_protection_falloff || 0.08
+      };
+    }
+    if(pointEditFFDMeaningful()){
+      body.point_ffd = {
+        cage: window.buildFFDCageFromGrid(design.point_ffd_grid),
+        strength: design.point_ffd_strength != null ? design.point_ffd_strength : 1.0
+      };
+    }
+    if(pointEditSmoothMeaningful()){
+      body.point_smooth = {
+        iterations: Math.round(design.point_smooth_iterations),
+        theta_amount: design.point_smooth_theta != null ? design.point_smooth_theta : 0.5,
+        t_amount: design.point_smooth_t != null ? design.point_smooth_t : 0.5,
+        strength: design.point_smooth_strength != null ? design.point_smooth_strength : 1.0
+      };
+    }
+    if(pointEditRadialPushMeaningful()){
+      body.point_radial_push = {
+        amp_mm: design.point_radial_push_amp,
+        strength: design.point_radial_push_strength != null ? design.point_radial_push_strength : 1.0
+      };
     }
     // Route texture params by the pattern dropdown: blobs and loops are
     // site-based textures (server pattern stays null), wave patterns send
@@ -1601,6 +2369,11 @@
       // texture + z-wave params still come from the design object (Texture/Waves tabs)
     }
 
+    return body;
+  }
+
+  genBtn.addEventListener('click', function(){
+    var body = buildGenerateBody();
     genBtn.disabled = true;
     statusEl.className = ''; statusEl.textContent = 'generating...';
     dlBtn.style.display = 'none';
@@ -1649,4 +2422,44 @@
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
   });
+
+  // ---- export STL ---------------------------------------------------------
+  // Slices the same design through /api/export_stl instead of /api/generate,
+  // giving a solid mesh of the sculpted surface for users who want to slice
+  // it as a filled part in Orca rather than print our single-wall spiral.
+  var exportStlBtn = document.getElementById('export-stl-btn');
+  if(exportStlBtn){
+    exportStlBtn.addEventListener('click', function(){
+      var body = buildGenerateBody();
+      exportStlBtn.disabled = true;
+      statusEl.className = ''; statusEl.textContent = 'exporting STL...';
+      fetch('/api/export_stl', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+      }).then(function(resp){
+        if(!resp.ok){
+          return resp.json().then(function(j){
+            throw new Error(j && j.error ? j.error : 'STL export failed');
+          }).catch(function(e){
+            throw (e instanceof Error ? e : new Error('STL export failed'));
+          });
+        }
+        return resp.blob();
+      }).then(function(blob){
+        exportStlBtn.disabled = false;
+        var stlName = (lastName || ('trident_design_' + design.shape + '_' + design.height + 'mm.gcode'))
+          .replace(/\.[^.]*$/, '') + '.stl';
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = stlName;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+        statusEl.className = 'ok';
+        statusEl.textContent = 'STL exported - ' + stlName;
+      }).catch(function(err){
+        exportStlBtn.disabled = false;
+        statusEl.className = 'err';
+        statusEl.textContent = 'STL export failed: ' + (err && err.message ? err.message : err);
+      });
+    });
+  }
 })();

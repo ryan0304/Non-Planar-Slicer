@@ -10,6 +10,12 @@
   var TWO_PI = 2.0 * Math.PI;
   var _MAX_AMP_STEP = 0.6;
   var AMP_MAX = 0.95;
+  // Radius-envelope clamp. MUST match serve.py's RADIUS_SCALE_MIN/MAX, not the
+  // narrower [0.5, 1.3] range the silhouette editor limits dragging to: the
+  // preview's job is to show what the SERVER will generate. A design loaded from
+  // JSON can legitimately carry values the editor itself cannot reach, and
+  // clamping tighter here made the draft understate the real wall by up to 9 mm.
+  var RADIUS_SCALE_MIN = 0.2, RADIUS_SCALE_MAX = 1.5;
   // Bed centre offset (printer coords -> world coords happen in the viewer).
   // Default matches the Voron Trident's 235x235 bed; designer.js overrides
   // this (via setBedSize / design.bed_center) once /api/printers resolves.
@@ -144,6 +150,213 @@
     var a = cage[i0][j0]*(1-v) + cage[i0][j1]*v;
     var b = cage[i0+1][j0]*(1-v) + cage[i0+1][j1]*v;
     return a*(1-u) + b*u;
+  }
+
+  // ---- Point Edit Modifiers (mirrors trident_gcode/point_edit.py exactly) --
+  // Post-slice deformation of the already-generated wall polyline: mask and
+  // protection gate (multiply into one 0..1 weight) how much FFD / Smooth /
+  // Radial Push are allowed to move each point. Runs on PRINTER-space (x,y,z)
+  // coordinates -- generatePreview() converts to/from its Three.js world-space
+  // layout (worldX=printerX, worldY=printerZ/height, worldZ=printerY) around
+  // the call into applyPointEditsPreview() below.
+  var MASK_CHANNELS = {
+    checker:    function(a, b){ return (Math.floor(a/Math.PI) + Math.floor(b/Math.PI)) % 2 === 0 ? 1.0 : 0.0; },
+    stripes_v:  function(a, b){ return 0.5 + 0.5*Math.sin(a); },
+    stripes_h:  function(a, b){ return 0.5 + 0.5*Math.sin(b); },
+    rings:      function(a, b){ return 0.5 + 0.5*Math.sin(b); },
+    diamond:    function(a, b){ return 0.5 + 0.5*(tri(a+b)*tri(a-b)); },
+    gradient_v: function(a, b){ return ((b % TWO_PI) + TWO_PI) % TWO_PI / TWO_PI; },
+    gradient_h: function(a, b){ return ((a % TWO_PI) + TWO_PI) % TWO_PI / TWO_PI; },
+    radial:     function(a, b){ return 0.5 + 0.5*Math.sin(a); }
+  };
+
+  function pointMaskWeight(design, theta, t){
+    if(!design.point_mask_enable) return 1.0;
+    var fn = MASK_CHANNELS[design.point_mask_channel];
+    if(!fn) return 1.0;
+    var su = Math.max(design.point_mask_scale_u || 8, 0.001);
+    var sv = Math.max(design.point_mask_scale_v || 6, 0.001);
+    var a = theta * su;
+    var b = TWO_PI * t * sv;
+    var v = Math.min(1, Math.max(0, fn(a, b)));
+    return design.point_mask_invert ? (1.0 - v) : v;
+  }
+
+  function pointProtectionWeight(design, t){
+    if(!design.point_protection_enable) return 1.0;
+    var w = 1.0;
+    var fo = Math.max(design.point_protection_falloff || 0.08, 1e-6);
+    var pb = Math.max(0, Math.min(design.point_protection_bottom || 0, 1));
+    var pt = Math.max(0, Math.min(design.point_protection_top || 0, 1));
+    if(pb > 0){
+      if(t < pb) w = Math.min(w, 0.0);
+      else if(t < pb + fo) w = Math.min(w, (t - pb) / fo);
+    }
+    if(pt > 0){
+      var edge = 1.0 - pt;
+      if(t > edge) w = Math.min(w, 0.0);
+      else if(t > edge - fo) w = Math.min(w, (edge - t) / fo);
+    }
+    return Math.max(0.0, Math.min(1.0, w));
+  }
+
+  function pointEditGate(design, theta, t){
+    return pointMaskWeight(design, theta, t) * pointProtectionWeight(design, t);
+  }
+
+  // Point FFD cage sample: cosine-eased bilinear, 3 components (dx,dy,dz) --
+  // same easing as cageScale() above, generalized from 1 to 3 components.
+  function ffdSample(cage, theta, t){
+    var n = cage.length, m = cage[0].length;
+    var ft = Math.min(Math.max(t,0),1) * (n > 1 ? (n-1) : 0);
+    var i0 = n > 1 ? Math.min(Math.floor(ft), n-2) : 0;
+    var i1 = Math.min(i0+1, n-1);
+    var u = ft - i0; u = (1 - Math.cos(Math.PI*u))/2;
+    var tau = ((theta % TWO_PI) + TWO_PI) % TWO_PI / TWO_PI * m;
+    var j0 = Math.floor(tau) % m;
+    var j1 = (j0+1) % m;
+    var v = tau - Math.floor(tau); v = (1 - Math.cos(Math.PI*v))/2;
+    function lerp3(p, q, f){
+      return [p[0]+(q[0]-p[0])*f, p[1]+(q[1]-p[1])*f, p[2]+(q[2]-p[2])*f];
+    }
+    var a = lerp3(cage[i0][j0], cage[i0][j1], v);
+    var b = lerp3(cage[i1][j0], cage[i1][j1], v);
+    return lerp3(a, b, u);
+  }
+
+  // Builds a full [row][col][dx,dy,dz] FFD cage from the designer's simple
+  // "single mm radial push per cell" grid -- dx,dy derived from the cell's
+  // bed angle (col j at theta = 2*pi*j/cols), dz left at 0 (v1 UI scope cut;
+  // the backend cage format supports arbitrary dz for future use).
+  function buildFFDCageFromGrid(grid){
+    var rows = grid.length, cols = grid[0].length;
+    var cage = [];
+    for(var i = 0; i < rows; i++){
+      var row = [];
+      for(var j = 0; j < cols; j++){
+        var val = grid[i][j] || 0;
+        var theta = TWO_PI * j / cols;
+        row.push([val * Math.cos(theta), val * Math.sin(theta), 0]);
+      }
+      cage.push(row);
+    }
+    return cage;
+  }
+
+  // True only when a DEFORMING modifier (FFD / Smooth / Radial Push) is
+  // active -- mask/protection alone move nothing, matching apply_point_edits()'s
+  // early-return in the Python module exactly.
+  function pointEditActive(design){
+    return !!(
+      (design.point_ffd_enable && design.point_ffd_grid) ||
+      (design.point_smooth_enable && Math.round(design.point_smooth_iterations || 0) > 0) ||
+      (design.point_radial_push_enable && design.point_radial_push_amp)
+    );
+  }
+
+  // Mutates `allPos` (Float32Array of world-space [x,y,z, ...] triples,
+  // `totalPoints` entries) in place, applying the Point Edit Modifiers stack.
+  // Mirrors trident_gcode/point_edit.py's apply_point_edits() point-for-point:
+  // gate = mask*protection computed once per point, then FFD, then Radial
+  // Push, then Smooth (same order, same clamps, same theta/t derivation).
+  function applyPointEditsPreview(design, allPos, totalPoints, pointsPerTurn){
+    if(!pointEditActive(design)) return;
+    var n = totalPoints, ppt = Math.max(1, pointsPerTurn);
+    // Un-pack world-space -> printer-space parallel arrays: worldX=printerX,
+    // worldZ=printerY, worldY=printerZ(height) -- see generatePreview()'s wx/wy/wz.
+    var px = new Float64Array(n), py = new Float64Array(n), pz = new Float64Array(n);
+    var i;
+    for(i = 0; i < n; i++){
+      px[i] = allPos[i*3];
+      py[i] = allPos[i*3+2];
+      pz[i] = allPos[i*3+1];
+    }
+    var gates = new Float64Array(n);
+    for(i = 0; i < n; i++){
+      var t0 = i / Math.max(n-1, 1);
+      var theta0 = TWO_PI * ((i % ppt) / ppt);
+      gates[i] = pointEditGate(design, theta0, t0);
+    }
+
+    if(design.point_ffd_enable && design.point_ffd_grid){
+      var cage = buildFFDCageFromGrid(design.point_ffd_grid);
+      var ffdStrength = design.point_ffd_strength != null ? design.point_ffd_strength : 1.0;
+      for(i = 0; i < n; i++){
+        var gf = gates[i] * ffdStrength;
+        if(gf === 0) continue;
+        var t1 = i / Math.max(n-1, 1);
+        var theta1 = TWO_PI * ((i % ppt) / ppt);
+        var d = ffdSample(cage, theta1, t1);
+        px[i] += d[0]*gf; py[i] += d[1]*gf; pz[i] += d[2]*gf;
+      }
+    }
+
+    if(design.point_radial_push_enable && design.point_radial_push_amp){
+      var amt = design.point_radial_push_amp *
+        (design.point_radial_push_strength != null ? design.point_radial_push_strength : 1.0);
+      for(i = 0; i < n; i++){
+        var gp = gates[i];
+        if(gp === 0) continue;
+        var r = Math.hypot(px[i], py[i]);
+        if(r < 1e-9) continue;
+        var nx = px[i]/r, ny = py[i]/r;
+        var push = amt * gp;
+        px[i] += nx*push; py[i] += ny*push;
+      }
+    }
+
+    if(design.point_smooth_enable && Math.round(design.point_smooth_iterations || 0) > 0){
+      var smStrength = design.point_smooth_strength != null ? design.point_smooth_strength : 1.0;
+      if(smStrength > 0){
+        var iterations = Math.max(1, Math.min(Math.round(design.point_smooth_iterations), 12));
+        var thetaAmt = Math.max(0, Math.min(design.point_smooth_theta != null ? design.point_smooth_theta : 0.5, 1)) * smStrength;
+        var tAmt = Math.max(0, Math.min(design.point_smooth_t != null ? design.point_smooth_t : 0.5, 1)) * smStrength;
+        for(var it = 0; it < iterations; it++){
+          var nxs = px.slice(), nys = py.slice(), nzs = pz.slice();
+          for(i = 0; i < n; i++){
+            var gs = gates[i];
+            if(gs === 0) continue;
+            var turn0 = Math.floor(i/ppt) * ppt;
+            var turnLen = Math.min(ppt, n - turn0);
+            var lo = (i - 1 >= turn0) ? i - 1 : turn0 + turnLen - 1;
+            var hi = (i + 1 < turn0 + turnLen) ? i + 1 : turn0;
+            var bx = (px[lo] + px[hi]) / 2, by = (py[lo] + py[hi]) / 2, bz = (pz[lo] + pz[hi]) / 2;
+            var hasT = (i - ppt >= 0 && i + ppt < n);
+            var bx2, by2, bz2;
+            if(hasT){
+              bx2 = (px[i-ppt] + px[i+ppt]) / 2; by2 = (py[i-ppt] + py[i+ppt]) / 2; bz2 = (pz[i-ppt] + pz[i+ppt]) / 2;
+            }
+            var f = thetaAmt * gs;
+            var f2 = hasT ? (tAmt * gs) : 0;
+            // Stability: cap the combined blend weight to <=1 (convex
+            // combination) -- matches trident_gcode/point_edit.py's
+            // _SMOOTH_STABILITY_CAP. Without this, thetaAmt+tAmt can exceed 1
+            // (strength goes up to 2x), each iteration overshoots past the
+            // neighbor average, and the preview line diverges geometrically.
+            var w = f + f2;
+            if(w > 1.0){
+              var scale = 1.0 / w;
+              f *= scale; f2 *= scale;
+            }
+            nxs[i] = px[i] + (bx - px[i]) * f;
+            nys[i] = py[i] + (by - py[i]) * f;
+            nzs[i] = pz[i] + (bz - pz[i]) * f;
+            if(hasT){
+              nxs[i] += (bx2 - px[i]) * f2;
+              nys[i] += (by2 - py[i]) * f2;
+              nzs[i] += (bz2 - pz[i]) * f2;
+            }
+          }
+          px = nxs; py = nys; pz = nzs;
+        }
+      }
+    }
+
+    for(i = 0; i < n; i++){
+      allPos[i*3]   = px[i];
+      allPos[i*3+1] = pz[i];
+      allPos[i*3+2] = py[i];
+    }
   }
 
   // ---- blob site placement (mirrors trident_gcode/blobs.py exactly) ---------
@@ -283,8 +496,8 @@
 
     // Build radius envelope from radius_profile (optionally Catmull-Rom smoothed).
     var radFn = design.radius_profile_smooth
-      ? makeSmoothInterp(design.radius_profile, 0.5, 1.3)
-      : makeInterp(design.radius_profile, 0.5, 1.3);
+      ? makeSmoothInterp(design.radius_profile, RADIUS_SCALE_MIN, RADIUS_SCALE_MAX)
+      : makeInterp(design.radius_profile, RADIUS_SCALE_MIN, RADIUS_SCALE_MAX);
 
     var height = design.height;
     var layerHeight = design.layer_height;
@@ -314,9 +527,11 @@
     var amps = new Float32Array(totalSteps + 1);  // rate-limited amplitudes
 
     // Raw per-sample world positions, kept only when blob placement needs to
-    // look up a specific sample index (see computeBlobPreview() below).
+    // look up a specific sample index (see computeBlobPreview() below), or a
+    // Point Edit Modifier needs neighbor lookups across turns (Point Smooth).
     var wantBlobs = design.pattern === 'blobs' || design.pattern === 'loops';
-    var allPos = wantBlobs ? new Float32Array((totalSteps + 1) * 3) : null;
+    var wantPointEdit = pointEditActive(design);
+    var allPos = (wantBlobs || wantPointEdit) ? new Float32Array((totalSteps + 1) * 3) : null;
 
     var prevX = 0, prevY = 0, prevZ = 0;
     var outIdx = 0;
@@ -418,6 +633,21 @@
       out = out.subarray(0, outIdx);
     }
 
+    // Point Edit Modifiers: mutate the buffered position array, then rebuild
+    // the segment list from the edited positions (can't build `out` inline
+    // above -- Point Smooth needs neighbor lookups across turns that aren't
+    // known yet mid-loop).
+    if(wantPointEdit){
+      applyPointEditsPreview(design, allPos, totalSteps + 1, pointsPerTurn);
+      out = new Float32Array(totalSteps * 6);
+      var oi = 0;
+      for(var si = 1; si <= totalSteps; si++){
+        var a3 = (si-1)*3, b3 = si*3;
+        out[oi++] = allPos[a3];   out[oi++] = allPos[a3+1]; out[oi++] = allPos[a3+2];
+        out[oi++] = allPos[b3];   out[oi++] = allPos[b3+1]; out[oi++] = allPos[b3+2];
+      }
+    }
+
     // Blob dot sites, in the same world-space mapping as `out` above, for
     // viewer.js to render as points on the draft preview.
     if(wantBlobs){
@@ -442,4 +672,10 @@
   window.makeSmoothInterp = makeSmoothInterp;
   window.setPreviewBedSize = setBedSize;
   window.cageScale = cageScale;
+  // Point Edit Modifiers -- designer.js reuses buildFFDCageFromGrid() to
+  // build the same cage shape it sends to /api/generate.
+  window.pointEditActive = pointEditActive;
+  window.applyPointEditsPreview = applyPointEditsPreview;
+  window.buildFFDCageFromGrid = buildFFDCageFromGrid;
+  window.ffdSample = ffdSample;
 })();

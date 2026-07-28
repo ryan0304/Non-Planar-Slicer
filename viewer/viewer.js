@@ -40,7 +40,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0e1116);
+scene.background = new THREE.Color(0x101010);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
 camera.position.set(BED_X*0.9, BED_Z*1.1, BED_Y*1.3);
@@ -58,14 +58,14 @@ dir.position.set(1,2,1); scene.add(dir);
 // Origin shifted so bed centre sits at world origin.
 const bedGroup = new THREE.Group(); scene.add(bedGroup);
 {
-  const grid = new THREE.GridHelper(BED_X, 23, 0x3a4350, 0x222831);
+  const grid = new THREE.GridHelper(BED_X, 23, 0x2e2e2e, 0x1f1f1f);
   bedGroup.add(grid);
   // Safe-print-area outline (30-208 x 30-185 from printer.cfg).
   const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
   const c=[[ax[0],ay[0]],[ax[1],ay[0]],[ax[1],ay[1]],[ax[0],ay[1]],[ax[0],ay[0]]];
   const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,y-cy));
   const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineDashedMaterial({color:0x4cc2ff,dashSize:4,gapSize:3,transparent:true,opacity:.55}));
+    new THREE.LineDashedMaterial({color:0x2f6bff,dashSize:4,gapSize:3,transparent:true,opacity:.7}));
   ln.computeLineDistances(); bedGroup.add(ln);
 }
 
@@ -382,6 +382,7 @@ function parseGcode(text){
   let x=0,y=0,z=0, has=false, curF=0;
   let minz=Infinity,maxz=-Infinity, minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity;
   let fil=0, extrudeCount=0, travelCount=0, maxZrate=0, relE=false;
+  let curFan=0, minFan=Infinity, maxFan=-Infinity, fanEverOn=false;   // sticky M106/M107 state (0..1)
   const ext=[], extCol=[], trv=[];          // world-space vertex arrays
   const segSpeed=[], segFlow=[];            // per-extrude-segment telemetry
   const meta={lineWidth:null, layerHeight:null, nozzle:null};
@@ -396,6 +397,13 @@ function parseGcode(text){
       continue;
     }
     const up=line.toUpperCase();
+    if(up.startsWith('M106')){
+      const m=up.match(/S([\d.]+)/);
+      if(m) curFan=Math.min(1,Math.max(0,parseFloat(m[1])/255));
+      fanEverOn=true;                     // fan commanded on at least once
+      continue;
+    }
+    if(up.startsWith('M107')){ curFan=0; continue; }
     if(up.startsWith('M83')) { relE=true; continue; }
     if(up.startsWith('M82')) { relE=false; continue; }
     if(!(up.startsWith('G0')||up.startsWith('G1'))) continue;
@@ -420,6 +428,8 @@ function parseGcode(text){
         // volumetric flow = filament volume extruded / time = e*area*speed/len
         const flow=(len>0 && relE)? e*FIL_AREA*speed/len : 0;
         segSpeed.push(speed); segFlow.push(flow);
+        // skip pre-M106 extrudes (fan-off adhesion window) so they don't pin minFan to 0
+        if(fanEverOn){ if(curFan<minFan) minFan=curFan; if(curFan>maxFan) maxFan=curFan; }
         if(relE) fil+=e;
         if(len>0){ const zr=speed*Math.abs(nz-z)/len; if(zr>maxZrate)maxZrate=zr; }
         minz=Math.min(minz,z,nz); maxz=Math.max(maxz,z,nz);
@@ -453,8 +463,14 @@ function parseGcode(text){
   const segT = new Float64Array(nExtSeg + 1);
   for(let s = 0; s < nExtSeg; s++) segT[s+1] = segT[s] + segDuration(extFlat, segSpeed, s);
 
+  // No M106 seen at all (e.g. a printer profile with no part-cooling fan) --
+  // minFan/maxFan stay at their unset Infinity/-Infinity sentinels; null reads
+  // better than a nonsensical range in the telemetry card.
+  const fanSeen = extrudeCount > 0 && isFinite(minFan);
+
   return {ext:extFlat,extCol,trv:trvFlat,segSpeed,segFlow,meta,minz,maxz,minx,maxx,miny,maxy,
-          fil,extrudeCount,travelCount,maxZrate,riskFlags,riskyCount,overhang,estTime,estTimeSec,segT};
+          fil,extrudeCount,travelCount,maxZrate,riskFlags,riskyCount,overhang,estTime,estTimeSec,segT,
+          minFan: fanSeen ? minFan : null, maxFan: fanSeen ? maxFan : null};
 }
 
 // Swap the Display-panel legend to match the active colour mode: height shows
@@ -545,7 +561,7 @@ function buildGeometry(d){
 
   const tg=new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.Float32BufferAttribute(d.trv,3));
-  travelObj=new THREE.LineSegments(tg, new THREE.LineBasicMaterial({color:0x556070,transparent:true,opacity:0.45}));
+  travelObj=new THREE.LineSegments(tg, new THREE.LineBasicMaterial({color:0x4a4a4a,transparent:true,opacity:0.45}));
   travelObj.visible=document.getElementById('t-travel').checked;
   scene.add(travelObj);
 
@@ -598,7 +614,7 @@ function showGcodeTitle(name){
     gcodeTitleEl.style.cssText =
       'position:absolute;top:8px;left:50%;transform:translateX(-50%);' +
       'padding:3px 12px;border-radius:6px;background:rgba(14,17,22,0.82);' +
-      'color:#dfe7f3;font-size:12px;font-weight:600;pointer-events:none;' +
+      'color:#f5f5f0;font-size:12px;font-weight:600;pointer-events:none;' +
       'z-index:5;font-family:sans-serif;max-width:60%;overflow:hidden;' +
       'text-overflow:ellipsis;white-space:nowrap;border:1px solid rgba(255,255,255,0.08)';
     wrap.appendChild(gcodeTitleEl);
@@ -636,9 +652,9 @@ let sparkOffscreen = null;
 
 const SPARK_FLOW_MAX_REF = 17;    // melt-ceiling reference line at 17 mm^3/s
 const SPARK_BUCKETS = 600;
-const SPARK_BG = 'rgba(21,26,34,0.85)';
-const SPARK_LINE_COL = '#4cc2ff';
-const SPARK_FILL_COL = 'rgba(76,194,255,0.18)';
+const SPARK_BG = 'rgba(20,20,20,0.85)';
+const SPARK_LINE_COL = '#5a8aff';
+const SPARK_FILL_COL = 'rgba(47,107,255,0.18)';
 const SPARK_REF_COL = '#ffb454';  // mirrors --warn in style.css (safety-state color, not decoration)
 const SPARK_CURSOR_COL = 'rgba(255,255,255,0.75)';
 
@@ -897,6 +913,11 @@ function updateTelemetry(k, z){
   set('tm-flow', flow ? flow.toFixed(1)+' mm3/s'+flowWarn : '--');
   const tmFlowEl = document.getElementById('tm-flow');
   if(tmFlowEl) tmFlowEl.classList.toggle('state-danger', flow>17);
+  // Fan min/max are whole-print constants (actual M106 range in the loaded
+  // file, not a per-segment value) -- set once here rather than looked up
+  // per playhead position, same way meta.lineWidth/layerHeight/nozzle are.
+  set('tm-fan-min', lastData.minFan!=null ? Math.round(lastData.minFan*100)+'%' : '--');
+  set('tm-fan-max', lastData.maxFan!=null ? Math.round(lastData.maxFan*100)+'%' : '--');
   set('tm-z', z.toFixed(2)+' mm');
   set('tm-lh', lastData.meta.layerHeight!=null ? lastData.meta.layerHeight.toFixed(2)+' mm' : '--');
   set('tm-lw', lastData.meta.lineWidth!=null ? lastData.meta.lineWidth.toFixed(2)+' mm' : '--');
@@ -1117,13 +1138,11 @@ window.showPreview = function(positions){
     scene.add(previewBlobObj);
   }
 
-  // "Draft preview" label.
+  // "Draft preview" label -- top-right, clear of the telemetry card (which
+  // owns the top-left corner) at any telemetry collapsed/expanded state.
   if(!previewLabel){
     previewLabel = document.createElement('div');
-    previewLabel.style.cssText =
-      'position:absolute;top:8px;left:8px;padding:2px 8px;border-radius:4px;' +
-      'background:rgba(76,194,255,0.18);color:#4cc2ff;font-size:11px;' +
-      'pointer-events:none;z-index:5;font-family:sans-serif';
+    previewLabel.className = 'draft-preview-label';
     previewLabel.textContent = 'Draft preview';
     wrap.appendChild(previewLabel);
   }

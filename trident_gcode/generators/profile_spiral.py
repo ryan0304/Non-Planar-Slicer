@@ -22,7 +22,7 @@ from ..gcode import GcodeWriter
 from ..paths import _R_PATTERNS, _fade_envelope, _MAX_AMP_STEP, R_PATTERN_NAMES
 from ..profile_stack import Contour, contour_normals, interpolate_contours
 from .base_fill import layered_base_and_brim, brim_outer_radius, blend_layer_z
-from .continuous_spiral import emit_loop
+from .continuous_spiral import emit_loop, _overhang_fan, _fan_on_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +104,9 @@ def build_profile_spiral(
     blob_spec: BlobSpec | None = None,
     loop_spec: LoopSpec | None = None,
     overhang_flow_k: float = 0.0,
+    fan_overhang_min: float | None = None,
+    fan_overhang_max: float | None = None,
+    fan_off_layers: int = 0,
     width_callback: Callable[[float], float] | None = None,
 ) -> dict:
     """Emit a complete profile-spiral and return a report dict.
@@ -145,6 +148,15 @@ def build_profile_spiral(
     profile = writer.profile
     cx, cy = center if center is not None else profile.bed_center
     lh = writer.layer_height
+
+    # Overhang-adaptive fan: both bounds must be given to activate (None,None
+    # is the default -- constant writer.fan_speed, byte-identical output).
+    fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
+    # A solid base already prints with no fan calls at all (nowhere in that
+    # emission to turn it on) -- so a requested fan_off_layers count at or
+    # below base_layers just means "turn on right after the base", same as
+    # today's unconditional default.
+    fan_immediate = base_layers > 0 and fan_off_layers <= base_layers
 
     # Adhesion package active?
     adhesion = (first_layer_squish < 1.0 or base_layers > 0 or brim_loops > 0)
@@ -226,12 +238,20 @@ def build_profile_spiral(
                 flow_override=first_layer_flow if first_disk else 1.0,
                 line_width_override=lw_base,
             )
-        if base_layers > 0:
-            writer.set_fan(writer.fan_speed)
+        if fan_immediate:
+            writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
             _fan_on = True
 
     # ---- wall spiral -------------------------------------------------------
     writer.comment("wall spiral")
+
+    # Total-layer-count threshold (base + wall) at which the fan may turn on.
+    # fan_off_layers<=0 reproduces today's default exactly: tilt is None for
+    # step_idx < n regardless, so _overhang_fan(None,...) already returns
+    # fan_min there whenever fan_immediate fired -- no separate cold-start
+    # gate is needed the way continuous_spiral.py's two-branch structure
+    # requires one.
+    fan_on_threshold = _fan_on_threshold(fan_off_layers, base_layers, n)
 
     # Rate-limited z-wave amplitudes and emitted Z values, one per step,
     # flattened as (i * n + j).  Keeping the Z ring buffer lets us compute
@@ -358,9 +378,6 @@ def build_profile_spiral(
                 speed = writer.first_layer_speed
                 oh_flow = 1.0
             else:
-                if not _fan_on:
-                    writer.set_fan(writer.fan_speed)
-                    _fan_on = True
                 if step_idx >= n:
                     gap = z - _zvals[step_idx - n]
                     dr = cur_r - _radii[step_idx - n]
@@ -369,6 +386,12 @@ def build_profile_spiral(
                 else:
                     gap = lh
                     tilt = None
+                if step_idx >= fan_on_threshold and not _fan_on:
+                    writer.set_fan(_overhang_fan(tilt, fan_overhang_min, fan_overhang_max)
+                                   if fan_overhang_active else writer.fan_speed)
+                    _fan_on = True
+                elif step_idx >= fan_on_threshold and fan_overhang_active:
+                    writer.set_fan_if_changed(_overhang_fan(tilt, fan_overhang_min, fan_overhang_max))
                 flow = 1.0
                 speed = writer.print_speed
                 if overhang_flow_k > 0.0 and tilt is not None and tilt > 0.0:

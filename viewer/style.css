@@ -6,28 +6,37 @@
    nothing else may use them.
    ========================================================================= */
 :root {
-  --bg:#0b0e13;
-  --surface:#151a22;
-  --line:#262d38;
-  --ink:#e8edf4;
-  --ink-muted:#8b97a7;
-  --accent:#4cc2ff;
+  --bg:#0a0a0a;
+  --surface:#141414;
+  --line:#232323;
+  --ink:#f5f5f0;
+  --ink-muted:#888888;
+  --accent:#2f6bff;
 
   --ok:#3fdca0;
   --warn:#ffb454;
   --danger:#ff5d5d;
 
   /* derived surface/accent shades used for hover/active states */
-  --surface-raised:#1c2230;
-  --accent-hover:#6bcdff;
-  --ink-on-accent:#06121b;
+  --surface-raised:#1c1c1c;
+  --accent-hover:#5a8aff;
+  --ink-on-accent:#ffffff;
 
-  --font-ui: -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-  --font-mono: ui-monospace,"Cascadia Code",Consolas,monospace;
+  /* "Purple modifiers" accent -- reserved exclusively for the Point Edit
+     Modifiers subsystem (entry button, modal chrome, per-modifier enabled
+     state) so it reads as a distinct layer from the electric-blue --accent
+     used everywhere else. Do not reuse elsewhere. */
+  --accent-purple:#a78bfa;
+  --accent-purple-hover:#c4b5fd;
+  --ink-on-purple:#1b1030;
+
+  --font-ui: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 
   /* 4px base spacing scale */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-6:24px; --sp-8:32px;
-  --radius:6px;
+  --radius:8px;
+  --radius-lg:12px;
 
   /* legacy variable names — kept as aliases so designer.js/viewer.js, which
      read a handful of these via getComputedStyle(), keep resolving without
@@ -51,6 +60,75 @@
 a, button, .btn, [tabindex] { outline:none; }
 a:focus-visible, button:focus-visible, .btn:focus-visible, [tabindex]:focus-visible {
   outline:2px solid var(--accent); outline-offset:2px;
+}
+
+/* =========================================================================
+   Custom form controls — native OS checkbox/radio/range chrome doesn't
+   match the theme, so these render as switches/dots/slim-track sliders.
+   The Point Edit subsystem's purple override for its own checkboxes lives
+   near its own section further down, not here.
+   ========================================================================= */
+input[type=checkbox], input[type=radio], input[type=range] { outline:none; }
+input[type=checkbox]:focus-visible, input[type=radio]:focus-visible, input[type=range]:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+
+input[type=checkbox] {
+  appearance:none; -webkit-appearance:none; margin:0; flex:none; vertical-align:middle;
+  position:relative; width:34px; height:20px; border-radius:999px;
+  background:var(--surface-raised); border:1px solid var(--line); cursor:pointer;
+  transition:background .15s, border-color .15s;
+}
+input[type=checkbox]::after {
+  content:''; position:absolute; top:1px; left:1px; width:16px; height:16px;
+  border-radius:50%; background:var(--ink-muted); transition:transform .15s, background .15s;
+}
+input[type=checkbox]:hover:not(:disabled) { border-color:var(--accent); }
+input[type=checkbox]:checked { background:var(--accent); border-color:var(--accent); }
+input[type=checkbox]:checked::after { transform:translateX(14px); background:#fff; }
+input[type=checkbox]:disabled { opacity:.4; cursor:default; }
+
+input[type=radio] {
+  appearance:none; -webkit-appearance:none; margin:0; flex:none; vertical-align:middle;
+  position:relative; width:16px; height:16px; border-radius:50%;
+  background:var(--surface-raised); border:1px solid var(--line); cursor:pointer;
+  transition:border-color .15s;
+}
+input[type=radio]::after {
+  content:''; position:absolute; top:3px; left:3px; width:8px; height:8px;
+  border-radius:50%; background:var(--accent); transform:scale(0); transition:transform .1s;
+}
+input[type=radio]:hover:not(:disabled) { border-color:var(--accent); }
+input[type=radio]:checked { border-color:var(--accent); }
+input[type=radio]:checked::after { transform:scale(1); }
+
+input[type=range] {
+  appearance:none; -webkit-appearance:none; width:100%; height:16px; margin:0;
+  background:transparent; cursor:pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height:4px; border-radius:999px; background:var(--surface-raised); border:1px solid var(--line);
+}
+input[type=range]::-moz-range-track {
+  height:4px; border-radius:999px; background:var(--surface-raised); border:1px solid var(--line);
+}
+input[type=range]::-webkit-slider-thumb {
+  appearance:none; -webkit-appearance:none; margin-top:-6px; box-sizing:border-box;
+  width:16px; height:16px; border-radius:50%; background:var(--accent);
+  border:2px solid var(--ink-on-accent); box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer;
+}
+input[type=range]::-moz-range-thumb {
+  width:16px; height:16px; border-radius:50%; background:var(--accent); box-sizing:border-box;
+  border:2px solid var(--ink-on-accent); box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer;
+}
+input[type=range]:disabled { opacity:.4; cursor:default; }
+
+select {
+  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:6px; font-size:12px; padding:3px 20px 3px 5px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path fill='%23888888' d='M0 0l5 6 5-6z'/></svg>");
+  background-repeat:no-repeat; background-position:right 8px center;
 }
 
 html,body {
@@ -77,8 +155,9 @@ input, select, textarea {
 /* Uppercase label / group-heading treatment. */
 .group h2, .section-heading, .step-label, .cv-head, .legend-labels, .telemetry-title {
   text-transform:uppercase;
-  letter-spacing:.06em;
+  letter-spacing:.08em;
   color:var(--ink-muted);
+  font-family:var(--font-mono);
 }
 
 .app-shell { display:flex; height:100%; }
@@ -92,24 +171,22 @@ canvas { display:block; }
 .panel { width:340px; flex:0 0 340px; background:var(--surface); border-left:1px solid var(--line);
   padding:0; overflow-y:auto; display:flex; flex-direction:column; height:100%; }
 .panel-scroll { padding:var(--sp-4); overflow-y:auto; flex:1 1 auto; min-height:0; }
-h1 { font-size:15px; margin:0 0 var(--sp-1); letter-spacing:.3px; }
+h1 { font-size:16px; font-weight:700; margin:0 0 var(--sp-1); letter-spacing:-0.01em; }
 .sub { color:var(--ink-muted); font-size:12px; margin-bottom:var(--sp-4); }
-.drop { border:1.5px dashed var(--line); border-radius:10px; padding:var(--sp-4); text-align:center;
+.drop { border:1.5px dashed var(--line); border-radius:var(--radius-lg); padding:var(--sp-4); text-align:center;
   color:var(--ink-muted); font-size:13px; cursor:pointer; transition:.15s; }
 .drop:hover, .drop.hot { border-color:var(--accent); color:var(--ink); background:var(--surface-raised); }
 .stat { display:flex; justify-content:space-between; font-size:12.5px; padding:var(--sp-2) 0;
   border-bottom:1px solid var(--line); }
 .stat span:first-child { color:var(--ink-muted); }
-.stat .tm { color:var(--accent); font-weight:600; }
+.stat .tm { color:var(--accent-hover); font-weight:600; }
 .stat .tm.state-warn { color:var(--warn); }
 .stat .tm.state-danger { color:var(--danger); }
-input[type=range] { accent-color:var(--accent); }
 .group { margin-top:var(--sp-4); }
 .group h2 { font-size:11px; margin:0 0 var(--sp-2); font-weight:600; }
 label.row { display:flex; align-items:center; justify-content:space-between; font-size:12.5px;
   padding:5px 0; cursor:pointer; }
 label.radio-inline { cursor:pointer; }
-input[type=checkbox] { accent-color:var(--accent); }
 .legend { height:10px; border-radius:5px; margin-top:6px;
   background:linear-gradient(90deg,#2b3a8f,#1f9e89,#cfe11f,#fca50a,#e0402f); }
 .legend-labels { display:flex; justify-content:space-between; font-size:11px; margin-top:3px; }
@@ -121,23 +198,24 @@ input[type=checkbox] { accent-color:var(--accent); }
 
 /* ---- generic buttons: ids stay JS hooks only, styling lives in classes ---- */
 .btn { border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); color:var(--ink);
-  font-size:12px; font-weight:600; cursor:pointer; transition:border-color .15s, color .15s, background .15s, opacity .15s;
-  padding:7px 10px; font-family:var(--font-ui); white-space:nowrap; }
-.btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
-.btn:disabled { opacity:.35; cursor:default; }
+  font-size:12px; font-weight:600; cursor:pointer; transition:border-color .15s, color .15s, background .15s, opacity .15s, transform .1s ease, box-shadow .15s;
+  padding:7px 10px; font-family:var(--font-ui); white-space:nowrap; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+.btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent-hover); transform:translateY(-1px); box-shadow:0 4px 10px rgba(0,0,0,.35); }
+.btn:active:not(:disabled) { transform:translateY(0); box-shadow:0 1px 2px rgba(0,0,0,.3); }
+.btn:disabled { opacity:.35; cursor:default; box-shadow:none; }
 .btn:disabled:hover { border-color:var(--line); color:var(--ink); }
 .btn-block { width:100%; display:block; }
 .btn-sm { padding:4px 10px; font-size:11px; }
 .btn-icon { padding:4px 7px; font-size:13px; line-height:1; }
-.btn-primary { background:var(--accent); color:var(--ink-on-accent); border-color:var(--accent); }
-.btn-primary:hover:not(:disabled) { color:var(--ink-on-accent); opacity:.9; border-color:var(--accent); background:var(--accent-hover); }
-.btn-primary:disabled { background:var(--surface-raised); color:var(--ink); border-color:var(--line); }
+.btn-primary { background:var(--accent); color:var(--ink-on-accent); border-color:var(--accent); font-weight:700; box-shadow:0 2px 8px rgba(47,107,255,.35); }
+.btn-primary:hover:not(:disabled) { color:var(--ink-on-accent); opacity:.9; border-color:var(--accent); background:var(--accent-hover); box-shadow:0 4px 14px rgba(47,107,255,.45); }
+.btn-primary:disabled { background:var(--surface-raised); color:var(--ink); border-color:var(--line); box-shadow:none; }
 
 /* ---- overlay (drop-a-gcode card / canvas-centered messages) ---- */
 .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   pointer-events:none; }
-.overlay .card { pointer-events:auto; background:rgba(21,26,34,.92); border:1px solid var(--line);
-  border-radius:12px; padding:28px 34px; text-align:center; }
+.overlay .card { pointer-events:auto; background:rgba(20,20,20,.92); border:1px solid var(--line);
+  border-radius:var(--radius-lg); padding:28px 34px; text-align:center; }
 .card-title { font-size:14px; margin-bottom:6px; }
 
 /* =========================================================================
@@ -147,7 +225,7 @@ input[type=checkbox] { accent-color:var(--accent); }
    interaction. Live telemetry lives in the floating card below instead.
    ========================================================================= */
 .machine-readout { position:absolute; left:var(--sp-4); right:var(--sp-4); bottom:var(--sp-3);
-  background:rgba(21,26,34,.94); border:1px solid var(--line); border-radius:10px;
+  background:rgba(20,20,20,.94); border:1px solid var(--line); border-radius:var(--radius-lg);
   overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.35); }
 
 .spark { display:block; width:100%; height:26px; background:transparent; cursor:pointer; }
@@ -155,20 +233,29 @@ input[type=checkbox] { accent-color:var(--accent); }
 .timeline { height:42px; display:flex; align-items:center; gap:var(--sp-2); padding:0 var(--sp-3);
   border-top:1px solid var(--line); }
 .timeline button { width:30px; height:26px; border:none; border-radius:6px; cursor:pointer;
-  background:var(--accent); color:var(--ink-on-accent); font-size:12px; font-weight:700; }
-.timeline input[type=range] { flex:1; accent-color:var(--accent); cursor:pointer; }
-.timeline select { background:var(--bg); color:var(--ink); border:1px solid var(--line);
+  background:var(--accent); color:var(--ink-on-accent); font-size:12px; font-weight:700;
+  transition:background .15s, transform .1s, box-shadow .15s; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+.timeline button:hover { transform:translateY(-1px); box-shadow:0 3px 8px rgba(47,107,255,.4); }
+.timeline button:active { transform:translateY(0); }
+.timeline input[type=range] { flex:1; cursor:pointer; }
+.timeline select { background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; padding:3px 4px; font-size:12px; }
 .tl-read { font-size:12px; color:var(--ink-muted); min-width:150px; text-align:right; }
 .tl-read .turn-count { color:var(--ink); font-weight:700; font-size:13px; }
 
 /* =========================================================================
-   Telemetry card — Orca-style floating overlay, anchored top-left of the
+   Telemetry card — Orca-style floating overlay, anchored top-right of the
    canvas (mirrors .overlay .card's translucent-surface idiom). Collapsible
    via #telemetry-toggle; state persisted in localStorage.
    ========================================================================= */
-.telemetry-card { position:absolute; top:16px; left:16px; width:190px; z-index:5;
-  background:rgba(21,26,34,.92); border:1px solid var(--line); border-radius:6px;
+/* Draft-preview badge -- top-left corner, so it never collides with the
+   telemetry card (which owns top-right at any collapsed/expanded height). */
+.draft-preview-label { position:absolute; top:16px; left:16px; z-index:5;
+  padding:2px 8px; border-radius:4px; background:rgba(47,107,255,.18);
+  color:var(--accent-hover); font-size:11px; font-family:var(--font-ui); pointer-events:none; }
+
+.telemetry-card { position:absolute; top:16px; right:16px; width:190px; z-index:5;
+  background:rgba(20,20,20,.92); border:1px solid var(--line); border-radius:var(--radius);
   overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.35); }
 .telemetry-header { display:flex; align-items:center; justify-content:space-between;
   padding:6px 8px; border-bottom:1px solid var(--line); }
@@ -193,44 +280,78 @@ input[type=checkbox] { accent-color:var(--accent); }
   padding:4px 0; gap:8px; }
 .drow > span { color:var(--ink-muted); white-space:nowrap; transition:color .15s; }
 .drow:hover > span:first-child { color:var(--ink); }
-.drow input[type=number], .drow select { background:var(--bg); color:var(--ink);
+.drow input[type=number] { background:var(--bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
-.drow select { width:108px; padding-right:3px; }
+.drow select { background-color:var(--bg); color:var(--ink);
+  border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
+.drow select { width:116px; padding-right:20px; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
 .printer-select { width:auto !important; min-width:140px; max-width:200px; padding-right:20px; }
 .colormode-select { width:110px; }
-.drow input[type=range] { width:92px; accent-color:var(--accent); }
-.cv-editor { margin-top:var(--sp-3); }
+.drow input[type=range] { width:92px; }
+.cv-editor { margin-top:var(--sp-3); background:var(--surface-raised); border:1px solid var(--line);
+  border-radius:var(--radius-lg); padding:var(--sp-3); }
 .cv-editor .cv-head { display:flex; align-items:center; justify-content:space-between;
-  font-size:11px; margin-bottom:3px; }
-.cv-editor .cv-head b { color:var(--ink); font-weight:600; text-transform:none; letter-spacing:0; }
-.cv-editor .cv-reset { cursor:pointer; color:var(--accent); font-size:11px; text-transform:none; letter-spacing:0; }
+  font-size:11px; margin-bottom:6px; }
+.cv-editor .cv-head b { color:var(--ink); font-weight:600; text-transform:none; letter-spacing:0; font-family:var(--font-ui); }
+.cv-editor .cv-reset { cursor:pointer; color:var(--accent-hover); font-size:11px; text-transform:none; letter-spacing:0; }
 .cv-editor canvas { display:block; width:100%; border:1px solid var(--line); border-radius:6px;
   background:var(--bg); cursor:ns-resize; }
-.cv-note { font-size:10.5px; color:var(--ink-muted); margin-top:3px; }
+.cv-note { font-size:10.5px; color:var(--ink-muted); margin-top:6px; }
+
+/* ---- parameter search (jump-to-control) ---- */
+.param-search { position:relative; margin-bottom:var(--sp-3); }
+.param-search input { width:100%; background:var(--bg); color:var(--ink);
+  border:1px solid var(--line); border-radius:var(--radius); padding:7px 10px;
+  font-size:12.5px; font-family:var(--font-ui); }
+.param-search input:focus { border-color:var(--accent); outline:none; }
+.param-search input::placeholder { color:var(--ink-muted); }
+.param-search-results { position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:8;
+  background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:0 8px 24px rgba(0,0,0,.35); max-height:280px; overflow-y:auto; padding:4px; display:none; }
+.param-search-results.open { display:block; }
+.param-search-item { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:6px 8px; border-radius:6px; cursor:pointer; font-size:12px; color:var(--ink); }
+.param-search-item:hover, .param-search-item.active { background:var(--accent); color:var(--ink-on-accent); }
+.param-search-item .psi-crumb { font-size:10px; color:var(--ink-muted); font-family:var(--font-mono);
+  text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; }
+.param-search-item:hover .psi-crumb, .param-search-item.active .psi-crumb { color:var(--ink-on-accent); }
+
+/* highlight pulse when jumping to a control */
+@keyframes param-search-pulse { 0%,15% { background:rgba(47,107,255,.22); } 100% { background:transparent; } }
+.param-search-hit { animation:param-search-pulse 1.3s ease-out; border-radius:6px; }
+
+/* ---- conditional/dependent option blocks -- indented rail signals "these
+   rows only apply because of a choice above" (star shape, texture pattern
+   selected, blob/loop style chosen, STL mesh loaded). ---- */
+#star-rows, #pattern-rows, #blob-rows, #loop-rows, #mesh-info {
+  border-left:2px solid var(--line); padding-left:var(--sp-3); margin-left:2px;
+}
 
 /* ---- silhouette mode bar (Symmetrical / Unsymmetrical) ---- */
-.sil-mode-bar { display:flex; gap:2px; border-bottom:1px solid var(--line); margin:6px 0; }
-.sil-mode-btn { flex:1; background:none; border:none; color:var(--ink-muted); font-size:11px;
-  font-weight:600; padding:5px 2px; cursor:pointer; border-bottom:2px solid transparent;
-  transition:color .15s, border-color .15s; text-transform:uppercase; letter-spacing:.04em; }
+.sil-mode-bar { display:flex; gap:2px; padding:3px; background:var(--bg);
+  border:1px solid var(--line); border-radius:6px; margin:6px 0; }
+.sil-mode-btn { flex:1; background:none; border:none; border-radius:4px; color:var(--ink-muted);
+  font-size:11px; font-weight:600; padding:5px 2px; cursor:pointer;
+  transition:color .15s, background-color .15s; text-transform:uppercase; letter-spacing:.04em; }
 .sil-mode-btn:hover { color:var(--ink); }
-.sil-mode-btn.active { color:var(--ink); border-bottom-color:var(--accent); }
+.sil-mode-btn.active { color:var(--ink-on-accent); background:var(--accent); }
 
 /* ---- preset bar ---- */
 .preset-bar { display:flex; gap:4px; align-items:center; margin-bottom:10px; }
-.preset-bar select { flex:1 1 0; min-width:0; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+.preset-bar select { flex:1 1 0; min-width:0; background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; padding:4px 4px; font-size:11.5px; }
 .preset-bar .btn { padding-left:8px; padding-right:8px; }
 .preset-bar .btn-icon { padding-left:6px; padding-right:6px; }
 
 /* ---- top-level mode bar (Design / G-code Viewer) ---- */
-.mode-bar { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:var(--sp-4); }
-.mode-btn { flex:1; background:none; border:none; color:var(--ink-muted); font-size:12.5px;
-  font-weight:600; padding:9px 2px; cursor:pointer; border-bottom:2px solid transparent;
-  transition:color .15s, border-color .15s; text-transform:uppercase; letter-spacing:.05em; }
+.mode-bar { display:flex; gap:2px; padding:3px; background:var(--surface-raised);
+  border:1px solid var(--line); border-radius:var(--radius); margin-bottom:var(--sp-4); }
+.mode-btn { flex:1; background:none; border:none; border-radius:6px; color:var(--ink-muted);
+  font-size:12.5px; font-weight:600; padding:7px 2px; cursor:pointer;
+  transition:color .15s, background-color .15s; text-transform:uppercase; letter-spacing:.05em; }
 .mode-btn:hover { color:var(--ink); }
-.mode-btn.active { color:var(--ink); border-bottom-color:var(--accent); }
+.mode-btn.active { color:var(--ink-on-accent); background:var(--accent); }
 
 .mode-panel { display:none; }
 .mode-panel.active { display:block; }
@@ -248,10 +369,10 @@ input[type=checkbox] { accent-color:var(--accent); }
   font-weight:600; line-height:1; font-family:var(--font-mono); transition:color .15s, border-color .15s, background .15s; }
 .step-label { font-size:10px; transition:color .15s; }
 .step-item.done { color:var(--ink); }
-.step-item.done .step-num { border-color:var(--accent); color:var(--accent); background:none; }
+.step-item.done .step-num { border-color:var(--accent); color:var(--accent-hover); background:none; }
 .step-item.active { color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
 .step-item.active .step-num { border-color:var(--accent); background:var(--accent); color:var(--ink-on-accent); }
-.step-item.active .step-label { color:var(--accent); }
+.step-item.active .step-label { color:var(--accent-hover); }
 
 .step-panel { display:none; }
 .step-panel.active { display:block; animation:step-fade-in .12s ease-out; }
@@ -266,12 +387,26 @@ input[type=checkbox] { accent-color:var(--accent); }
 .step-nav .btn { flex:1; padding:7px 0; text-align:center; }
 
 /* ---- import drop zone ---- */
-.import-drop { border:1.5px dashed var(--line); border-radius:10px; padding:28px 14px; text-align:center;
+.import-drop { border:1.5px dashed var(--line); border-radius:var(--radius-lg); padding:28px 14px; text-align:center;
   color:var(--ink-muted); font-size:12.5px; margin-top:8px; cursor:pointer; transition:.15s; }
 .import-drop:hover, .import-drop.drag-over { border-color:var(--accent); color:var(--ink); background:var(--surface-raised); }
 .mesh-info .drow > span:first-child { flex:0 0 auto; }
 .mesh-name { color:var(--ink); font-size:11.5px; text-align:right; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; max-width:170px; }
+
+/* ---- vase-compatibility verdict for an imported STL ---- */
+.mesh-check { margin-top:8px; padding:8px 10px; border-radius:6px; font-size:11px; line-height:1.4; }
+.mesh-check.warn { background:rgba(255,180,84,.10); border:1px solid var(--warn); }
+.mesh-check.bad { background:rgba(255,93,93,.10); border:1px solid var(--danger); }
+.mesh-check.info { background:rgba(47,107,255,.10); border:1px solid var(--accent); }
+.mesh-check-head { display:flex; align-items:center; gap:6px; font-weight:600; }
+.mesh-check.warn .mesh-check-head { color:var(--warn); }
+.mesh-check.bad .mesh-check-head { color:var(--danger); }
+.mesh-check.info .mesh-check-head { color:var(--accent); }
+.mesh-check-head > span:first-child { flex:0 0 auto; font-size:12px; }
+.mesh-check-notes { margin:6px 0 0; padding-left:16px; color:var(--ink-muted); }
+.mesh-check-notes:empty { display:none; }
+.mesh-check-notes li { margin-bottom:3px; }
 
 /* ---- generate / download controls (inside step-generate) ---- */
 .gen-status { font-size:11.5px; margin-top:7px; min-height:14px; color:var(--ink-muted); }
@@ -283,6 +418,9 @@ input[type=checkbox] { accent-color:var(--accent); }
 
 /* stale gcode: design changed since last generate — unmistakable warn state */
 .btn.stale { outline:2px solid var(--warn); outline-offset:2px; }
+/* stale primary button: one unambiguous amber signal, not amber ring + blue glow */
+.btn-primary.stale { box-shadow:0 2px 8px rgba(255,180,84,.35); }
+.btn-primary.stale:hover:not(:disabled) { box-shadow:0 4px 14px rgba(255,180,84,.45); }
 .stale-badge { position:absolute; top:40px; left:50%; transform:translateX(-50%); z-index:6;
   padding:5px 12px; border-radius:6px; background:rgba(255,180,84,.14); border:1px solid var(--warn);
   color:var(--warn); font-size:11.5px; font-weight:600; pointer-events:none; display:none; }
@@ -293,6 +431,86 @@ input[type=checkbox] { accent-color:var(--accent); }
 .mt-3 { margin-top:var(--sp-3); }
 .mt-4 { margin-top:var(--sp-4); }
 .mt-6 { margin-top:var(--sp-6); }
+
+/* =========================================================================
+   Point Edit Modifiers — "purple modifiers" (Clay Studio Pro convention):
+   operate on the already-sliced wall polyline, not the source geometry.
+   Entry button lives at the top of the Texture step; --accent-purple is
+   reserved for this subsystem only (see :root comment above).
+   ========================================================================= */
+.pe-entry-btn { border-color:var(--accent-purple); color:var(--accent-purple); margin-bottom:0; }
+.pe-entry-btn:hover:not(:disabled) { border-color:var(--accent-purple-hover); color:var(--accent-purple-hover);
+  background:rgba(167,139,250,.10); }
+.pe-entry-btn.pe-out-of-scope { opacity:.6; }
+.pe-dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:transparent;
+  margin-right:6px; transition:background .15s, box-shadow .15s; vertical-align:middle; }
+.pe-dot.active { background:var(--accent-purple); box-shadow:0 0 0 3px rgba(167,139,250,.22); }
+
+.pe-modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; }
+.pe-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
+.pe-modal-card { position:relative; width:min(640px, 92vw); max-height:86vh; display:flex; flex-direction:column;
+  background:var(--surface); border:1px solid var(--accent-purple); border-radius:var(--radius-lg);
+  box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden; }
+.pe-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4);
+  border-bottom:1px solid var(--line); flex:none; }
+.pe-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+.pe-modal-body { display:flex; flex:1 1 auto; min-height:0; }
+.pe-rail { flex:0 0 172px; border-right:1px solid var(--line); padding:var(--sp-2); overflow-y:auto; }
+.pe-rail-item { display:block; width:100%; text-align:left; background:none; border:none; color:var(--ink-muted);
+  font-size:12px; font-weight:600; padding:8px 10px; border-radius:6px; cursor:pointer; margin-bottom:2px;
+  transition:background .15s, color .15s; font-family:var(--font-ui); }
+.pe-rail-item:hover { color:var(--ink); background:var(--surface-raised); }
+.pe-rail-item.active { color:var(--accent-purple); background:rgba(167,139,250,.12); }
+.pe-rail-item.enabled::after { content:''; display:inline-block; width:6px; height:6px; border-radius:50%;
+  background:var(--accent-purple); margin-left:6px; vertical-align:middle; }
+.pe-rail-sep { height:1px; background:var(--line); margin:var(--sp-2) 4px; }
+.pe-panels { flex:1 1 auto; padding:var(--sp-4); overflow-y:auto; }
+.pe-panel { display:none; }
+.pe-panel.active { display:block; }
+.pe-panel input[type=checkbox]:checked { background:var(--accent-purple); border-color:var(--accent-purple); }
+.pe-panel .hint { margin:4px 0 var(--sp-3); }
+.pe-modal-footer { display:flex; justify-content:space-between; gap:8px; padding:var(--sp-3) var(--sp-4);
+  border-top:1px solid var(--line); flex:none; }
+.pe-grid { display:grid; gap:3px; margin-top:var(--sp-2); }
+.pe-grid input { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:4px; padding:4px 2px; font-size:10.5px; text-align:center; font-family:var(--font-ui); }
+.pe-grid input:focus { border-color:var(--accent-purple); outline:none; }
+
+/* =========================================================================
+   Collapsible sections — every h3.section-heading and .group h2 that owns
+   a #sec-body-* container becomes a click/keyboard toggle (state persisted
+   in localStorage under 'trident_sections' by designer.js). Purely additive:
+   the toggle affordance rides on the existing heading element.
+   ========================================================================= */
+.sec-toggle { cursor:pointer; user-select:none; display:flex; align-items:center;
+  justify-content:space-between; gap:var(--sp-2); border-radius:6px; margin-left:-4px;
+  margin-right:-4px; padding:2px 4px; transition:background-color .15s; }
+.sec-toggle:hover { background:var(--surface-raised); }
+.sec-chevron { flex:none; font-size:8px; color:var(--ink-muted); transition:transform .15s; }
+.sec-toggle.sec-closed .sec-chevron { transform:rotate(-90deg); }
+
+/* ---- design panel header: active-summary chips + hint-density toggle ---- */
+.design-panel-header { display:flex; align-items:flex-start; gap:var(--sp-2); margin-bottom:var(--sp-3); }
+.active-summary { flex:1 1 auto; display:flex; flex-wrap:wrap; gap:5px; min-height:0; }
+.active-summary:empty { display:none; }
+.chip { background:var(--surface-raised); border:1px solid var(--line); color:var(--ink-muted);
+  font-size:10.5px; font-family:var(--font-ui); border-radius:999px; padding:3px 9px; cursor:pointer;
+  transition:border-color .15s, color .15s, background-color .15s; white-space:nowrap; }
+.chip:hover { border-color:var(--accent); color:var(--ink); }
+.hint-toggle { flex:none; background:var(--surface-raised); border:1px solid var(--line);
+  color:var(--ink-muted); font-size:10.5px; font-weight:600; border-radius:6px; padding:5px 9px;
+  cursor:pointer; font-family:var(--font-ui); transition:border-color .15s, color .15s; }
+.hint-toggle:hover { border-color:var(--accent); color:var(--ink); }
+.hint-toggle[aria-pressed="false"] { color:var(--ink-muted); opacity:.55; }
+
+/* Hint-density toggle: when off, every .hint block in either panel is hidden. */
+body.hints-hidden .hint { display:none; }
+
+/* ---- generate step: two distinct output-path cards (task 2) ---- */
+.output-card { background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius-lg);
+  padding:var(--sp-3); margin-top:var(--sp-4); }
+.output-card .section-heading { margin-bottom:4px; }
+.output-divider { height:1px; background:var(--line); margin:var(--sp-4) 0 0; }
 
 /* =========================================================================
    Responsive floor — below 900px this is a "best on desktop" notice, not a
@@ -308,5 +526,6 @@ input[type=checkbox] { accent-color:var(--accent); }
   .splitter { display:none; }
   .mobile-note { display:block; font-size:11px; color:var(--warn); background:rgba(255,180,84,.10);
     border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:var(--sp-4); }
-  .telemetry-card { top:8px; left:8px; width:150px; max-width:calc(100% - 16px); }
+  .telemetry-card { top:8px; right:8px; width:150px; max-width:calc(100% - 16px); }
+  .draft-preview-label { top:8px; left:8px; }
 }

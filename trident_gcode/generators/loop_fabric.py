@@ -46,8 +46,16 @@ def build_loop_fabric(
     cuff_lh: float = 0.3,
     travel_z_clearance: float = 5.0,
     points_per_turn: int = 240,
+    fan_speed: float | None = None,
 ) -> dict:
-    """Emit a complete loop-fabric print and return a report dict."""
+    """Emit a complete loop-fabric print and return a report dict.
+
+    ``fan_speed`` (0..1), when given, overrides ``writer.fan_speed`` for the
+    fan turned on after the cuff. Loop fabric has no per-point wall tilt to
+    ramp against (it's stitches, not a wall), so unlike the parametric wall
+    there is no min->max overhang ramp here -- just a flat commanded speed.
+    None (default) falls back to ``writer.fan_speed``, byte-identical output.
+    """
     profile = writer.profile
     cx, cy = center if center is not None else profile.bed_center
 
@@ -163,7 +171,7 @@ def build_loop_fabric(
         writer.extrude_to(cx + r * math.cos(th), cy + r * math.sin(th), z,
                           speed=speed, layer_height_override=cuff_lh)
         if i == points_per_turn:
-            writer.set_fan(writer.fan_speed)
+            writer.set_fan(fan_speed if fan_speed is not None else writer.fan_speed)
 
     # Fabric rows: continuous helix of stitches.
     writer.comment(f"loop fabric ({n_rows} rows x {stitches} stitches, "

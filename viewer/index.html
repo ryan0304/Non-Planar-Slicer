@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="Cache-Control" content="no-store" />
 <title>Trident Non-Planar G-code Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
@@ -26,6 +29,8 @@
       <div id="telemetry-group" class="readout-telemetry">
         <div class="stat"><span>Speed</span><span id="tm-speed" class="tm">&#8211;</span></div>
         <div class="stat"><span>Flow rate</span><span id="tm-flow" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Fan min</span><span id="tm-fan-min" class="tm">&#8211;</span></div>
+        <div class="stat"><span>Fan max</span><span id="tm-fan-max" class="tm">&#8211;</span></div>
         <div class="stat"><span>Z height</span><span id="tm-z" class="tm">&#8211;</span></div>
         <div class="stat"><span>Layer height</span><span id="tm-lh" class="tm">&#8211;</span></div>
         <div class="stat"><span>Line width</span><span id="tm-lw" class="tm">&#8211;</span></div>
@@ -59,12 +64,23 @@
     <div class="mobile-note">Best experienced on desktop &#8212; cage-handle drag, curve-editor
       drag and per-turn arrow-key playback are pointer/keyboard interactions.</div>
 
+    <div id="param-search" class="param-search">
+      <input id="param-search-input" type="text" placeholder="Search controls…"
+             autocomplete="off" spellcheck="false" aria-label="Search parameters">
+      <div id="param-search-results" class="param-search-results" role="listbox"></div>
+    </div>
+
     <div id="mode-bar" class="mode-bar">
       <button class="mode-btn" data-mode="design">Design</button>
       <button class="mode-btn" data-mode="viewer">G-code Viewer</button>
     </div>
 
     <div id="mode-design" class="mode-panel">
+    <div id="design-panel-header" class="design-panel-header">
+      <div id="active-summary" class="active-summary" aria-label="Active design settings"></div>
+      <button id="toggle-hints" class="hint-toggle" type="button" aria-pressed="true"
+        title="Show/hide help text under controls">Hints</button>
+    </div>
     <div class="group" id="design-group">
       <h2>Design a vase</h2>
 
@@ -86,6 +102,8 @@
 
       <!-- ---- Step 1: Model (shape + STL import) ---- -->
       <div class="step-panel" id="step-model">
+        <h3 class="section-heading" id="sec-head-shape">Shape</h3>
+        <div id="sec-body-shape">
         <div class="drow"><span>Shape</span>
           <select id="d-shape">
             <option value="circle">circle</option>
@@ -96,9 +114,11 @@
         <div class="drow"><span>Height (mm)</span><input type="number" id="d-height" min="10" max="140" step="1"></div>
         <div class="drow"><span>Layer height</span><input type="number" id="d-lh" min="0.2" max="0.6" step="0.05"></div>
         <div class="drow"><span>XY twist (turns)</span><input type="number" id="d-xytwist" min="-3" max="3" step="0.25"></div>
+        </div>
 
         <hr>
-        <h3 class="section-heading">Asymmetry</h3>
+        <h3 class="section-heading" id="sec-head-asymmetry">Asymmetry</h3>
+        <div id="sec-body-asymmetry" style="display:none">
         <div class="drow"><span>Lean (mm)</span><input type="number" id="d-spine" min="0" max="20" step="1"></div>
         <div class="drow"><span>Lean direction (deg)</span><input type="number" id="d-spinedeg" min="0" max="360" step="15"></div>
         <div class="drow"><span>Ovality</span><input type="number" id="d-ovality" min="-0.4" max="0.4" step="0.05"></div>
@@ -129,10 +149,11 @@
         <div class="hint" id="flh-hint" style="margin-top:-4px;margin-bottom:2px">Lower = bead pressed
           harder into the plate = firmer grip. Auto = 75% of layer height.</div>
         <div class="drow" id="row-spacing"><span>Base line spacing &times;</span><input type="number" id="d-spacing" min="0.9" max="1.5" step="0.05"></div>
+        </div>
 
         <hr>
-        <h3 class="section-heading">Or import an STL</h3>
-        <div id="import-panel">
+        <h3 class="section-heading" id="sec-head-importstl">Or import an STL</h3>
+        <div id="import-panel" style="display:none">
           <div class="import-drop" id="stl-drop">
             Drop an STL file here<br>or click to browse
             <input type="file" id="stl-file" accept=".stl" hidden>
@@ -145,6 +166,10 @@
             <div class="drow"><span>Height (mm)</span><span id="mesh-height">-</span></div>
             <div class="drow"><span>Scale</span><input type="number" id="mesh-scale" min="0.1" max="10" step="0.1" value="1.0"></div>
             <div class="drow"><span>Layer height</span><input type="number" id="mesh-lh" min="0.1" max="0.6" step="0.05" value="0.3"></div>
+            <div id="mesh-check" class="mesh-check" style="display:none">
+              <div class="mesh-check-head"><span id="mesh-check-icon">!</span><span id="mesh-check-title">-</span></div>
+              <ul id="mesh-check-notes" class="mesh-check-notes"></ul>
+            </div>
             <button id="mesh-clear" class="btn btn-block mt-2">Clear mesh</button>
             <div class="hint" style="margin-top:6px">
               Works best with vase-like shapes (single outer wall).
@@ -156,7 +181,15 @@
 
       <!-- ---- Step 2: Texture (Z waves + surface texture) ---- -->
       <div class="step-panel" id="step-texture">
-        <h3 class="section-heading">Z waves</h3>
+        <button id="point-edit-btn" class="btn btn-block pe-entry-btn" type="button">
+          <span id="pe-active-dot" class="pe-dot"></span>Point Edit Modifiers&#8230;
+        </button>
+        <div class="hint" id="pe-scope-note" style="display:none;margin-top:4px">Point edit modifiers only
+          apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
+
+        <hr>
+        <h3 class="section-heading" id="sec-head-zwaves">Z waves</h3>
+        <div id="sec-body-zwaves" style="display:none">
         <div class="drow"><span>Z waves</span><input type="number" id="d-waves" min="0" max="12" step="1"></div>
         <div class="drow"><span>Z twist (turns)</span><input type="number" id="d-ztwist" min="0" max="2" step="0.25"></div>
 
@@ -165,8 +198,11 @@
           <canvas id="amp-curve" width="360" height="100"></canvas>
           <div id="slope-read" class="cv-note"></div>
         </div>
+        </div>
 
         <hr>
+        <h3 class="section-heading" id="sec-head-texturepattern">Texture pattern</h3>
+        <div id="sec-body-texturepattern">
         <div class="drow"><span>Texture pattern</span>
           <select id="d-pattern">
             <option value="">none</option>
@@ -270,14 +306,43 @@
             Loop height and hooks the row below &#8212; loop height must exceed row height to
             interlock. No solid wall; fully open fabric. Slow + max cooling.</div>
         </div>
+        </div>
 
         <hr>
+        <h3 class="section-heading" id="sec-head-cooling">Cooling &amp; flow</h3>
+        <div id="sec-body-cooling">
         <div class="drow"><span>Overhang flow boost</span>
           <input type="range" id="d-overhang-k" min="0" max="1" step="0.05" style="width:90px">
           <span id="overhang-k-read" style="font-size:11px;min-width:28px;text-align:right">0</span>
         </div>
         <div class="hint" style="margin-top:2px">Compensates under-extrusion on outward-leaning
           walls. 0 = off, higher = more extra flow on overhangs.</div>
+
+        <div class="drow"><span>Fan min</span>
+          <input type="range" id="d-fan-min" min="0" max="100" step="5" style="width:90px">
+          <span id="fan-min-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
+        </div>
+        <div class="drow"><span>Fan max</span>
+          <input type="range" id="d-fan-max" min="0" max="100" step="5" style="width:90px">
+          <span id="fan-max-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
+        </div>
+        <div class="hint" style="margin-top:2px">The part-cooling fan runs between these two speeds,
+          picked by how far the wall leans: <b>min</b> on a vertical wall, rising to <b>max</b> where
+          it leans <b>45&deg;</b> outward or more (less material sits below an overhang to carry heat
+          away). Set both to the same value for a constant fan speed.<br>
+          <b>Note:</b> the lean comes from the <i>Silhouette</i> curve. A straight (cylindrical)
+          silhouette never leans, so the print stays at <b>min</b> the whole way and max has nothing
+          to act on &#8212; flare the silhouette to see the fan ramp up.</div>
+
+        <div class="drow"><span>Fan off for first</span>
+          <input type="number" id="d-fan-off-layers" min="0" max="50" step="1" style="width:60px">
+          <span style="font-size:11px">layers</span>
+        </div>
+        <div class="hint" style="margin-top:2px">Total layers (base + wall) to keep the fan off,
+          counted from the very start of the print. A solid base already prints fan-off on its own
+          &#8212; this only adds MORE wall turns beyond that if set higher. 0 = today's default
+          (off through any base, or the wall's first turn if there's no base).</div>
+        </div>
 
         <div class="cv-editor" id="sil-section">
           <div class="cv-head"><b>Silhouette</b><span class="cv-reset" id="sil-reset">reset</span></div>
@@ -312,6 +377,7 @@
             <option value="0.6">0.6</option>
             <option value="0.8">0.8</option>
           </select></div>
+        <div class="hint tight-top" id="nozzle-flow-hint"></div>
         <div class="drow"><span>Print speed (mm/s)</span><input type="number" id="d-speed" min="20" max="90" step="1"></div>
         <div class="drow"><span>Filament</span><select id="d-filament"></select></div>
         <div class="drow"><span>Line width override</span><input type="number" id="d-lwoverride" min="0.1" max="1.2" step="0.05" placeholder="auto"></div>
@@ -327,15 +393,35 @@
       <!-- ---- Step 4: Generate (printer + generate/download) ---- -->
       <div class="step-panel" id="step-generate">
         <div class="group" id="printer-group">
-          <h2>Printer</h2>
+          <h2 id="sec-head-printer">Printer</h2>
+          <div id="sec-body-printer">
           <div class="drow"><span>Printer</span>
             <select id="d-printer" class="printer-select"></select></div>
+          </div>
         </div>
 
-        <button id="gen-btn" class="btn btn-primary btn-block mt-4">Generate &amp; preview</button>
-        <div id="gen-status" class="gen-status"></div>
-        <pre id="gen-report" class="gen-report"></pre>
-        <button id="dl-btn" class="btn btn-block mt-2" style="display:none">Download .gcode</button>
+        <div class="output-card" id="output-print">
+          <h3 class="section-heading">Print it</h3>
+          <div class="hint tight-top">Produces the single-wall non-planar G-code this app prints
+            directly.</div>
+          <button id="gen-btn" class="btn btn-primary btn-block mt-2">Generate &amp; preview</button>
+          <div id="gen-status" class="gen-status"></div>
+          <pre id="gen-report" class="gen-report"></pre>
+          <button id="dl-btn" class="btn btn-block mt-2" style="display:none">Download .gcode</button>
+        </div>
+
+        <div class="output-divider" aria-hidden="true"></div>
+
+        <div class="output-card" id="output-stl">
+          <h3 class="section-heading">Export as solid</h3>
+          <div class="hint tight-top">Exports the sculpted surface as a watertight STL to slice as a
+            SOLID part in another slicer (Orca/ideaMaker) &#8212; because this app only prints
+            single-wall vase mode.</div>
+          <button id="export-stl-btn" class="btn btn-block mt-2">Export STL</button>
+          <div class="hint">Exports the sculpted surface (shape, silhouette, asymmetric cage, surface
+            pattern) for slicing solid in another slicer. Z-waves and loop textures are toolpath-only
+            and are not included.</div>
+        </div>
       </div>
 
       <div id="step-nav" class="step-nav">
@@ -352,7 +438,8 @@
     </div>
 
     <div class="group" id="stats-group" style="display:none">
-      <h2>Print stats</h2>
+      <h2 id="sec-head-printstats">Print stats</h2>
+      <div id="sec-body-printstats">
       <div class="stat"><span>File</span><span id="s-name">&#8211;</span></div>
       <div class="stat"><span>Extrude moves</span><span id="s-moves">&#8211;</span></div>
       <div class="stat"><span>Travel moves</span><span id="s-travel">&#8211;</span></div>
@@ -362,10 +449,12 @@
       <div class="stat"><span>Max Z-rate</span><span id="s-zrate" class="tm">&#8211;</span></div>
       <div class="stat"><span>Est. time</span><span id="s-time" class="tm">&#8211;</span></div>
       <div class="stat"><span>Risky moves</span><span id="s-risk" class="tm">&#8211;</span></div>
+      </div>
     </div>
 
-    <div class="group">
-      <h2>Display</h2>
+    <div class="group" id="display-group">
+      <h2 id="sec-head-display">Display</h2>
+      <div id="sec-body-display">
       <label class="row"><span>Color</span>
         <select id="t-colormode" class="colormode-select">
           <option value="height">By height</option>
@@ -385,6 +474,7 @@
       <button id="fit-view" class="btn btn-block mt-2">Fit view to model &nbsp;(F)</button>
       <div class="legend" id="legend"></div>
       <div class="legend-labels" id="legend-labels"><span id="z-lo">0</span><span id="z-mid">height (mm)</span><span id="z-hi">&#8211;</span></div>
+      </div>
     </div>
 
     <div class="hint">
@@ -394,6 +484,96 @@
       <b>Playback:</b> space = play/pause &middot; <b>&#8592; &#8594;</b> step one turn &middot; Home/End = start/finish.
     </div>
     </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<!-- Point Edit Modifiers modal -- "purple modifiers" that operate on -->
+<!-- the already-sliced wall polyline (Point Mask / Protection Field / -->
+<!-- FFD / Smooth / Radial Push). Entry point lives at the top of the -->
+<!-- Texture step; see #point-edit-btn above.                          -->
+<!-- ============================================================= -->
+<div id="point-edit-modal" class="pe-modal" style="display:none">
+  <div class="pe-modal-backdrop"></div>
+  <div class="pe-modal-card">
+    <div class="pe-modal-header">
+      <h2>Point Edit Modifiers</h2>
+      <button id="pe-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
+    </div>
+    <div class="pe-modal-body">
+      <div class="pe-rail">
+        <button class="pe-rail-item active" data-pe-tab="mask" type="button">Point Mask</button>
+        <button class="pe-rail-item" data-pe-tab="protection" type="button">Point Protection Field</button>
+        <div class="pe-rail-sep"></div>
+        <button class="pe-rail-item" data-pe-tab="ffd" type="button">Point FFD</button>
+        <button class="pe-rail-item" data-pe-tab="smooth" type="button">Point Smooth</button>
+        <button class="pe-rail-item" data-pe-tab="radial" type="button">Point Radial Push</button>
+      </div>
+      <div class="pe-panels">
+
+        <div class="pe-panel active" data-pe-panel="mask">
+          <label class="row"><span>Enable Point Mask</span><input type="checkbox" id="pe-mask-enable"></label>
+          <div class="hint">Exposes or protects points using a procedural channel &#8212; gates every
+            deformation modifier below (Point FFD / Smooth / Radial Push). By itself it moves nothing.</div>
+          <div class="drow"><span>Channel</span>
+            <select id="pe-mask-channel">
+              <option value="checker">Checker</option>
+              <option value="stripes_v">Stripes (vertical)</option>
+              <option value="stripes_h">Stripes (horizontal)</option>
+              <option value="rings">Rings</option>
+              <option value="diamond">Diamond</option>
+              <option value="gradient_v">Gradient (vertical)</option>
+              <option value="gradient_h">Gradient (horizontal)</option>
+              <option value="radial">Radial</option>
+            </select></div>
+          <div class="drow"><span>Repeats around</span><input type="number" id="pe-mask-scaleu" min="0.5" max="40" step="0.5"></div>
+          <div class="drow"><span>Repeats over height</span><input type="number" id="pe-mask-scalev" min="0.5" max="40" step="0.5"></div>
+          <label class="row"><span>Invert</span><input type="checkbox" id="pe-mask-invert"></label>
+        </div>
+
+        <div class="pe-panel" data-pe-panel="protection">
+          <label class="row"><span>Enable Point Protection Field</span><input type="checkbox" id="pe-prot-enable"></label>
+          <div class="hint">Protects top/bottom zones from edits (with a falloff ramp) so deformation
+            modifiers only reach the intended layers. By itself it moves nothing.</div>
+          <div class="drow"><span>Protect bottom (fraction)</span><input type="number" id="pe-prot-bottom" min="0" max="1" step="0.05"></div>
+          <div class="drow"><span>Protect top (fraction)</span><input type="number" id="pe-prot-top" min="0" max="1" step="0.05"></div>
+          <div class="drow"><span>Falloff</span><input type="number" id="pe-prot-falloff" min="0.005" max="0.5" step="0.01"></div>
+        </div>
+
+        <div class="pe-panel" data-pe-panel="ffd">
+          <label class="row"><span>Enable Point FFD</span><input type="checkbox" id="pe-ffd-enable"></label>
+          <div class="hint">Point-level cage: each cell pushes the already-sliced wall radially in/out
+            (mm) at that height/azimuth, gated by Point Mask &amp; Protection above.</div>
+          <div class="drow"><span>Strength</span><input type="number" id="pe-ffd-strength" min="0" max="2" step="0.1"></div>
+          <div id="pe-ffd-grid" class="pe-grid"></div>
+          <div class="hint tight-top">Top row = top of the print. Values are mm, +out / -in.</div>
+          <button id="pe-ffd-reset" class="btn btn-block mt-2">Reset FFD cage</button>
+        </div>
+
+        <div class="pe-panel" data-pe-panel="smooth">
+          <label class="row"><span>Enable Point Smooth</span><input type="checkbox" id="pe-smooth-enable"></label>
+          <div class="hint">Averages each point with its neighbors after slicing &#8212; smooths the
+            deposited path itself without going back to the original geometry.</div>
+          <div class="drow"><span>Iterations</span><input type="number" id="pe-smooth-iter" min="1" max="12" step="1"></div>
+          <div class="drow"><span>Around (theta)</span><input type="number" id="pe-smooth-theta" min="0" max="1" step="0.05"></div>
+          <div class="drow"><span>Across turns (t)</span><input type="number" id="pe-smooth-t" min="0" max="1" step="0.05"></div>
+          <div class="drow"><span>Strength</span><input type="number" id="pe-smooth-strength" min="0" max="2" step="0.1"></div>
+        </div>
+
+        <div class="pe-panel" data-pe-panel="radial">
+          <label class="row"><span>Enable Point Radial Push</span><input type="checkbox" id="pe-push-enable"></label>
+          <div class="hint">Pushes or pulls every gated point along its own radial direction, sculpting
+            the actual deposited path.</div>
+          <div class="drow"><span>Push (mm)</span><input type="number" id="pe-push-amp" min="-5" max="5" step="0.1"></div>
+          <div class="drow"><span>Strength</span><input type="number" id="pe-push-strength" min="0" max="2" step="0.1"></div>
+        </div>
+
+      </div>
+    </div>
+    <div class="pe-modal-footer">
+      <button id="pe-reset-all" class="btn">Reset all</button>
+      <button id="pe-modal-done" class="btn btn-primary">Done</button>
     </div>
   </div>
 </div>

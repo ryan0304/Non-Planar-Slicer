@@ -37,10 +37,47 @@ from trident_gcode.paths import SpiralSpec, circle, star, superellipse
 from trident_gcode.generators import build_continuous_spiral, build_profile_spiral
 from trident_gcode.generators.loop_fabric import build_loop_fabric
 from trident_gcode.analyze import analyze_gcode, format_report
-from trident_gcode.mesh import load_stl, mesh_bounds
-from trident_gcode.profile_stack import stack_from_mesh
+from trident_gcode.mesh import load_stl, mesh_bounds, analyze_vase_compatibility
+from trident_gcode.profile_stack import stack_from_mesh, stack_from_shape, contour_normals
+from trident_gcode.point_edit import (MaskSpec, ProtectionSpec, FFDSpec, SmoothSpec,
+                                       RadialPushSpec, MASK_CHANNEL_NAMES, FFD_MAX_MM,
+                                       apply_point_edits)
+from trident_gcode.paths import PathPoint
+from trident_gcode.paths import _R_PATTERNS, _fade_envelope, R_PATTERN_NAMES, cage_scale
+from trident_gcode.stl_export import contours_to_mesh, write_binary_stl
 
 DEFAULT_PRINTER_KEY = "trident"
+
+# Texture modes that place discrete SITES along the bead (blobs) or replace the
+# wall emission entirely (loop fabric), rather than displacing the radius. They
+# are not members of _R_PATTERNS, and they have no surface representation, so an
+# STL export falls back to the smooth wall instead of rejecting the design.
+# The UI already omits `pattern` for these; this keeps direct API callers (and
+# saved designs that carry the name through) from hitting a spurious 400.
+_SITE_TEXTURE_PATTERNS = frozenset({"blobs", "loops"})
+
+# A single export request must not be able to exhaust memory. The G-code path is
+# bounded by the printer (profile.z_max rejects an over-tall design), but an STL
+# export has no machine to bound it -- height=1e6 at a 0.3 mm layer is 3.3 M
+# rings, and every ring costs points_per_turn vertices, so the build balloons
+# long before anything is returned. These ceilings sit far above any real design
+# (4 M vertices is a 16k-layer part at 240 points/turn).
+_EXPORT_MAX_VERTICES = 4_000_000
+_EXPORT_MAX_PPT = 2000
+
+
+def _check_export_budget(n_layers, points_per_turn):
+    """Reject an export whose vertex count would blow up, with a clear reason."""
+    if points_per_turn > _EXPORT_MAX_PPT:
+        raise ValueError(
+            "points_per_turn %d exceeds the export limit of %d"
+            % (points_per_turn, _EXPORT_MAX_PPT))
+    total = n_layers * points_per_turn
+    if total > _EXPORT_MAX_VERTICES:
+        raise ValueError(
+            "design is too large to export: %d layers x %d points = %d vertices "
+            "(limit %d). Reduce height, or raise layer height."
+            % (n_layers, points_per_turn, total, _EXPORT_MAX_VERTICES))
 
 
 def _get_profile(body):
@@ -206,6 +243,161 @@ def _parse_cage(raw):
     if all(abs(v - 1.0) < 1e-6 for row in cleaned for v in row):
         return None
     return cleaned
+
+
+# --------------------------------------------------------------------------
+# Point Edit Modifiers: parse the 5 optional purple-modifier request blocks.
+# Each returns None (no-op, byte-identical output) when disabled/malformed.
+# --------------------------------------------------------------------------
+POINT_FFD_ROWS_MIN, POINT_FFD_ROWS_MAX = 2, 12
+POINT_FFD_COLS_MIN, POINT_FFD_COLS_MAX = 3, 24
+
+
+def _parse_point_mask(raw) -> MaskSpec | None:
+    if not isinstance(raw, dict):
+        return None
+    channel = str(raw.get("channel", "none"))
+    image = raw.get("image")
+    cleaned_image = None
+    if isinstance(image, list) and image and isinstance(image[0], list):
+        rows = len(image)
+        cols = len(image[0])
+        if 2 <= rows <= 64 and 2 <= cols <= 64:
+            cleaned_image = []
+            for row in image:
+                if not isinstance(row, list) or len(row) != cols:
+                    cleaned_image = None
+                    break
+                cleaned_image.append([
+                    min(1.0, max(0.0, float(v))) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+                    for v in row
+                ])
+    if channel not in MASK_CHANNEL_NAMES and not cleaned_image:
+        return None
+    return MaskSpec(
+        channel=channel if channel in MASK_CHANNEL_NAMES else "none",
+        scale_u=max(0.5, min(float(raw.get("scale_u", 8.0)), 40.0)),
+        scale_v=max(0.5, min(float(raw.get("scale_v", 6.0)), 40.0)),
+        invert=bool(raw.get("invert", False)),
+        image=cleaned_image,
+    )
+
+
+def _parse_point_protection(raw) -> ProtectionSpec | None:
+    if not isinstance(raw, dict):
+        return None
+    pb = max(0.0, min(float(raw.get("protect_bottom", 0.0)), 1.0))
+    pt = max(0.0, min(float(raw.get("protect_top", 0.0)), 1.0))
+    if pb <= 0.0 and pt <= 0.0:
+        return None
+    fo = max(0.005, min(float(raw.get("falloff", 0.08)), 0.5))
+    return ProtectionSpec(protect_bottom=pb, protect_top=pt, falloff=fo)
+
+
+def _parse_point_ffd(raw) -> FFDSpec | None:
+    if not isinstance(raw, dict):
+        return None
+    cage = raw.get("cage")
+    if not isinstance(cage, list):
+        return None
+    rows = len(cage)
+    if rows < POINT_FFD_ROWS_MIN or rows > POINT_FFD_ROWS_MAX:
+        return None
+    if not isinstance(cage[0], list):
+        return None
+    cols = len(cage[0])
+    if cols < POINT_FFD_COLS_MIN or cols > POINT_FFD_COLS_MAX:
+        return None
+    cleaned = []
+    any_nonzero = False
+    for row in cage:
+        if not isinstance(row, list) or len(row) != cols:
+            return None
+        out_row = []
+        for cell in row:
+            if not isinstance(cell, list) or len(cell) != 3:
+                out_row.append([0.0, 0.0, 0.0])
+                continue
+            v = []
+            for comp in cell:
+                f = float(comp) if isinstance(comp, (int, float)) and not isinstance(comp, bool) else 0.0
+                if f != f:  # NaN
+                    f = 0.0
+                f = min(FFD_MAX_MM, max(-FFD_MAX_MM, f))
+                if abs(f) > 1e-6:
+                    any_nonzero = True
+                v.append(f)
+            out_row.append(v)
+        cleaned.append(out_row)
+    if not any_nonzero:
+        return None
+    strength = max(0.0, min(float(raw.get("strength", 1.0)), 2.0))
+    return FFDSpec(cage=cleaned, strength=strength)
+
+
+def _parse_point_smooth(raw) -> SmoothSpec | None:
+    if not isinstance(raw, dict):
+        return None
+    iterations = int(raw.get("iterations", 0) or 0)
+    if iterations <= 0:
+        return None
+    iterations = max(1, min(iterations, 12))
+    theta_amt = max(0.0, min(float(raw.get("theta_amount", 0.5)), 1.0))
+    t_amt = max(0.0, min(float(raw.get("t_amount", 0.5)), 1.0))
+    strength = max(0.0, min(float(raw.get("strength", 1.0)), 2.0))
+    return SmoothSpec(iterations=iterations, theta_amount=theta_amt,
+                       t_amount=t_amt, strength=strength)
+
+
+def _parse_point_radial_push(raw) -> RadialPushSpec | None:
+    if not isinstance(raw, dict):
+        return None
+    amp = float(raw.get("amp_mm", 0.0) or 0.0)
+    if amp == 0.0:
+        return None
+    amp = max(-5.0, min(amp, 5.0))
+    strength = max(0.0, min(float(raw.get("strength", 1.0)), 2.0))
+    return RadialPushSpec(amp_mm=amp, strength=strength)
+
+
+def _parse_point_edit_specs(body):
+    """Parse all 5 point-edit blocks from a request body at once."""
+    return (
+        _parse_point_mask(body.get("point_mask")),
+        _parse_point_protection(body.get("point_protection")),
+        _parse_point_ffd(body.get("point_ffd")),
+        _parse_point_smooth(body.get("point_smooth")),
+        _parse_point_radial_push(body.get("point_radial_push")),
+    )
+
+
+def _point_edit_active(body) -> bool:
+    return any(x is not None for x in _parse_point_edit_specs(body))
+
+
+def _parse_overhang_fan(body):
+    """Fan min/max bounds (0..1 fractions) -- always concrete, never None. The
+    fan runs between these two speeds, selected by wall lean (see
+    _overhang_fan). The client only sends fan_min/fan_max when they differ
+    from the "always full fan" default (100/100); absence just means both 1.0.
+
+    Deliberately authoritative over any fan speed a selected filament profile
+    suggests (Orca's fan_max_speed etc.): the UI's own promise is "both at
+    100% = constant full fan", so the sliders must be what actually reaches
+    M106, not silently overridden by writer.fan_speed. A filament that wants
+    a specific fan curve requires the user to actually dial the sliders to it.
+    """
+    fan_min = body.get("fan_min")
+    fan_max = body.get("fan_max")
+    try:
+        fan_min = max(0.0, min(float(fan_min), 1.0)) if fan_min is not None else 1.0
+        fan_max = max(0.0, min(float(fan_max), 1.0)) if fan_max is not None else 1.0
+    except (TypeError, ValueError):
+        fan_min, fan_max = 1.0, 1.0
+    # "min" ramps up to "max" as overhang steepens -- if the client ever sends
+    # them inverted, treat max as the floor so the ramp direction stays sane.
+    fan_max = max(fan_max, fan_min)
+    return fan_min, fan_max
 
 
 def _parse_blob_spec(body, radius: float | None = None) -> BlobSpec | None:
@@ -429,16 +621,33 @@ def generate_design(body):
     blob_spec = _parse_blob_spec(body, radius=radius)
     loop_spec = _parse_loop_spec(body, radius=radius)
     overhang_flow_k = max(0.0, min(float(body.get("overhang_flow_k", 0.0)), 1.0))
+    fan_overhang_min, fan_overhang_max = _parse_overhang_fan(body)
+    fan_off_layers = max(0, min(int(body.get("fan_off_layers", 0) or 0), 50))
 
+    point_mask, point_protection, point_ffd, point_smooth, point_radial_push = (
+        _parse_point_edit_specs(body))
+
+    point_edit_issue = None
+    fan_overhang_issue = None
     if loop_spec is not None:
         # Loop fabric replaces the wall entirely (knitted rows of vertical
         # loop stitches) — z-waves/patterns don't apply; the silhouette does.
+        if _point_edit_active(body):
+            point_edit_issue = (
+                "point edit modifiers only apply to the parametric wall "
+                "(not loop fabric) - ignored for this design.")
+        if fan_overhang_min != fan_overhang_max:
+            fan_overhang_issue = (
+                "fan min/max only ramp on the parametric wall (loop fabric has "
+                "no wall lean to select a speed from) - a flat "
+                f"{round(fan_overhang_min * 100)}% fan (your Fan min) was used.")
         report = build_loop_fabric(
             writer, shape=shape, height=height, spec=loop_spec,
             radius_envelope=radius_fn,
             cage=cage,
             first_layer_squish=squish,
             cuff_lh=layer_height,
+            fan_speed=fan_overhang_min,
         )
     else:
         report = build_continuous_spiral(
@@ -451,7 +660,15 @@ def generate_design(body):
             skirt_loops=skirt_loops,
             blob_spec=blob_spec,
             overhang_flow_k=overhang_flow_k,
+            fan_overhang_min=fan_overhang_min,
+            fan_overhang_max=fan_overhang_max,
+            fan_off_layers=fan_off_layers,
             width_callback=width_fn,
+            point_mask=point_mask,
+            point_protection=point_protection,
+            point_ffd=point_ffd,
+            point_smooth=point_smooth,
+            point_radial_push=point_radial_push,
         )
 
     gcode_text = writer.text()
@@ -483,6 +700,10 @@ def generate_design(body):
             "Peak wave slope %.2f exceeds the empirically printable ~%.2f "
             "(amp*waves/radius) - upper waves may collapse; reduce amplitude "
             "or wave count." % (peak_slope, QUALITY_SLOPE_LIMIT))
+    if point_edit_issue:
+        issues_extra.append(point_edit_issue)
+    if fan_overhang_issue:
+        issues_extra.append(fan_overhang_issue)
     stats = {
         "wave_slope": round(peak_slope, 3),
         "moves": analysis.moves,
@@ -497,6 +718,8 @@ def generate_design(body):
         "unsupported_moves": analysis.unsupported_moves,
         "top_z_mm": report.get("top_z_mm"),
         "blob_count": report.get("blob_count", 0),
+        "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
+        "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
     }
 
     filename = "design_%s_%dmm.gcode" % (_clean_shape(shape_name), int(round(height)))
@@ -613,6 +836,8 @@ def generate_mesh_texture_design(body):
     blob_spec = _parse_blob_spec(body, radius=mesh_radius)
     loop_spec = _parse_loop_spec(body, radius=mesh_radius)
     overhang_flow_k = max(0.0, min(float(body.get("overhang_flow_k", 0.0)), 1.0))
+    fan_overhang_min, fan_overhang_max = _parse_overhang_fan(body)
+    fan_off_layers = max(0, min(int(body.get("fan_off_layers", 0) or 0), 50))
 
     report = build_profile_spiral(
         writer, contours, heights,
@@ -638,6 +863,9 @@ def generate_mesh_texture_design(body):
         blob_spec=blob_spec,
         loop_spec=loop_spec,
         overhang_flow_k=overhang_flow_k,
+        fan_overhang_min=fan_overhang_min,
+        fan_overhang_max=fan_overhang_max,
+        fan_off_layers=fan_off_layers,
         width_callback=width_fn,
     )
 
@@ -675,6 +903,10 @@ def generate_mesh_texture_design(body):
             "cage deformation only applies to parametric designs "
             "(not loops fabric / STL mode) - the STL texture wall was "
             "generated without the cage.")
+    if _point_edit_active(body):
+        issues_extra.append(
+            "point edit modifiers only apply to parametric wall designs "
+            "(not STL mode) - the STL texture wall was generated without them.")
 
     stats = {
         "wave_slope": round(peak_slope, 3),
@@ -690,6 +922,8 @@ def generate_mesh_texture_design(body):
         "unsupported_moves": analysis.unsupported_moves,
         "top_z_mm": report.get("top_z_mm"),
         "blob_count": report.get("blob_count", 0),
+        "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
+        "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
     }
 
     filename = "design_mesh_%s_%dmm.gcode" % (_clean_shape(mesh_id), int(round(max(heights) if heights else 0)))
@@ -701,6 +935,244 @@ def generate_mesh_texture_design(body):
         "stats": stats,
         "filename": filename,
     }
+
+
+# --------------------------------------------------------------------------
+# Core: surface-only export -- same design, no toolpath (no Z-waves, no loop
+# fabric), turned into a watertight STL so Orca can slice it as a SOLID part.
+# Mirrors generate_design()/generate_mesh_texture_design()'s parsing so the
+# exported shape matches what the viewer shows, but stops at the contour
+# stack instead of feeding it to a G-code generator.
+# --------------------------------------------------------------------------
+def _export_contours_mesh_texture(body):
+    """Contour stack for mode=mesh_texture: sliced STL + radial texture only.
+
+    Cage deformation does not apply here (mirrors generate_mesh_texture_design,
+    which only ever built the wall from stack_from_mesh + radial texture --
+    the cage grid is a parametric-only feature).
+    """
+    mesh_id = body.get("mesh_id")
+    if not mesh_id:
+        raise ValueError("mesh_id is required for mode=mesh_texture")
+    entry = _mesh_cache.get(mesh_id)
+    if entry is None:
+        raise KeyError("mesh_id not found (upload may have expired) - re-upload the STL")
+
+    scale = float(body.get("scale", 1.0))
+    layer_height = float(body.get("layer_height", 0.30))
+    points_per_turn = int(body.get("points_per_turn", 240))
+
+    pattern = body.get("pattern") or None
+    pattern_amp = max(0.0, min(float(body.get("pattern_amp", 1.0)), 4.0))
+    pattern_waves = int(body.get("pattern_waves", 12))
+    pattern_bands = float(body.get("pattern_bands", 6.0))
+    pattern_twist = float(body.get("pattern_twist", 0.0))
+    pattern_phase = float(body.get("pattern_phase", 0.0))
+    pattern_fade_in = max(0.0, min(float(body.get("pattern_fade_in", 0.10)), 0.5))
+    pattern_fade_out = max(0.0, min(float(body.get("pattern_fade_out", 0.0)), 0.5))
+    pattern_alternate = bool(body.get("pattern_alternate", False))
+    if pattern in _SITE_TEXTURE_PATTERNS:
+        pattern = None
+    elif pattern is not None and pattern not in _R_PATTERNS:
+        raise ValueError(f"unknown pattern '{pattern}', expected one of {R_PATTERN_NAMES}")
+
+    tris = entry["tris"]
+    if scale != 1.0:
+        tris = [tuple((vx * scale, vy * scale, vz * scale) for (vx, vy, vz) in t)
+                for t in tris]
+
+    # Same ceiling as the parametric path, but the height comes from the mesh's
+    # own bounds -- a large `scale` on a tall STL is how this one runs away.
+    if layer_height <= 0:
+        raise ValueError("layer_height must be positive")
+    (_mlo, _mhi) = mesh_bounds(tris)
+    _check_export_budget(max(1, int(round((_mhi[2] - _mlo[2]) / layer_height))),
+                         points_per_turn)
+
+    contours = stack_from_mesh(tris, layer_height, points_per_turn)
+    heights = [layer_height * (i + 0.5) for i in range(len(contours))]
+
+    if pattern is not None:
+        n_layers = len(contours)
+        n = points_per_turn
+        fn = _R_PATTERNS[pattern]
+        textured = []
+        for i, c in enumerate(contours):
+            t = i / max(n_layers - 1, 1)
+            normals = contour_normals(c)
+            env = _fade_envelope(t, pattern_fade_in, pattern_fade_out)
+            b = 2.0 * math.pi * pattern_bands * t
+            new_c = []
+            for j, (x, y) in enumerate(c):
+                theta = 2.0 * math.pi * j / n
+                a = pattern_waves * theta + 2.0 * math.pi * (pattern_twist * t + pattern_phase)
+                if pattern_alternate and i % 2 == 1:
+                    a += math.pi
+                disp = pattern_amp * env * fn(a, b)
+                nx, ny = normals[j]
+                new_c.append((x + disp * nx, y + disp * ny))
+            textured.append(new_c)
+        contours = textured
+
+    filename = "design_mesh_%s_%dmm.stl" % (_clean_shape(mesh_id), int(round(max(heights) if heights else 0)))
+    return contours, heights, filename
+
+
+def _export_contours_parametric(body):
+    """Contour stack for the parametric path: every input that defines the WALL
+    SURFACE -- shape, xy_twist, silhouette envelope, cage, radial texture,
+    ovality and the leaning spine.
+
+    xy_twist / ovality / spine are sculpting controls (the UI's "Asymmetry"
+    group), not toolpath effects, so an export that dropped them would hand back
+    a straight, round vase for a design the user had deliberately leaned and
+    squashed. Only z_waves and loop-fabric stitching are excluded, because those
+    modulate the bead path itself and have no surface to hand a solid slicer.
+    """
+    shape_name = str(body.get("shape", "circle"))
+    radius = float(body.get("radius", 32.0))
+    height = float(body.get("height", 60.0))
+    layer_height = float(body.get("layer_height", 0.30))
+    points_per_turn = int(body.get("points_per_turn", 240))
+    star_points = int(body.get("star_points", 5))
+    star_depth = float(body.get("star_depth", 0.35))
+
+    radius_profile = body.get("radius_profile") or [[0, 1.0], [1, 1.0]]
+    radius_profile_smooth = bool(body.get("radius_profile_smooth", False))
+    radius_interp = _make_smooth_interp if radius_profile_smooth else _make_interp
+    radius_fn = radius_interp(radius_profile, RADIUS_SCALE_MIN, RADIUS_SCALE_MAX)
+
+    cage = _parse_cage(body.get("cage"))
+
+    pattern = body.get("pattern") or None
+    pattern_amp = max(0.0, min(float(body.get("pattern_amp", 1.0)), 4.0))
+    pattern_waves = int(body.get("pattern_waves", 12))
+    pattern_bands = float(body.get("pattern_bands", 6.0))
+    pattern_twist = float(body.get("pattern_twist", 0.0))
+    pattern_phase = float(body.get("pattern_phase", 0.0))
+    pattern_fade_in = max(0.0, min(float(body.get("pattern_fade_in", 0.10)), 0.5))
+    pattern_fade_out = max(0.0, min(float(body.get("pattern_fade_out", 0.0)), 0.5))
+    pattern_alternate = bool(body.get("pattern_alternate", False))
+    if pattern in _SITE_TEXTURE_PATTERNS:
+        pattern = None
+    elif pattern is not None and pattern not in _R_PATTERNS:
+        raise ValueError(f"unknown pattern '{pattern}', expected one of {R_PATTERN_NAMES}")
+
+    xy_twist = float(body.get("xy_twist", 0.0))
+    # Same clamps generate_design() applies, so the exported solid can never
+    # differ from the printed wall just because one path validated harder.
+    spine_mm = max(0.0, min(float(body.get("spine_mm", 0.0)), 20.0))
+    spine_deg = float(body.get("spine_deg", 0.0))
+    ovality = max(-0.4, min(float(body.get("ovality", 0.0)), 0.4))
+    spine_cos = math.cos(math.radians(spine_deg))
+    spine_sin = math.sin(math.radians(spine_deg))
+
+    shape = _make_shape(shape_name, radius, star_points, star_depth)
+
+    # Budget-check BEFORE building anything -- stack_from_shape would otherwise
+    # allocate the whole oversized stack before we could reject it.
+    if layer_height <= 0:
+        raise ValueError("layer_height must be positive")
+    _check_export_budget(max(1, int(round(height / layer_height))), points_per_turn)
+
+    # Layer count comes from the shared stack builder so an export always has the
+    # same number of rings as the print; the outlines themselves are rebuilt
+    # below rather than reused, because a twisted cross-section cannot be
+    # recovered from baked XY (hypot loses the shape angle).
+    n_layers = len(stack_from_shape(shape, radius, height, layer_height,
+                                    points_per_turn, radius_envelope=radius_fn))
+    n = points_per_turn
+    heights = [height * (i / max(n_layers - 1, 1)) for i in range(n_layers)]
+
+    # Mirrors spiral_path()'s per-point order exactly: twist the sampled shape
+    # angle, scale by the silhouette envelope, scale by the cage, add the radial
+    # texture, then squash to an ellipse and finally translate the whole
+    # cross-section for the leaning spine. Any other order changes the surface.
+    fn = _R_PATTERNS[pattern] if pattern is not None else None
+    contours = []
+    for i in range(n_layers):
+        t = i / max(n_layers - 1, 1)
+        r_env = radius_fn(t)
+        env = _fade_envelope(t, pattern_fade_in, pattern_fade_out) if fn is not None else 0.0
+        b = 2.0 * math.pi * pattern_bands * t
+        dx = t * spine_mm * spine_cos
+        dy = t * spine_mm * spine_sin
+        ring = []
+        for j in range(n):
+            theta = 2.0 * math.pi * j / n
+            r = shape(theta - xy_twist * 2.0 * math.pi * t) * r_env
+            if cage is not None:
+                r *= cage_scale(cage, theta, t)
+            if fn is not None:
+                a = pattern_waves * theta + 2.0 * math.pi * (pattern_twist * t + pattern_phase)
+                if pattern_alternate and i % 2 == 1:
+                    a += math.pi
+                r += pattern_amp * env * fn(a, b)
+            x = r * math.cos(theta)
+            y = r * math.sin(theta)
+            if ovality != 0.0:
+                x *= (1.0 + ovality)
+                y *= (1.0 - ovality)
+            ring.append((x + dx, y + dy))
+        contours.append(ring)
+
+    filename = "design_%s_%dmm.stl" % (_clean_shape(shape_name), int(round(height)))
+    return contours, heights, filename
+
+
+def _point_edits_on_contours(body, contours, heights, points_per_turn):
+    """Run the point-edit stack (FFD / radial push / smooth) over a contour stack.
+
+    The modifiers are defined against the printed point stream, but that stream
+    is just this contour stack walked in layer-major order, and point_edit
+    recovers (theta, t) from the point INDEX via _theta_t_at() -- theta from
+    i % points_per_turn, t from i / (total - 1). Flattening the rings in the
+    same order therefore reproduces the exact deformation the toolpath gets,
+    rather than re-deriving it and risking drift.
+
+    Returns 3-tuple rings when anything deformed, because FFD displaces Z per
+    point and a single height per ring can no longer describe the result.
+    """
+    mask, protection, ffd, smooth, radial_push = _parse_point_edit_specs(body)
+    if ffd is None and smooth is None and radial_push is None:
+        return contours                     # nothing deforming; leave (x, y) rings
+    pts = [PathPoint(x=x, y=y, z=heights[i])
+           for i, ring in enumerate(contours) for (x, y) in ring]
+    edited = apply_point_edits(
+        pts, points_per_turn, mask=mask, protection=protection,
+        ffd=ffd, smooth=smooth, radial_push=radial_push)
+    n = points_per_turn
+    return [[(p.x, p.y, p.z) for p in edited[i * n:(i + 1) * n]]
+            for i in range(len(contours))]
+
+
+def generate_export_stl(body):
+    """Turn a design request body into watertight STL bytes.
+
+    Everything that shapes the WALL SURFACE: shape, xy_twist, silhouette
+    envelope, cage, radial texture pattern, ovality, leaning spine, and the
+    point-edit modifier stack (FFD, radial push, smooth). Deliberately excludes
+    non-planar Z-waves and loop-fabric stitching -- both are toolpath artifacts
+    of the single-wall vase print with no meaningful surface to hand a
+    solid-part slicer. When the request asks for pattern="loops" the underlying
+    smooth wall surface is exported (loop fabric replaces the WALL EMISSION,
+    not the wall's own outline).
+    """
+    mode = str(body.get("mode", "parametric"))
+    if mode == "mesh_texture":
+        contours, heights, filename = _export_contours_mesh_texture(body)
+    else:
+        contours, heights, filename = _export_contours_parametric(body)
+
+    if len(contours) < 2:
+        raise ValueError("design is too short (need at least 2 layers) to export a solid mesh")
+
+    contours = _point_edits_on_contours(
+        body, contours, heights, int(body.get("points_per_turn", 240)))
+
+    tris = contours_to_mesh(contours, heights, cap_bottom=True, cap_top=True)
+    data = write_binary_stl(tris, name=b"trident_export")
+    return data, filename
 
 
 # --------------------------------------------------------------------------
@@ -839,6 +1311,15 @@ class Handler(SimpleHTTPRequestHandler):
         mesh_id = hashlib.md5(data).hexdigest()[:12]
         _mesh_cache_put(mesh_id, tris)
 
+        # Single-outer-contour slicing silently discards holes and islands, so
+        # check up front and hand the verdict to the UI rather than letting the
+        # user discover it in a failed print. Never fatal: a mesh that fails the
+        # check still slices, it just won't reproduce the uploaded shape.
+        try:
+            vase_check = analyze_vase_compatibility(tris)
+        except Exception as e:
+            vase_check = {"error": "Could not analyse mesh: %s" % e}
+
         self._send_json({
             "mesh_id": mesh_id,
             "bounds": {
@@ -847,6 +1328,7 @@ class Handler(SimpleHTTPRequestHandler):
             },
             "triangles": len(tris),
             "height": round(maxz - minz, 3),
+            "vase_check": vase_check,
         })
         # filename is accepted for client bookkeeping; not otherwise used server-side.
         _ = filename
@@ -855,6 +1337,9 @@ class Handler(SimpleHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/api/upload_mesh":
             self._handle_upload_mesh()
+            return
+        if path == "/api/export_stl":
+            self._handle_export_stl()
             return
         if path != "/api/generate":
             self.send_error(404, "Not Found")
@@ -891,10 +1376,56 @@ class Handler(SimpleHTTPRequestHandler):
 
         self._send_json(result)
 
+    def _handle_export_stl(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
+        raw = self.rfile.read(length) if length else b""
+        try:
+            body = json.loads(raw.decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            self._send_json({"error": "Request body is not valid JSON."}, status=400)
+            return
+
+        try:
+            data, filename = generate_export_stl(body)
+        except KeyError as e:
+            msg = str(e).strip('"').strip("'")
+            self._send_json({"error": msg}, status=400)
+            return
+        except (ValueError, TypeError) as e:
+            # TypeError covers a malformed body (e.g. "radius": null reaching
+            # float()) -- that is a bad request, not a server fault.
+            self._send_json({"error": str(e)}, status=400)
+            return
+        except Exception as e:
+            self._send_json({"error": "STL export failed: %s" % e}, status=500)
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", 'attachment; filename="%s"' % filename)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+class _Server(ThreadingHTTPServer):
+    # SO_REUSEADDR lets a second process silently bind a port that is still
+    # LISTENing on Windows (unlike POSIX, where it only helps rebind a
+    # socket stuck in TIME_WAIT) -- so a stale `python serve.py` left running
+    # from an earlier edit session keeps answering requests with old code
+    # while a newer instance starts up, prints the banner, and looks fine.
+    # Disabling reuse on Windows makes that collision hit the OSError guard
+    # in main() instead of silently double-binding. POSIX keeps reuse (quick
+    # restarts there rebind a TIME_WAIT socket, which is the safe case).
+    allow_reuse_address = (os.name != "nt")
+
 
 def main():
     try:
-        httpd = ThreadingHTTPServer(("", PORT), Handler)
+        httpd = _Server(("", PORT), Handler)
     except OSError as e:
         sys.stderr.write(
             "ERROR: could not bind port %d - is another server already running? (%s)\n"

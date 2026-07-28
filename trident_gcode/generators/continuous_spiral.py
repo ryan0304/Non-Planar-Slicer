@@ -9,6 +9,8 @@ from ..blobs import (BlobSpec, LoopSpec, blob_volume_at, compute_blob_sites,
 from ..extrusion import blob_e_for_volume
 from ..gcode import GcodeWriter
 from ..paths import SpiralSpec, PathPoint, spiral_path, bounding_radius, circle
+from ..point_edit import (MaskSpec, ProtectionSpec, FFDSpec, SmoothSpec,
+                          RadialPushSpec, apply_point_edits)
 from .base_fill import (layered_base_and_brim, brim_outer_radius, blend_layer_z,
                         skirt_points, skirt_outer_radius)
 
@@ -19,6 +21,55 @@ def _overhang_flow(tilt: float | None, k: float) -> float:
         return 1.0
     boost = 1.0 + k * max(0.0, math.tan(max(tilt, 0.0)))
     return min(max(boost, 0.7), 1.6)
+
+
+# Wall tilt (radians) at which an overhang is considered "absolute" -- i.e.
+# steep enough that the part-cooling fan should already be at fan_max. Chosen
+# well short of 90 deg (fully horizontal) since by the time a wall leans this
+# far it already has minimal support from the turn below and needs full
+# cooling *before* it gets any steeper, not once it's flat.
+#
+# 45 deg, not 60: tilt here is measured from vertical, and 45 is the classic
+# FDM limit past which a wall stops being self-supporting -- full cooling by
+# then is the physically meaningful point. 60 also made fan_max effectively
+# unreachable through the UI: a silhouette flared across the whole height
+# tops out near 23 deg (only ~1/3 of the way to fan_max), so the "max" slider
+# looked inert on every design except a sharp local flare.
+OVERHANG_FAN_FULL_TILT = math.radians(45.0)
+
+
+def _fan_on_threshold(fan_off_layers: int, base_layers: int, ppt: int) -> int:
+    """Wall-loop point index at which the part-cooling fan is allowed to turn
+    on, given a TOTAL layer count (base + wall combined, from the absolute
+    start of the print) that should stay fan-off.
+
+    ``fan_off_layers <= 0`` reproduces today's implicit default exactly (fan
+    on immediately once any solid base finishes, else after the wall's own
+    first turn) -- byte-identical output. A solid base already prints with no
+    fan calls at all regardless of this setting (there is nowhere in that
+    emission to turn it on), so a requested count at or below ``base_layers``
+    just means "turn on right after the base", same as the default.
+    """
+    if fan_off_layers > 0:
+        effective = fan_off_layers
+    else:
+        effective = base_layers if base_layers > 0 else 1
+    return max(0, effective - base_layers) * ppt
+
+
+def _overhang_fan(tilt: float | None, fan_min: float, fan_max: float) -> float:
+    """Fan speed fraction (0..1) driven by wall tilt.
+
+    Ramps linearly from ``fan_min`` at a vertical wall (tilt=0) up to
+    ``fan_max`` at OVERHANG_FAN_FULL_TILT ("absolute overhang") and holds
+    fan_max beyond that. Overhanging turns have less material underneath to
+    carry heat away, so they need more airflow to solidify before the next
+    turn arrives on top of them -- steeper leans need it sooner.
+    """
+    if tilt is None:
+        return fan_min
+    frac = min(max(tilt, 0.0), OVERHANG_FAN_FULL_TILT) / OVERHANG_FAN_FULL_TILT
+    return fan_min + (fan_max - fan_min) * frac
 
 
 _LOOP_SEGMENTS = 10   # bezier sampling of one teardrop excursion
@@ -76,6 +127,14 @@ def build_continuous_spiral(
     blob_spec: BlobSpec | None = None,
     loop_spec: LoopSpec | None = None,
     overhang_flow_k: float = 0.0,
+    fan_overhang_min: float | None = None,
+    fan_overhang_max: float | None = None,
+    fan_off_layers: int = 0,
+    point_mask: MaskSpec | None = None,
+    point_protection: ProtectionSpec | None = None,
+    point_ffd: FFDSpec | None = None,
+    point_smooth: SmoothSpec | None = None,
+    point_radial_push: RadialPushSpec | None = None,
 ) -> dict:
     """Emit a complete continuous non-planar spiral and return a small report.
 
@@ -125,6 +184,15 @@ def build_continuous_spiral(
     shape = shape or circle(spec.base_radius)
     pts = spiral_path(spec, shape)
     ppt = spec.points_per_turn
+
+    # Point Edit Modifiers: post-slice deformation of the already-generated
+    # wall polyline (Point Mask / Protection / FFD / Smooth / Radial Push).
+    # No-op (same list, byte-identical output) when none are active.
+    pts = apply_point_edits(
+        pts, ppt,
+        mask=point_mask, protection=point_protection, ffd=point_ffd,
+        smooth=point_smooth, radial_push=point_radial_push,
+    )
 
     # Is any first-layer / base / brim feature active? If not, fall back to the
     # exact plain-spiral emission so default output stays byte-identical. Note:
@@ -245,16 +313,24 @@ def build_continuous_spiral(
         n = math.hypot(p.x, p.y)
         return (p.x / n, p.y / n) if n > 1e-9 else (1.0, 0.0)
 
+    # Overhang-adaptive fan: both bounds must be given to activate (None,None
+    # is the default -- constant writer.fan_speed, byte-identical output).
+    fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
+
     if not adhesion:
         # -------- plain spiral (byte-identical to the pre-adhesion generator) --
+        fan_on_i = _fan_on_threshold(fan_off_layers, 0, ppt)
         skip_until = -1
         for i, p in enumerate(pts):
             if i <= skip_until:
                 continue          # wall replaced by a loop strand here
             x, y, z = cx + p.x, cy + p.y, base_z + p.z
             speed = writer.first_layer_speed if i <= ppt else writer.print_speed
-            if i == ppt:
-                writer.set_fan(writer.fan_speed)
+            if i == fan_on_i:
+                writer.set_fan(_overhang_fan(p.tilt, fan_overhang_min, fan_overhang_max)
+                               if fan_overhang_active else writer.fan_speed)
+            elif i > fan_on_i and fan_overhang_active:
+                writer.set_fan_if_changed(_overhang_fan(p.tilt, fan_overhang_min, fan_overhang_max))
             t_frac = i / max(total_pts - 1, 1)
             cb_flow = flow_callback(t_frac) if flow_callback is not None else 1.0
             cb_w = width_callback(t_frac) if width_callback is not None else None
@@ -279,6 +355,11 @@ def build_continuous_spiral(
     else:
         # -------- brim + solid base (stacked disks), one continuous bead -------
         _fan_on = False
+        # A solid base already prints with no fan calls at all (nowhere in
+        # that emission to turn it on) -- so a requested fan_off_layers count
+        # at or below base_layers just means "turn on right after the base",
+        # same as today's unconditional default.
+        fan_immediate = base_layers > 0 and fan_off_layers <= base_layers
         if base_seq:
             writer.comment(
                 f"solid base ({base_layers} layers) + brim ({brim_loops} loops)")
@@ -291,9 +372,11 @@ def build_continuous_spiral(
                     layer_height_override=lh,      # disk 0: full volume, squished
                     flow_override=first_layer_flow if first else 1.0,
                 )
-            if base_layers > 0:
+            if fan_immediate:
                 # First layer is done once disk 0 is buried; fan on for the rest.
-                writer.set_fan(writer.fan_speed)
+                # (No wall point yet at this point in the sequence -- the wall's
+                # own tilt-driven updates take over once its loop starts below.)
+                writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
                 _fan_on = True
 
         # -------- flat priming loop (squish-only starts; a base replaces it) ---
@@ -309,6 +392,11 @@ def build_continuous_spiral(
 
         # -------- the wall spiral (starts on top of the base stack) ------------
         writer.comment("wall spiral")
+        # When the fan already came on immediately after the base, its own
+        # tilt-adaptive tracking still only starts after the wall's first turn
+        # (a pre-existing cold-start window, independent of fan_off_layers).
+        # Otherwise the requested total off-layer count sets the threshold.
+        fan_on_i = ppt if fan_immediate else _fan_on_threshold(fan_off_layers, base_layers, ppt)
         skip_until = -1
         for i, p in enumerate(pts):
             if i <= skip_until:
@@ -317,9 +405,12 @@ def build_continuous_spiral(
             # Squish/first-layer handling applies to the wall's first turn only
             # when the wall IS the first layer (no base under it).
             first_turn = (i <= ppt) and base_layers == 0
-            if i > ppt and not _fan_on:
-                writer.set_fan(writer.fan_speed)
+            if i > fan_on_i and not _fan_on:
+                writer.set_fan(_overhang_fan(p.tilt, fan_overhang_min, fan_overhang_max)
+                               if fan_overhang_active else writer.fan_speed)
                 _fan_on = True
+            elif i > fan_on_i and fan_overhang_active:
+                writer.set_fan_if_changed(_overhang_fan(p.tilt, fan_overhang_min, fan_overhang_max))
             if first_turn:
                 speed = writer.first_layer_speed
                 lh_over, flow_over = lh, first_layer_flow
