@@ -123,12 +123,29 @@ input[type=range]::-moz-range-thumb {
 }
 input[type=range]:disabled { opacity:.4; cursor:default; }
 
+/* Native <select> chevron: was a barely-visible 10x6 glyph in flat #888 with
+   no open/closed cue. Enlarged, higher-contrast on hover/focus, and extra
+   right padding so the glyph has room. A native select cannot report "open"
+   to CSS, so :focus is used as a faithful proxy (set exactly when the list
+   opens) -- but the arrow lives in a background-image on a replaced element,
+   which CSS transform cannot animate, so the "rotate 180deg on open" cue is
+   approximated by swapping to a mirrored (upward) arrow of the same weight,
+   which reads as the same flip without wrapping every select in the app in
+   an extra element. */
 select {
   appearance:none; -webkit-appearance:none; -moz-appearance:none;
   background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; font-size:12px; padding:3px 20px 3px 5px;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path fill='%23888888' d='M0 0l5 6 5-6z'/></svg>");
+  border-radius:6px; font-size:12px; padding:3px 24px 3px 5px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23989898' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
   background-repeat:no-repeat; background-position:right 8px center;
+  transition:border-color .15s;
+}
+select:hover {
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23f5f5f0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
+}
+select:focus {
+  border-color:var(--accent); outline:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23f5f5f0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 6l5 -5 5 5'/></svg>");
 }
 
 html,body {
@@ -239,7 +256,7 @@ label.radio-inline { cursor:pointer; }
 .timeline button:active { transform:translateY(0); }
 .timeline input[type=range] { flex:1; cursor:pointer; }
 .timeline select { background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:3px 4px; font-size:12px; }
+  border-radius:6px; padding:3px 24px 3px 4px; font-size:12px; }
 .tl-read { font-size:12px; color:var(--ink-muted); min-width:150px; text-align:right; }
 .tl-read .turn-count { color:var(--ink); font-weight:700; font-size:13px; }
 
@@ -284,9 +301,8 @@ label.radio-inline { cursor:pointer; }
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
 .drow select { background-color:var(--bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
-.drow select { width:116px; padding-right:20px; }
+.drow select { width:116px; padding-right:24px; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
-.printer-select { width:auto !important; min-width:140px; max-width:200px; padding-right:20px; }
 .colormode-select { width:110px; }
 
 /* Controls whose own content needs more room than the default 92/116px track.
@@ -361,7 +377,7 @@ label.radio-inline { cursor:pointer; }
 /* ---- preset bar ---- */
 .preset-bar { display:flex; gap:4px; align-items:center; margin-bottom:10px; }
 .preset-bar select { flex:1 1 0; min-width:0; background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:4px 4px; font-size:11.5px; }
+  border-radius:6px; padding:4px 24px 4px 4px; font-size:11.5px; }
 .preset-bar .btn { padding-left:8px; padding-right:8px; }
 .preset-bar .btn-icon { padding-left:6px; padding-right:6px; }
 
@@ -376,6 +392,78 @@ label.radio-inline { cursor:pointer; }
 
 .mode-panel { display:none; }
 .mode-panel.active { display:block; }
+
+/* =========================================================================
+   Machine bar -- persistent printer strip above the step wizard, visible in
+   all four design steps (the printer is context for every step, not a
+   Step-4-only choice). Ordinary --accent blue chrome, never --accent-purple
+   (reserved for Point Edit). Must stay usable at the 340px sidebar floor --
+   everything here wraps or ellipsizes rather than forcing horizontal scroll.
+   ========================================================================= */
+.mb-bar { background:var(--surface-raised); border:1px solid var(--line);
+  border-radius:var(--radius-lg); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-3); }
+.mb-row1 { display:flex; align-items:center; gap:6px; }
+.mb-icon { flex:none; font-size:13px; color:var(--ink-muted); line-height:1; }
+.mb-select { flex:1 1 auto; min-width:0; background-color:var(--bg); color:var(--ink);
+  border:1px solid var(--line); border-radius:6px; font-size:12.5px; font-weight:600;
+  padding-top:6px; padding-bottom:6px; padding-left:8px; }
+.mb-summary { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-muted);
+  margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mb-bar .pm-meta { margin-top:var(--sp-2); padding-top:var(--sp-2); }
+.mb-add-btn { margin-top:var(--sp-2); }
+
+/* ---- printer combobox -- the printer list grew to ~17 rows (14 printers +
+   3 group headers, more once custom printers are added). A native <select>
+   popup is OS-drawn: its size/placement can't be controlled from CSS, so on
+   a short viewport the popup runs past the window bottom and the last row
+   is clipped. This is a bounded, scrolling, keyboard-navigable listbox built
+   on the same pattern as .param-search-results, opened/closed and
+   positioned (including the upward "flip" when there's no room below) from
+   designer.js's printer-combo module. Every other <select> in the app stays
+   native -- only the printer list has the length problem. */
+.mb-combo { position:relative; flex:1 1 auto; min-width:0; }
+.mb-combo-btn { display:flex; align-items:center; justify-content:space-between; gap:6px;
+  width:100%; background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:6px; font-size:12.5px; font-weight:600; font-family:var(--font-ui);
+  padding:6px 8px; text-align:left; cursor:pointer; transition:border-color .15s; }
+.mb-combo-btn:hover { border-color:var(--ink-muted); }
+.mb-combo-btn:focus, .mb-combo-btn[aria-expanded="true"] { border-color:var(--accent); outline:none; }
+#printer-combo-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Real element (not a background-image, unlike the native-select chevron
+   below) so "rotate 180deg on genuine open state" is a literal transform,
+   not an approximation swapped in on :focus. Sized/weighted to match the
+   enlarged, higher-contrast native chevron used by every other select. */
+/* The chevron is the affordance the user reported as "too small to be seen,
+   neither has it been dropped down or not". It carries two jobs at rest --
+   say "this opens", and say "it is currently closed" -- so it is sized and
+   coloured to be legible without hovering, not just on hover. */
+.mb-combo-chevron { flex:none; font-size:14px; line-height:1; color:var(--ink);
+  opacity:.75; transition:transform .15s, opacity .15s; }
+.mb-combo-btn:hover .mb-combo-chevron, .mb-combo-btn[aria-expanded="true"] .mb-combo-chevron { opacity:1; }
+.mb-combo-btn[aria-expanded="true"] .mb-combo-chevron { transform:rotate(180deg); }
+.mb-combo-list { position:absolute; left:0; right:0; z-index:9;
+  background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:0 8px 24px rgba(0,0,0,.35); overflow-y:auto; padding:4px; display:none; }
+.mb-combo-list.open { display:block; }
+.mb-combo-group { padding:6px 8px 2px; font-size:10px; font-weight:600; color:var(--ink-muted);
+  font-family:var(--font-mono); text-transform:uppercase; letter-spacing:.06em; }
+.mb-combo-group:first-child { padding-top:4px; }
+.mb-combo-option { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:6px 8px; border-radius:6px; cursor:pointer; font-size:12px; color:var(--ink); }
+.mb-combo-option:hover, .mb-combo-option.active { background:var(--accent); color:var(--ink-on-accent); }
+.mb-combo-option[aria-selected="true"] { font-weight:600; }
+.mb-combo-option[aria-selected="true"]::after { content:'\2713'; flex:none; font-size:11px; }
+
+/* Switch-printer notice -- warn (values clamped) or ok (headroom grew).
+   Dismissable (close button) and self-clears after a few seconds; never a
+   window.alert. */
+.mb-notice { margin-top:var(--sp-2); border-radius:6px; padding:6px 8px; font-size:11px;
+  line-height:1.4; display:flex; align-items:flex-start; gap:6px; }
+.mb-notice-warn { background:rgba(255,180,84,.10); border:1px solid var(--warn); color:var(--warn); }
+.mb-notice-ok { background:rgba(63,220,160,.08); border:1px solid var(--ok); color:var(--ok); }
+.mb-notice-msg { flex:1 1 auto; }
+.mb-notice-close { flex:none; background:none; border:none; color:inherit; cursor:pointer;
+  font-size:13px; line-height:1; padding:0 2px; font-family:var(--font-ui); }
 
 /* ---- design wizard step bar ---- */
 .step-bar { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:10px; }
@@ -402,9 +490,15 @@ label.radio-inline { cursor:pointer; }
 /* ---- section separators inside step panels ---- */
 .step-panel hr { border:none; border-top:1px solid var(--line); margin:var(--sp-3) 0 var(--sp-2); }
 
-/* ---- step nav (Back / Next) ---- */
-.step-nav { display:flex; justify-content:space-between; gap:8px; margin-top:var(--sp-4);
-  padding-top:var(--sp-3); border-top:1px solid var(--line); }
+/* ---- step nav (Back / Next) -- pinned as a sibling of #panel-scroll (see
+   #panel below), not the last child scrolling with it, so it stays reachable
+   regardless of panel content height. flex:0 0 auto keeps it from shrinking
+   inside #panel's column flex; the panel's own background so content
+   scrolled underneath passes BEHIND it, not through it. Design-mode only --
+   toggled the same way #mode-design/#mode-viewer are, see setAppMode(). ---- */
+.step-nav { display:none; justify-content:space-between; gap:8px; flex:0 0 auto;
+  padding:var(--sp-3) var(--sp-4); border-top:1px solid var(--line); background:var(--surface); }
+.step-nav.active { display:flex; }
 .step-nav .btn { flex:1; padding:7px 0; text-align:center; }
 
 /* ---- import drop zone ---- */
@@ -496,6 +590,117 @@ label.radio-inline { cursor:pointer; }
 .pe-grid input { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line);
   border-radius:4px; padding:4px 2px; font-size:10.5px; text-align:center; font-family:var(--font-ui); }
 .pe-grid input:focus { border-color:var(--accent-purple); outline:none; }
+
+/* =========================================================================
+   Custom printer import/edit -- sidebar meta row + review modal. Ordinary
+   --accent blue chrome (--accent-purple stays reserved for Point Edit).
+   --ok/--warn/--danger are used here only for the safety report and the
+   parsed/default/clamped source tags, which is exactly their reserved
+   purpose (see :root comment above).
+   ========================================================================= */
+.pm-meta { margin-top:var(--sp-2); padding-top:var(--sp-2); border-top:1px solid var(--line); }
+.pm-meta-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.pm-meta-source { font-size:11px; color:var(--ink-muted); }
+.pm-meta-actions { display:flex; gap:var(--sp-3); margin-top:4px; }
+.pm-link { background:none; border:none; padding:0; margin:0; font-size:11px; font-weight:600;
+  color:var(--accent-hover); cursor:pointer; font-family:var(--font-ui); }
+.pm-link:hover { text-decoration:underline; }
+.pm-link-danger { color:var(--ink-muted); }
+.pm-link-danger:hover { color:var(--danger); }
+.pm-link-confirm { color:var(--danger); }
+
+.pm-modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; }
+.pm-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
+.pm-modal-card { position:relative; width:min(760px, 94vw); max-height:88vh; display:flex; flex-direction:column;
+  background:var(--surface); border:1px solid var(--accent); border-radius:var(--radius-lg);
+  box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden; }
+.pm-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4);
+  border-bottom:1px solid var(--line); flex:none; }
+.pm-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+.pm-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4); }
+.pm-modal-footer { display:flex; justify-content:flex-end; gap:8px; padding:var(--sp-3) var(--sp-4);
+  border-top:1px solid var(--line); flex:none; }
+
+.pm-drop { margin-bottom:0; }
+.pm-error { margin-top:var(--sp-3); font-size:12px; color:var(--danger); }
+
+.pm-review-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:var(--sp-3); }
+.pm-name-input { flex:1 1 160px; min-width:0; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:6px; padding:6px 8px; font-size:13px; }
+.pm-name-input:focus { border-color:var(--accent); outline:none; }
+.pm-badge { flex:0 0 auto; font-size:10.5px; font-family:var(--font-mono); text-transform:uppercase;
+  letter-spacing:.06em; color:var(--ink-muted); background:var(--surface-raised); border:1px solid var(--line);
+  border-radius:999px; padding:3px 9px; }
+
+.pm-report { margin-bottom:var(--sp-4); border:1px solid var(--line); border-radius:var(--radius-lg);
+  padding:var(--sp-3); background:var(--surface-raised); }
+.pm-report-ok { font-size:12px; color:var(--ok); }
+.pm-report-head { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--ink-muted); margin:var(--sp-2) 0 4px; }
+.pm-report-head:first-child { margin-top:0; }
+.pm-report-head-error { color:var(--danger); }
+.pm-report-head-warn { color:var(--warn); }
+.pm-issue { display:flex; flex-wrap:wrap; align-items:center; gap:8px; width:100%;
+  border-left:2px solid var(--line); color:var(--ink); font-size:12px;
+  line-height:1.4; padding:4px 0 4px 8px; margin-bottom:2px; }
+.pm-issue-msg { flex:1 1 auto; text-align:left; background:none; border:none; padding:0; margin:0;
+  color:var(--ink); font-size:12px; font-family:var(--font-ui); line-height:1.4; }
+button.pm-issue-msg { cursor:pointer; }
+button.pm-issue-msg:hover { text-decoration:underline; }
+.pm-issue-error { border-left-color:var(--danger); }
+.pm-issue-warn { border-left-color:var(--warn); }
+.pm-quickfix { flex:0 0 auto; border:1px solid var(--accent); color:var(--accent-hover); background:none;
+  border-radius:6px; padding:2px 8px; font-size:10.5px; font-weight:600; cursor:pointer; font-family:var(--font-ui); }
+.pm-quickfix:hover { background:rgba(47,107,255,.12); }
+
+.pm-group-head { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--ink-muted); font-family:var(--font-mono); margin:var(--sp-3) 0 2px; }
+.pm-group-head:first-child { margin-top:0; }
+.pm-field-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 10px;
+  font-size:12px; padding:5px 0; border-bottom:1px solid var(--line); }
+.pm-field-label { color:var(--ink-muted); flex:1 1 140px; min-width:0; }
+.pm-field-control { display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+.pm-field-input { background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:6px;
+  padding:3px 5px; font-size:12px; width:92px; }
+.pm-field-input:focus { border-color:var(--accent); outline:none; }
+select.pm-field-input { width:116px; padding-right:24px; }
+.pm-tag { flex:0 0 auto; font-size:10px; font-family:var(--font-mono); text-transform:uppercase;
+  letter-spacing:.04em; padding:2px 6px; border-radius:999px; color:var(--ink-muted);
+  background:var(--surface-raised); border:1px solid var(--line); cursor:default; }
+.pm-tag-default, .pm-tag-clamped { color:var(--warn); border-color:rgba(255,180,84,.4); }
+.pm-tag-warn { color:var(--warn); border-color:rgba(255,180,84,.4); }
+/* An override the user typed themselves: neither imported nor invented, so it
+   reads in the neutral accent rather than the amber "we chose this" state. */
+.pm-tag-edited { color:var(--accent); border-color:rgba(47,107,255,.45); }
+
+.pm-gcode-block { margin-top:var(--sp-3); }
+.pm-gcode-label { font-size:11px; color:var(--ink-muted); margin-bottom:4px; }
+.pm-gcode-textarea { width:100%; box-sizing:border-box; resize:vertical; background:var(--bg); color:var(--ink);
+  border:1px solid var(--line); border-radius:6px; padding:8px; font-family:var(--font-mono); font-size:11.5px;
+  line-height:1.5; }
+.pm-gcode-textarea:focus { border-color:var(--accent); outline:none; }
+
+.pm-stripped { margin-top:var(--sp-3); }
+.pm-stripped-toggle { width:100%; text-align:left; background:var(--surface-raised); border:1px solid var(--line);
+  color:var(--ink); border-radius:6px; padding:6px 10px; font-size:11.5px; font-weight:600; cursor:pointer;
+  font-family:var(--font-ui); }
+.pm-stripped-toggle:hover { border-color:var(--warn); }
+.pm-stripped-list { list-style:none; margin:6px 0 0; padding:0 0 0 10px; border-left:2px solid var(--warn);
+  font-family:var(--font-mono); font-size:11px; color:var(--ink-muted); }
+.pm-stripped-list li { padding:2px 0; }
+.pm-allow-raw { margin-top:var(--sp-2); font-size:12px; }
+
+/* ---- clearance stage (stage 3): schematic diagram + z_amp_max's one field ---- */
+.pm-clearance-svg { display:block; margin:10px auto 6px; width:100%; max-width:220px; height:auto; }
+.pmc-hatch-line { stroke:var(--line); stroke-width:1; }
+.pmc-fill { fill:url(#pm-hatch); stroke:var(--line); stroke-width:1; }
+.pmc-surface { stroke:var(--ink-muted); stroke-width:1; stroke-dasharray:4 3; }
+.pmc-hardware { fill:var(--surface-raised); stroke:var(--ink-muted); stroke-width:1; }
+.pmc-tip { fill:var(--accent); }
+.pmc-dim { stroke:var(--accent); stroke-width:1; fill:none; }
+.pmc-label { font-family:var(--font-ui); font-size:8px; }
+.pmc-label-accent { fill:var(--accent-hover); font-weight:600; }
+.pmc-caption { margin-bottom:var(--sp-2); }
 
 /* =========================================================================
    Collapsible sections — every h3.section-heading and .group h2 that owns

@@ -1,7 +1,22 @@
 (function(){
   'use strict';
-  var PROBE_LIMIT = 0.95;  // wave amplitude ceiling (mm) -- user limit < 1mm
+  // Bootstrap-only ceiling used for the very first synchronous render of the
+  // amp curve editor, before /api/printers has resolved (the default printer
+  // is "trident", whose z_amp_max happens to be this same 0.95, so there is
+  // no visible flash). Every printer switch after that goes through
+  // applyPrinterCaps() -> ampEditor.setRange(), driven entirely by the
+  // server's per-printer z_amp_max -- this constant is never consulted again.
+  var PROBE_LIMIT = 0.95;
   var AMP_MAX = 0.95, RAD_LO = 0.5, RAD_HI = 1.3;
+
+  // Formats a millimeter ceiling the way the machine bar / notices / hints
+  // want it: "0.95", "4.0", "0.40" -- two decimals, trimmed to one only when
+  // the second is a redundant zero (x.y0 stays, x.00 becomes x.0).
+  function fmtMm(v){
+    var s = (Math.round(v * 100) / 100).toFixed(2);
+    if(s.slice(-2) === '00') s = s.slice(0, -1);
+    return s;
+  }
 
   // ---- central design state ----------------------------------------------
   var design = {
@@ -246,7 +261,9 @@
 
   // Arm the draft preview on the first real user interaction with any design
   // or printer control (init-time fetch callbacks never arm it).
-  ['printer-group', 'design-group'].forEach(function(id){
+  // The machine bar lives inside #design-group now (above the step wizard,
+  // not its own #printer-group), so a single listener already covers it.
+  ['design-group'].forEach(function(id){
     var g = document.getElementById(id);
     if(!g) return;
     // Capture phase: arm BEFORE the control's own change handler runs its
@@ -321,6 +338,11 @@
       design: document.getElementById('mode-design'),
       viewer: document.getElementById('mode-viewer')
     };
+    // #step-nav lives outside #panel-scroll now (pinned to the bottom of
+    // #panel, see index.html/style.css) so it is no longer a .mode-panel
+    // that display:none/.active toggling covers automatically -- drive it
+    // from the same activateMode() switch so it still only shows in Design.
+    var stepNavEl = document.getElementById('step-nav');
     function activateMode(name){
       if(!panels[name]) name = 'design';
       btns.forEach(function(btn){
@@ -330,6 +352,7 @@
       for(var k in panels){
         if(panels[k]) panels[k].classList.toggle('active', k === name);
       }
+      if(stepNavEl) stepNavEl.classList.toggle('active', name === 'design');
       try { localStorage.setItem('app-mode', name); } catch(e){}
       if(name === 'viewer'){
         // Viewing the generated G-code: drop the live blue draft so the
@@ -484,7 +507,8 @@
   registerSection('zwaves', document.getElementById('sec-head-zwaves'), document.getElementById('sec-body-zwaves'), false);
   registerSection('texturepattern', document.getElementById('sec-head-texturepattern'), document.getElementById('sec-body-texturepattern'), true);
   registerSection('cooling', document.getElementById('sec-head-cooling'), document.getElementById('sec-body-cooling'), true);
-  registerSection('printer', document.getElementById('sec-head-printer'), document.getElementById('sec-body-printer'), true);
+  // No 'printer' section anymore -- the printer now lives in the always-on
+  // #machine-bar, not a collapsible group (see B.1 in the machine-limits spec).
   registerSection('printstats', document.getElementById('sec-head-printstats'), document.getElementById('sec-body-printstats'), true);
   registerSection('display', document.getElementById('sec-head-display'), document.getElementById('sec-body-display'), true);
 
@@ -574,78 +598,1082 @@
     });
   }
 
-  // ---- printer dropdown ---------------------------------------------------
-  var printerSel = document.getElementById('d-printer');
+  // ---- printer combobox -----------------------------------------------------
+  // A custom listbox, not a native <select> -- the printer list is now ~17
+  // rows (14 printers + 3 group headers, more with custom printers added),
+  // and a native select's OS-drawn popup runs past the bottom of a short
+  // window with no way to fix it from CSS. Built on the same bounded/
+  // scrolling/keyboard-navigable listbox pattern as .param-search-results.
+  var printerComboBtn = document.getElementById('printer-combo-btn');
+  var printerComboLabel = document.getElementById('printer-combo-label');
+  var printerComboList = document.getElementById('printer-combo-list');
+  var printerCombo = document.getElementById('printer-combo');
+  var printerComboOptions = [];   // flat, header-free, in DOM order: [{key,name,el}]
+  var printerComboActiveIdx = -1; // keyboard/hover highlighted row, NOT necessarily the selection
+  var printerComboOpenState = false;
   var PRINTER_BEDS = {};   // key -> [bed_x, bed_y]
   var PRINTER_ZCAP = {};   // key -> max Z excursion below printed material (mm)
+  var PRINTER_META = {};   // key -> full /api/printers entry (custom, source_format, warnings)
 
-  // The machine's z-amp ceiling caps how far loop stitches may dip (and with
-  // it the useful row height). Reflect it on the inputs so the arrows stop at
-  // the real limit; the server clamps authoritatively either way.
+  // Prefers the server-computed loop_row_max/loop_up_max (see /api/printers)
+  // so the client never re-derives the formula and the two can never drift.
+  // Falls back to deriving from z_amp_max with the same formula the server
+  // uses, in case an older /api/printers response doesn't carry them yet.
+  function loopCapsFor(meta, cap){
+    var up = (meta && typeof meta.loop_up_max === 'number') ? meta.loop_up_max : cap;
+    var row = (meta && typeof meta.loop_row_max === 'number') ? meta.loop_row_max : Math.max(0.4, cap - 0.3);
+    return { up: up, row: row };
+  }
+
+  // The machine's z-amp ceiling is the single source of truth for every Z-
+  // excursion control: the loop row/height inputs' min/max AND the amp curve
+  // editor's scale + control points. Reflect it everywhere so the UI can
+  // never suggest a value the server would reject or silently clamp -- and
+  // clamp anything already sitting out of range (switching TO a stricter
+  // printer must not leave stale over-limit values in the inputs). Returns
+  // the number of values actually changed, so the caller can tell the user.
   function applyPrinterCaps(){
     var cap = PRINTER_ZCAP[design.printer];
-    if(!cap) return;
+    if(!cap) return 0;
+    var meta = PRINTER_META[design.printer];
+    var caps = loopCapsFor(meta, cap);
+    var changed = 0;
+
     var up = document.getElementById('d-loop-up');
     var row = document.getElementById('d-loop-row');
-    if(up) up.max = cap;
-    if(row) row.max = Math.round(Math.max(cap - 0.3, 0.4) * 100) / 100;
+    var floorUp = Math.min(1.0, caps.up);
+    var floorRow = Math.min(1.0, caps.row);
+    if(up){
+      up.min = floorUp;
+      up.max = Math.round(caps.up * 100) / 100;
+      var uv = parseFloat(up.value);
+      if(!isNaN(uv)){
+        var cu = Math.min(caps.up, Math.max(floorUp, uv));
+        if(cu !== uv){ up.value = cu; design.loop_up = cu; changed++; }
+      }
+    }
+    if(row){
+      row.min = floorRow;
+      row.max = Math.round(caps.row * 100) / 100;
+      var rv = parseFloat(row.value);
+      if(!isNaN(rv)){
+        var cr = Math.min(caps.row, Math.max(floorRow, rv));
+        if(cr !== rv){ row.value = cr; design.loop_row = cr; changed++; }
+      }
+    }
     var note = document.getElementById('loop-zcap');
     if(note){
-      note.textContent = 'This printer allows loops up to ' + cap +
-        'mm tall' + (cap < 1.5 ? ' (probe keep-out limit)' : '') + '.';
+      var mname = (meta && meta.name) || 'This printer';
+      note.textContent = mname + ' allows loops up to ' + fmtMm(caps.up) +
+        'mm tall' + (caps.up < 1.5 ? ' (probe keep-out limit)' : '') + '.';
+    }
+
+    // Amp curve: rescale the editor to the new ceiling and re-clamp every
+    // control point into it, not just a number input -- the amp value lives
+    // entirely in amp_profile's control points, there is no separate field.
+    if(typeof ampEditor !== 'undefined' && ampEditor){
+      changed += ampEditor.setRange(cap, cap, 'amp limit ' + fmtMm(cap));
+      design.amp_profile = ampEditor.profile();
+    }
+    var ampHint = document.getElementById('amp-limit-hint');
+    if(ampHint){
+      ampHint.textContent = 'max ' + fmtMm(cap) + ' mm - ' +
+        ((meta && meta.name) || 'selected printer') + ' probe keep-out';
+    }
+
+    return changed;
+  }
+
+  // Line 2 of the machine bar: bed WxD, Z<z_max>, amp <= <z_amp_max>mm --
+  // every value comes straight from the /api/printers entry for the
+  // selected key, never a hardcoded constant.
+  function updateMachineSummary(){
+    var el = document.getElementById('mb-summary');
+    if(!el) return;
+    var meta = PRINTER_META[design.printer];
+    var bed = (meta && meta.bed) || PRINTER_BEDS[design.printer];
+    var cap = PRINTER_ZCAP[design.printer];
+    if(!bed && typeof cap !== 'number'){ el.textContent = '–'; return; }
+    var bedTxt = bed ? (bed[0] + 'x' + bed[1]) : '?';
+    var zTxt = (meta && typeof meta.z_max === 'number') ? meta.z_max : '?';
+    var ampTxt = (typeof cap === 'number') ? fmtMm(cap) : '?';
+    el.textContent = bedTxt + ' — Z' + zTxt + ' — amp <= ' + ampTxt + 'mm';
+  }
+
+  // Brief, dismissable "what changed" notice in the machine bar -- shown
+  // whenever a printer switch either clamped values to fit or opened up new
+  // headroom. Never a window.alert.
+  var machineNoticeTimer = null;
+  function hideMachineNotice(){
+    var el = document.getElementById('mb-notice');
+    if(!el) return;
+    if(machineNoticeTimer){ clearTimeout(machineNoticeTimer); machineNoticeTimer = null; }
+    el.style.display = 'none';
+    el.textContent = '';
+  }
+  function showMachineNotice(prevName, newName, prevCap, newCap, changedCount){
+    var el = document.getElementById('mb-notice');
+    if(!el) return;
+    var msg, warn;
+    if(newCap < prevCap && changedCount > 0){
+      warn = true;
+      msg = 'Switched to ' + newName + ' — amplitude ceiling ' + fmtMm(prevCap) + ' -> ' +
+        fmtMm(newCap) + ' mm. ' + changedCount + (changedCount === 1 ? ' value was' : ' values were') +
+        ' clamped to fit.';
+    } else if(newCap > prevCap){
+      warn = false;
+      msg = 'Switched to ' + newName + ' — amplitude ceiling ' + fmtMm(prevCap) + ' -> ' +
+        fmtMm(newCap) + ' mm. More headroom is available in the Texture step.';
+    } else if(changedCount > 0){
+      warn = true;
+      msg = 'Switched to ' + newName + ' — ' + changedCount +
+        (changedCount === 1 ? ' value was' : ' values were') + ' clamped to fit.';
+    } else {
+      // Ceiling unchanged and nothing needed clamping -- nothing to say about
+      // THIS switch. Clear any notice still standing from a previous one:
+      // leaving it up would caption the newly-selected machine with another
+      // machine's transition (seen switching Ender 3 -> K1 Max, which share a
+      // 1.0 mm ceiling: the Ender 3 notice stayed on screen).
+      hideMachineNotice();
+      return;
+    }
+    el.className = 'mb-notice ' + (warn ? 'mb-notice-warn' : 'mb-notice-ok');
+    el.innerHTML = '';
+    var span = document.createElement('span');
+    span.className = 'mb-notice-msg';
+    span.textContent = msg;
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'mb-notice-close';
+    closeBtn.setAttribute('aria-label', 'Dismiss');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', function(){ el.style.display = 'none'; });
+    el.appendChild(span);
+    el.appendChild(closeBtn);
+    el.style.display = '';
+    if(machineNoticeTimer) clearTimeout(machineNoticeTimer);
+    machineNoticeTimer = setTimeout(function(){ el.style.display = 'none'; }, 8000);
+  }
+
+  var FORMAT_LABELS = {
+    klipper_cfg: 'printer.cfg', orca_json: 'Orca/Bambu Studio JSON',
+    prusa_ini: 'PrusaSlicer INI', trident_json: 'Trident export'
+  };
+
+  // Shown only when the selected printer is custom: source format, a
+  // warnings chip, and the Edit/Export/Delete row.
+  function updatePrinterMeta(){
+    var host = document.getElementById('printer-meta');
+    if(!host) return;
+    var meta = PRINTER_META[design.printer];
+    if(!meta || !meta.custom){
+      host.style.display = 'none';
+      return;
+    }
+    host.style.display = '';
+    var src = document.getElementById('printer-meta-source');
+    if(src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
+    var warn = document.getElementById('printer-meta-warn');
+    if(warn){
+      if(meta.warnings > 0){
+        warn.style.display = '';
+        warn.textContent = meta.warnings + (meta.warnings === 1 ? ' warning' : ' warnings');
+      } else {
+        warn.style.display = 'none';
+      }
     }
   }
 
-  if(printerSel){
-    fetch('/api/printers').then(function(r){ return r.json(); }).then(function(j){
-      printerSel.innerHTML = '';
-      // Group options like Bambu Studio / OGcode: brand-prefixed printers get
-      // their own optgroup, everything else falls into "Other".
-      var groups = {}, groupOrder = [];
-      function groupFor(name){
-        if(name.indexOf('Bambu Lab') === 0) return 'Bambu Lab';
-        if(name.indexOf('Voron') === 0) return 'Voron';
+  // Updates the button label and each option's aria-selected/checkmark to
+  // reflect `key` as the current value -- pure display, no side effects
+  // (bed size, caps, persistence, notices). Used wherever the old code did
+  // `printerSel.value = key` without going through the change handler:
+  // populating/repopulating the list and restoring a saved design.
+  function setPrinterComboValue(key){
+    var found = null;
+    printerComboOptions.forEach(function(o){
+      var selected = o.key === key;
+      o.el.setAttribute('aria-selected', selected ? 'true' : 'false');
+      if(selected) found = o;
+    });
+    printerComboLabel.textContent = found ? found.name :
+      ((PRINTER_META[key] && PRINTER_META[key].name) || key || '–');
+  }
+
+  function printerComboIndexOf(key){
+    for(var i = 0; i < printerComboOptions.length; i++){
+      if(printerComboOptions[i].key === key) return i;
+    }
+    return -1;
+  }
+
+  // Positions the open list so it always fits the viewport: opens downward
+  // by default, flips upward when there is more room above the button than
+  // below (the actual bug -- a 17-row list opened from a button mid-panel
+  // ran past the bottom of a short window). max-height is capped at the
+  // lesser of 320px and whatever room is actually available, so the list
+  // itself never runs off-screen even in the direction it opens toward.
+  // Recomputed on resize while open.
+  function positionPrinterCombo(){
+    if(!printerComboOpenState) return;
+    var btnRect = printerComboBtn.getBoundingClientRect();
+    var spaceBelow = window.innerHeight - btnRect.bottom - 8;
+    var spaceAbove = btnRect.top - 8;
+    var openUp = spaceAbove > spaceBelow;
+    var avail = Math.max(60, openUp ? spaceAbove : spaceBelow);
+    printerComboList.style.maxHeight = Math.min(320, avail) + 'px';
+    if(openUp){
+      printerComboList.style.bottom = 'calc(100% + 4px)';
+      printerComboList.style.top = 'auto';
+    } else {
+      printerComboList.style.top = 'calc(100% + 4px)';
+      printerComboList.style.bottom = 'auto';
+    }
+  }
+
+  // Keyboard/hover "virtual focus" row -- distinct from the persistent
+  // aria-selected value (see setPrinterComboValue). Skips group headers
+  // automatically since only real options are ever indexed here.
+  function setPrinterComboActive(idx){
+    if(!printerComboOptions.length) return;
+    if(idx < 0) idx = 0;
+    if(idx > printerComboOptions.length - 1) idx = printerComboOptions.length - 1;
+    printerComboOptions.forEach(function(o){ o.el.classList.remove('active'); });
+    printerComboActiveIdx = idx;
+    var o = printerComboOptions[idx];
+    o.el.classList.add('active');
+    printerComboBtn.setAttribute('aria-activedescendant', o.el.id);
+    if(o.el.scrollIntoView) o.el.scrollIntoView({ block: 'nearest' });
+  }
+
+  function closePrinterCombo(){
+    if(!printerComboOpenState) return;
+    printerComboOpenState = false;
+    printerComboList.classList.remove('open');
+    printerComboBtn.setAttribute('aria-expanded', 'false');
+    printerComboBtn.removeAttribute('aria-activedescendant');
+    document.removeEventListener('mousedown', onPrinterComboDocMouseDown, true);
+    window.removeEventListener('resize', positionPrinterCombo);
+  }
+
+  function onPrinterComboDocMouseDown(e){
+    if(printerCombo.contains(e.target)) return;
+    closePrinterCombo();
+  }
+
+  function openPrinterCombo(){
+    if(printerComboOpenState || !printerComboOptions.length) return;
+    printerComboOpenState = true;
+    printerComboList.classList.add('open');
+    printerComboBtn.setAttribute('aria-expanded', 'true');
+    positionPrinterCombo();
+    setPrinterComboActive(printerComboIndexOf(design.printer));
+    document.addEventListener('mousedown', onPrinterComboDocMouseDown, true);
+    window.addEventListener('resize', positionPrinterCombo);
+  }
+
+  function printerComboTypeAhead(letter){
+    var lower = letter.toLowerCase();
+    var n = printerComboOptions.length;
+    for(var step = 1; step <= n; step++){
+      var idx = (printerComboActiveIdx + step) % n;
+      if(printerComboOptions[idx].name.toLowerCase().indexOf(lower) === 0){
+        setPrinterComboActive(idx);
+        return;
+      }
+    }
+  }
+
+  // The one true "user picked a printer" handler -- runs exactly the logic
+  // the old native-select 'change' listener ran (bed size, caps, clamping,
+  // notice, meta, persist, preview). Called from both ways an option can be
+  // chosen: clicking it, and Enter/Space on the keyboard-active row. Mirrors
+  // a native <select> in not doing anything when the value doesn't actually
+  // change (reselecting the current printer fires no 'change' event either).
+  function selectPrinter(key){
+    if(!PRINTER_BEDS.hasOwnProperty(key) || key === design.printer) return;
+    // Snapshot the outgoing printer's name/ceiling before switching -- the
+    // post-switch notice needs both the old and new numbers to say what
+    // changed (B.3: clamped-down vs. more-headroom read very differently).
+    var prevKey = design.printer;
+    var prevCap = PRINTER_ZCAP[prevKey];
+    var prevName = (PRINTER_META[prevKey] && PRINTER_META[prevKey].name) || prevKey;
+
+    design.printer = key;
+    setPrinterComboValue(key);
+    if(PRINTER_BEDS[design.printer] && typeof window.setPreviewBedSize === 'function'){
+      window.setPreviewBedSize(PRINTER_BEDS[design.printer][0], PRINTER_BEDS[design.printer][1]);
+    }
+    if(PRINTER_BEDS[design.printer]){
+      design.bed_center = [PRINTER_BEDS[design.printer][0]/2, PRINTER_BEDS[design.printer][1]/2];
+    }
+    var changed = applyPrinterCaps();
+    updatePrinterMeta();
+    updateMachineSummary();
+    persistDesign();
+    schedulePreview();
+
+    var newCap = PRINTER_ZCAP[design.printer];
+    var newName = (PRINTER_META[design.printer] && PRINTER_META[design.printer].name) || design.printer;
+    if(typeof prevCap === 'number' && typeof newCap === 'number' && prevKey !== design.printer){
+      showMachineNotice(prevName, newName, prevCap, newCap, changed || 0);
+    }
+  }
+
+  // Repopulates the printer list from /api/printers (built-ins grouped by
+  // brand as before, plus a "Custom" group last for saved custom printers).
+  // Shared by initial load and by the add/edit/delete modal so a save or
+  // delete refreshes the list without a page reload. preferKey, if given
+  // and still valid after the refetch, becomes the new selection (used right
+  // after a save); otherwise the previous design.printer is kept if it still
+  // exists, falling back to the server default (used after a delete).
+  function loadPrinterOptions(preferKey){
+    return fetch('/api/printers').then(function(r){ return r.json(); }).then(function(j){
+      printerComboList.innerHTML = '';
+      printerComboOptions = [];
+      // Group like Bambu Studio / OGcode: brand-prefixed printers get their
+      // own group, everything else falls into "Other"; custom printers
+      // always get their own group, placed last.
+      var byGroup = {}, groupOrder = [];
+      function groupFor(p){
+        if(p.custom) return 'Custom';
+        if((p.name || '').indexOf('Bambu Lab') === 0) return 'Bambu Lab';
+        if((p.name || '').indexOf('Creality') === 0) return 'Creality';
+        if((p.name || '').indexOf('Voron') === 0) return 'Voron';
         return 'Other';
       }
+      PRINTER_BEDS = {}; PRINTER_ZCAP = {}; PRINTER_META = {};
       (j.printers||[]).forEach(function(p){
         PRINTER_BEDS[p.key] = p.bed;
         PRINTER_ZCAP[p.key] = p.z_amp_max || 0.95;
-        var gname = groupFor(p.name || '');
-        if(!groups[gname]){
-          groups[gname] = document.createElement('optgroup');
-          groups[gname].label = gname;
-          groupOrder.push(gname);
-        }
-        var o = document.createElement('option');
-        o.value = p.key; o.textContent = p.name;
-        groups[gname].appendChild(o);
+        PRINTER_META[p.key] = p;
+        var gname = groupFor(p);
+        if(!byGroup[gname]){ byGroup[gname] = []; groupOrder.push(gname); }
+        byGroup[gname].push(p);
       });
-      groupOrder.forEach(function(g){ printerSel.appendChild(groups[g]); });
-      var key = design.printer && PRINTER_BEDS[design.printer] ? design.printer : (j.default || 'trident');
+      var customIdx = groupOrder.indexOf('Custom');
+      if(customIdx !== -1){ groupOrder.splice(customIdx, 1); groupOrder.push('Custom'); }
+      groupOrder.forEach(function(gname){
+        var head = document.createElement('div');
+        head.className = 'mb-combo-group';
+        head.textContent = gname;
+        printerComboList.appendChild(head);
+        byGroup[gname].forEach(function(p){
+          var opt = document.createElement('div');
+          opt.className = 'mb-combo-option';
+          opt.id = 'printer-combo-opt-' + p.key;
+          opt.textContent = p.name;
+          opt.setAttribute('role', 'option');
+          opt.setAttribute('aria-selected', 'false');
+          opt.dataset.key = p.key;
+          opt.addEventListener('click', function(){
+            selectPrinter(p.key);
+            closePrinterCombo();
+            printerComboBtn.focus();
+          });
+          printerComboList.appendChild(opt);
+          printerComboOptions.push({ key: p.key, name: p.name, el: opt });
+        });
+      });
+      var wanted = preferKey || design.printer;
+      var key = wanted && PRINTER_BEDS[wanted] ? wanted : (j.default || 'trident');
       design.printer = key;
-      printerSel.value = key;
+      setPrinterComboValue(key);
       if(PRINTER_BEDS[key] && typeof window.setPreviewBedSize === 'function'){
         window.setPreviewBedSize(PRINTER_BEDS[key][0], PRINTER_BEDS[key][1]);
       }
       if(PRINTER_BEDS[key]) design.bed_center = [PRINTER_BEDS[key][0]/2, PRINTER_BEDS[key][1]/2];
       applyPrinterCaps();
+      updatePrinterMeta();
+      updateMachineSummary();
       persistDesign();
       schedulePreview();
-    }).catch(function(){ /* keep static option, if any */ });
-
-    printerSel.addEventListener('change', function(){
-      design.printer = printerSel.value;
-      if(PRINTER_BEDS[design.printer] && typeof window.setPreviewBedSize === 'function'){
-        window.setPreviewBedSize(PRINTER_BEDS[design.printer][0], PRINTER_BEDS[design.printer][1]);
-      }
-      if(PRINTER_BEDS[design.printer]){
-        design.bed_center = [PRINTER_BEDS[design.printer][0]/2, PRINTER_BEDS[design.printer][1]/2];
-      }
-      applyPrinterCaps();
-      persistDesign();
-      schedulePreview();
+      return j;
     });
   }
+
+  if(printerComboBtn && printerComboList){
+    loadPrinterOptions().catch(function(){ /* keep static option, if any */ });
+
+    printerComboBtn.addEventListener('click', function(){
+      if(printerComboOpenState) closePrinterCombo(); else openPrinterCombo();
+    });
+
+    printerComboBtn.addEventListener('keydown', function(e){
+      switch(e.key){
+        case 'ArrowDown':
+          e.preventDefault();
+          if(!printerComboOpenState) openPrinterCombo();
+          else setPrinterComboActive(printerComboActiveIdx + 1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if(!printerComboOpenState) openPrinterCombo();
+          else setPrinterComboActive(printerComboActiveIdx - 1);
+          break;
+        case 'Home':
+          if(printerComboOpenState){ e.preventDefault(); setPrinterComboActive(0); }
+          break;
+        case 'End':
+          if(printerComboOpenState){ e.preventDefault(); setPrinterComboActive(printerComboOptions.length - 1); }
+          break;
+        case 'Enter':
+        case ' ':
+        case 'Spacebar':
+          e.preventDefault();
+          if(printerComboOpenState){
+            var active = printerComboOptions[printerComboActiveIdx];
+            if(active) selectPrinter(active.key);
+            closePrinterCombo();
+          } else {
+            openPrinterCombo();
+          }
+          break;
+        case 'Escape':
+          if(printerComboOpenState){ e.preventDefault(); closePrinterCombo(); }
+          break;
+        case 'Tab':
+          closePrinterCombo();
+          break;
+        default:
+          if(printerComboOpenState && e.key && e.key.length === 1 && /[a-z0-9]/i.test(e.key)){
+            printerComboTypeAhead(e.key);
+          }
+      }
+    });
+  }
+
+  // ---- custom printer import/edit modal -----------------------------------
+  // Parses a Klipper/Orca/Prusa config (or a previously exported Trident
+  // printer JSON) via /api/printer/parse, walks the user through the safety
+  // report + field review, live-revalidates via /api/printer/validate as
+  // they edit, and saves via /api/printer/save. Mirrors the Point Edit
+  // modal's open/close plumbing but uses its own .pm-* chrome (--accent
+  // blue, not --accent-purple -- that is reserved for Point Edit).
+  (function(){
+    var modal = document.getElementById('printer-modal');
+    var addBtn = document.getElementById('printer-add-btn');
+    if(!modal || !addBtn) return;
+    var card = modal.querySelector('.pm-modal-card');
+    var backdrop = modal.querySelector('.pm-modal-backdrop');
+    var closeBtn = document.getElementById('pm-modal-close');
+    var cancelBtn = document.getElementById('pm-cancel-btn');
+    var saveBtn = document.getElementById('pm-save-btn');
+    var editBtn = document.getElementById('printer-edit-btn');
+    var exportBtn = document.getElementById('printer-export-btn');
+    var deleteBtn = document.getElementById('printer-delete-btn');
+    var backBtn = document.getElementById('pm-back-btn');
+    var titleEl = document.getElementById('pm-modal-title');
+    var dropStage = document.getElementById('pm-stage-drop');
+    var reviewStage = document.getElementById('pm-stage-review');
+    var clearanceStage = document.getElementById('pm-stage-clearance');
+    var clearanceInput = document.getElementById('pm-clearance-input');
+    var clearanceTag = document.getElementById('pm-clearance-tag');
+    var dropZone = document.getElementById('pm-drop');
+    var fileInput = document.getElementById('pm-file');
+    var parseErrorEl = document.getElementById('pm-parse-error');
+    var nameInput = document.getElementById('pm-name');
+    var formatBadge = document.getElementById('pm-format-badge');
+    var reportEl = document.getElementById('pm-report');
+    var fieldsEl = document.getElementById('pm-fields');
+    var startGcodeEl = document.getElementById('pm-start-gcode');
+    var endGcodeEl = document.getElementById('pm-end-gcode');
+    var strippedBlock = document.getElementById('pm-stripped');
+    var strippedToggle = document.getElementById('pm-stripped-toggle');
+    var strippedList = document.getElementById('pm-stripped-list');
+    var strippedCount = document.getElementById('pm-stripped-count');
+    var allowRawEl = document.getElementById('pm-allow-raw');
+
+    var PARSE_MAX_MB = 2;
+    var GROUP_ORDER = ['identity','volume','area','motion','hardware','probe','thermal','gcode'];
+    var GROUP_LABELS = {
+      identity: 'Identity', volume: 'Build volume', area: 'Safe print area',
+      motion: 'Motion limits', hardware: 'Hardware', probe: 'Probe & keep-out',
+      thermal: 'Temperature limits', gcode: 'G-code'
+    };
+    // Rendered elsewhere (name input header, textareas below, the dedicated
+    // clearance stage) or purely derived server-side (pa_gcode_style always
+    // tracks firmware) -- not shown as a generic field row. z_amp_max in
+    // particular must appear exactly once across the whole dialog, so it is
+    // skipped here and rendered only in #pm-stage-clearance (see B.5).
+    var FIELD_SKIP = { name: 1, start_gcode: 1, end_gcode: 1, pa_gcode_style: 1, z_amp_max: 1 };
+    var FIELD_BOOL = { has_probe: 1 };
+    var FIELD_SELECT = { firmware: ['klipper', 'marlin', 'bambu_marlin'] };
+
+    var pmState = null;
+    var pmSeq = 0;
+    var pmDebounceTimer = null;
+    var deleteConfirming = false;
+
+    function resetState(){
+      pmState = { mode: 'add', key: null, detectedFormat: null, sourceFile: null,
+        profile: null, fields: [], issues: [], strippedGcode: [], stage: 'drop' };
+      dropStage.style.display = '';
+      reviewStage.style.display = 'none';
+      clearanceStage.style.display = 'none';
+      titleEl.textContent = 'Add custom printer';
+      hideParseError();
+      fileInput.value = '';
+      allowRawEl.checked = false;
+      saveBtn.textContent = 'Next';
+      saveBtn.disabled = true;
+      saveBtn.title = '';
+      backBtn.style.display = 'none';
+      cancelBtn.style.display = '';
+      resetDeleteConfirm();
+    }
+
+    function showParseError(msg){ parseErrorEl.textContent = msg; parseErrorEl.style.display = ''; }
+    function hideParseError(){ parseErrorEl.style.display = 'none'; parseErrorEl.textContent = ''; }
+
+    function openModal(){
+      resetState();
+      modal.style.display = 'flex';
+      closeBtn.focus();
+    }
+    function closeModal(){
+      modal.style.display = 'none';
+      if(pmDebounceTimer){ clearTimeout(pmDebounceTimer); pmDebounceTimer = null; }
+      addBtn.focus();
+    }
+
+    addBtn.addEventListener('click', openModal);
+    if(closeBtn) closeBtn.addEventListener('click', closeModal);
+    if(cancelBtn) cancelBtn.addEventListener('click', closeModal);
+    if(backdrop) backdrop.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function(e){
+      if(modal.style.display === 'none') return;
+      if(e.key === 'Escape'){ closeModal(); return; }
+      if(e.key === 'Tab') trapFocus(e);
+    });
+
+    function trapFocus(e){
+      var all = card.querySelectorAll('button, input, select, textarea, [tabindex]');
+      var focusables = Array.prototype.filter.call(all, function(el){
+        return !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null;
+      });
+      if(!focusables.length) return;
+      var first = focusables[0], last = focusables[focusables.length - 1];
+      if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+    }
+
+    // ---- Stage A: drop / choose ------------------------------------------
+    dropZone.addEventListener('click', function(){ fileInput.click(); });
+    dropZone.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+    });
+    fileInput.addEventListener('change', function(e){
+      if(e.target.files.length) handleFile(e.target.files[0]);
+      e.target.value = '';
+    });
+    dropZone.addEventListener('dragover', function(e){
+      e.preventDefault(); e.stopPropagation(); dropZone.classList.add('hot');
+    });
+    dropZone.addEventListener('dragleave', function(){ dropZone.classList.remove('hot'); });
+    dropZone.addEventListener('drop', function(e){
+      e.preventDefault(); e.stopPropagation();
+      dropZone.classList.remove('hot');
+      var files = e.dataTransfer.files;
+      if(files.length) handleFile(files[0]);
+    });
+
+    function handleFile(file){
+      hideParseError();
+      if(file.size > PARSE_MAX_MB * 1024 * 1024){
+        showParseError('File too large (max ' + PARSE_MAX_MB + ' MB).');
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function(e){
+        fetch('/api/printer/parse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
+          body: e.target.result
+        }).then(function(r){
+          return r.json().then(function(j){ return { status: r.status, body: j }; });
+        }).then(function(res){
+          if(res.status !== 200 || !res.body || !res.body.profile){
+            showParseError((res.body && res.body.error) || 'Could not parse this file.');
+            return;
+          }
+          pmState.mode = 'add';
+          pmState.key = null;
+          pmState.detectedFormat = res.body.detected_format;
+          pmState.sourceFile = file.name;
+          applyServerResult(res.body);
+          enterReviewStage();
+        }).catch(function(err){ showParseError('Upload failed: ' + err); });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // ---- Stage B: review ---------------------------------------------------
+    function applyServerResult(resp){
+      pmState.profile = resp.profile;
+      pmState.fields = resp.fields || [];
+      pmState.issues = resp.issues || [];
+      pmState.strippedGcode = resp.stripped_gcode || [];
+    }
+
+    // Snapshot the provenance the IMPORT established. /api/printer/validate is
+    // handed a plain profile dict with no memory of where each number came
+    // from, so it can only ever answer "parsed" -- meaning one keystroke
+    // anywhere would otherwise relabel every conservative default and every
+    // clamped value as though the user's own config had supplied it. That is
+    // exactly the distinction this dialog exists to show, so it is pinned here
+    // and re-applied on every sync.
+    function snapshotProvenance(){
+      pmState.importedSource = {};
+      pmState.importedValue = {};
+      (pmState.fields || []).forEach(function(f){
+        pmState.importedSource[f.name] = f.source;
+        pmState.importedValue[f.name] = f.value;
+      });
+      // Same reason the tags are pinned: "clamped from 99999" and "not found,
+      // using a conservative default" can only be said about the ORIGINAL file.
+      // Re-validation sees a complete, in-range profile and reports almost
+      // nothing, so the import-time list is kept for the saved record.
+      pmState.importWarnings = (pmState.issues || [])
+        .filter(function(i){ return i.severity === 'warn'; })
+        .map(function(i){ return i.message; });
+    }
+
+    // A live clamp is always authoritative (it just happened). Otherwise a
+    // value the user changed reads "edited", and an untouched one keeps
+    // whatever the import said about it.
+    function effectiveSource(f){
+      if(f.source === 'clamped') return 'clamped';
+      if(!pmState.importedSource || !(f.name in pmState.importedSource)) return f.source;
+      var before = pmState.importedValue[f.name];
+      if(String(f.value) !== String(before)) return 'edited';
+      return pmState.importedSource[f.name];
+    }
+
+    function enterReviewStage(){
+      pmState.stage = 'review';
+      dropStage.style.display = 'none';
+      reviewStage.style.display = '';
+      clearanceStage.style.display = 'none';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : 'Review imported printer';
+      formatBadge.textContent = FORMAT_LABELS[pmState.detectedFormat] || pmState.detectedFormat || 'unknown format';
+      nameInput.value = (pmState.profile && pmState.profile.name) || '';
+      saveBtn.textContent = 'Next';
+      backBtn.style.display = 'none';
+      cancelBtn.style.display = '';
+      snapshotProvenance();
+      renderFields();
+      refreshFromState();
+      nameInput.focus();
+    }
+
+    // ---- Stage C: non-planar clearance -- z_amp_max's one and only field --
+    function findField(name){
+      var list = pmState.fields || [];
+      for(var i = 0; i < list.length; i++){ if(list[i].name === name) return list[i]; }
+      return null;
+    }
+
+    // Keeps the clearance input + its provenance tag in sync with the latest
+    // validated field (called from the initial stage entry and from every
+    // debounced revalidation afterwards, same as the review-stage rows).
+    function syncClearanceField(f){
+      if(!f || !clearanceInput) return;
+      if(document.activeElement !== clearanceInput) clearanceInput.value = (f.value == null ? '' : f.value);
+      if(clearanceTag){
+        var src = effectiveSource(f);
+        clearanceTag.className = 'pm-tag pm-tag-' + src;
+        clearanceTag.textContent = src;
+        clearanceTag.title = src === 'edited'
+          ? 'you changed this from the imported value ' + pmState.importedValue[f.name]
+          : (f.note || '');
+      }
+    }
+
+    function enterClearanceStage(){
+      pmState.stage = 'clearance';
+      reviewStage.style.display = 'none';
+      clearanceStage.style.display = '';
+      titleEl.textContent = 'Non-planar clearance';
+      saveBtn.textContent = 'Save printer';
+      backBtn.style.display = '';
+      cancelBtn.style.display = 'none';
+      syncClearanceField(findField('z_amp_max'));
+      if(clearanceInput) clearanceInput.focus();
+    }
+
+    function backToReviewStage(){
+      pmState.stage = 'review';
+      clearanceStage.style.display = 'none';
+      reviewStage.style.display = '';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : 'Review imported printer';
+      saveBtn.textContent = 'Next';
+      backBtn.style.display = 'none';
+      cancelBtn.style.display = '';
+    }
+    if(backBtn) backBtn.addEventListener('click', backToReviewStage);
+
+    // Rebuilds the field rows (the field SET is static -- the server always
+    // returns every PrinterProfile field, just with different sources/notes
+    // -- so this only needs to run once per stage-B entry; live revalidation
+    // afterwards updates values/tags in place via syncFields()).
+    function renderFields(){
+      fieldsEl.innerHTML = '';
+      var byGroup = {};
+      (pmState.fields || []).forEach(function(f){
+        if(FIELD_SKIP[f.name]) return;
+        if(!byGroup[f.group]) byGroup[f.group] = [];
+        byGroup[f.group].push(f);
+      });
+      GROUP_ORDER.forEach(function(g){
+        var list = byGroup[g];
+        if(!list || !list.length) return;
+        var h = document.createElement('div');
+        h.className = 'pm-group-head';
+        h.textContent = GROUP_LABELS[g] || g;
+        fieldsEl.appendChild(h);
+        list.forEach(function(f){ fieldsEl.appendChild(renderFieldRow(f)); });
+      });
+    }
+
+    function renderFieldRow(f){
+      var row = document.createElement('div');
+      row.className = 'pm-field-row';
+      row.id = 'pm-field-' + f.name;
+      var label = document.createElement('span');
+      label.className = 'pm-field-label';
+      label.textContent = f.label + (f.unit ? ' (' + f.unit + ')' : '');
+      row.appendChild(label);
+
+      var control = document.createElement('span');
+      control.className = 'pm-field-control';
+      var input;
+      if(FIELD_BOOL[f.name]){
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = !!f.value;
+        input.addEventListener('change', scheduleRevalidate);
+      } else if(FIELD_SELECT[f.name]){
+        input = document.createElement('select');
+        FIELD_SELECT[f.name].forEach(function(opt){
+          var o = document.createElement('option'); o.value = opt; o.textContent = opt;
+          input.appendChild(o);
+        });
+        input.value = f.value;
+        input.addEventListener('change', scheduleRevalidate);
+      } else {
+        input = document.createElement('input');
+        input.type = 'number';
+        input.step = 'any';
+        input.value = (f.value == null ? '' : f.value);
+        input.addEventListener('input', scheduleRevalidate);
+      }
+      input.className = 'pm-field-input';
+      input.setAttribute('data-field', f.name);
+      control.appendChild(input);
+
+      var tag = document.createElement('span');
+      var src0 = effectiveSource(f);
+      tag.className = 'pm-tag pm-tag-' + src0;
+      tag.textContent = src0;
+      if(f.note) tag.title = f.note;
+      control.appendChild(tag);
+
+      row.appendChild(control);
+      return row;
+    }
+
+    // Updates values (on fields whose input is not currently focused, so a
+    // debounced response never steals mid-typing focus/caret) and source
+    // tags in place -- does not rebuild the DOM (the field set never
+    // changes shape, only values/sources/notes).
+    function syncFields(fields){
+      (fields || []).forEach(function(f){
+        if(f.name === 'start_gcode' || f.name === 'end_gcode'){
+          var ta = f.name === 'start_gcode' ? startGcodeEl : endGcodeEl;
+          if(ta && document.activeElement !== ta) ta.value = f.value;
+          return;
+        }
+        // Lives in the dedicated clearance stage, not a generic field row --
+        // still needs to track live revalidation the same way every other
+        // field does, just into its own input/tag instead of a pm-field-row.
+        if(f.name === 'z_amp_max'){ syncClearanceField(f); return; }
+        if(FIELD_SKIP[f.name]) return;
+        var row = document.getElementById('pm-field-' + f.name);
+        if(!row) return;
+        var tag = row.querySelector('.pm-tag');
+        if(tag){
+          var src = effectiveSource(f);
+          tag.className = 'pm-tag pm-tag-' + src;
+          tag.textContent = src;
+          tag.title = src === 'edited'
+            ? 'you changed this from the imported value ' + pmState.importedValue[f.name]
+            : (f.note || '');
+        }
+        var input = row.querySelector('[data-field="' + f.name + '"]');
+        if(input && document.activeElement !== input){
+          if(input.type === 'checkbox') input.checked = !!f.value;
+          else input.value = (f.value == null ? '' : f.value);
+        }
+      });
+    }
+
+    function renderReport(){
+      reportEl.innerHTML = '';
+      var issues = pmState.issues || [];
+      if(!issues.length){
+        var ok = document.createElement('div');
+        ok.className = 'pm-report-ok';
+        ok.textContent = 'All safety checks passed.';
+        reportEl.appendChild(ok);
+        return;
+      }
+      var errors = issues.filter(function(i){ return i.severity === 'error'; });
+      var warns = issues.filter(function(i){ return i.severity !== 'error'; });
+      if(errors.length){
+        reportEl.appendChild(reportHead(errors.length + ' error(s)', 'pm-report-head-error'));
+        errors.forEach(function(i){ reportEl.appendChild(reportRow(i)); });
+      }
+      if(warns.length){
+        reportEl.appendChild(reportHead(warns.length + ' warning(s)', 'pm-report-head-warn'));
+        warns.forEach(function(i){ reportEl.appendChild(reportRow(i)); });
+      }
+    }
+    function reportHead(text, cls){
+      var h = document.createElement('div');
+      h.className = 'pm-report-head ' + cls;
+      h.textContent = text;
+      return h;
+    }
+    function reportRow(issue){
+      // A clickable "jump to field" element and the quick-fix buttons must be
+      // siblings, never a button nested inside a button (invalid HTML -- the
+      // browser silently un-nests it and breaks this DOM).
+      var clickable = !!issue.field;
+      var el = document.createElement('div');
+      el.className = 'pm-issue pm-issue-' + issue.severity;
+      var text = document.createElement(clickable ? 'button' : 'span');
+      if(clickable) text.type = 'button';
+      text.className = 'pm-issue-msg';
+      text.textContent = issue.message;
+      if(clickable) text.addEventListener('click', function(){ focusField(issue.field); });
+      el.appendChild(text);
+      if(issue.field === 'start_gcode'){
+        if(issue.message.indexOf('Add G28') !== -1){
+          el.appendChild(makeQuickFix('Insert G28', function(){
+            insertStartLine('G28                ; home all axes');
+          }));
+        }
+        if(issue.message.indexOf('M83') !== -1){
+          el.appendChild(makeQuickFix('Insert M83', function(){
+            insertStartLine('M83                ; relative extrusion');
+          }));
+        }
+      }
+      return el;
+    }
+    function makeQuickFix(label, onClick){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pm-quickfix';
+      b.textContent = label;
+      b.addEventListener('click', onClick);
+      return b;
+    }
+    function insertStartLine(line){
+      startGcodeEl.value = line + '\n' + startGcodeEl.value;
+      scheduleRevalidate();
+    }
+    function focusField(fieldName){
+      if(fieldName === 'start_gcode'){ startGcodeEl.scrollIntoView({block:'center'}); startGcodeEl.focus(); return; }
+      if(fieldName === 'end_gcode'){ endGcodeEl.scrollIntoView({block:'center'}); endGcodeEl.focus(); return; }
+      var row = document.getElementById('pm-field-' + fieldName);
+      if(!row) return;
+      row.scrollIntoView({block:'center'});
+      var input = row.querySelector('[data-field]');
+      if(input) input.focus();
+    }
+
+    function renderStripped(){
+      var names = pmState.strippedGcode || [];
+      if(!names.length){ strippedBlock.style.display = 'none'; return; }
+      strippedBlock.style.display = '';
+      strippedCount.textContent = names.length;
+      strippedList.innerHTML = '';
+      strippedList.style.display = 'none';
+      strippedToggle.setAttribute('aria-expanded', 'false');
+      var reasons = {};
+      (pmState.issues || []).forEach(function(i){
+        var m = /^removed '([^']+)': (.+)$/.exec(i.message);
+        if(m) reasons[m[1]] = m[2];
+      });
+      names.forEach(function(line){
+        var li = document.createElement('li');
+        var cmd = line.split(/\s+/)[0];
+        li.textContent = line + (reasons[cmd] ? ' - ' + reasons[cmd] : '');
+        strippedList.appendChild(li);
+      });
+    }
+    strippedToggle.addEventListener('click', function(){
+      var open = strippedList.style.display !== 'none';
+      strippedList.style.display = open ? 'none' : '';
+      strippedToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+
+    function updateSaveButtonState(){
+      var hasError = (pmState.issues || []).some(function(i){ return i.severity === 'error'; });
+      saveBtn.disabled = hasError;
+      saveBtn.title = hasError ? 'Fix the blocking error(s) in the safety report before saving.' : '';
+    }
+
+    function refreshFromState(){
+      syncFields(pmState.fields);
+      renderReport();
+      renderStripped();
+      updateSaveButtonState();
+    }
+
+    // ---- live revalidation (debounced, out-of-order-safe) ------------------
+    function collectProfileFromForm(){
+      var p = {};
+      if(pmState.profile) for(var k in pmState.profile) p[k] = pmState.profile[k];
+      p.name = nameInput.value;
+      // Queried from the whole card, not just #pm-fields -- the clearance
+      // stage's z_amp_max input lives outside #pm-fields (see B.5) but still
+      // carries a [data-field] attribute so it is picked up the same way.
+      var inputs = card.querySelectorAll('[data-field]');
+      Array.prototype.forEach.call(inputs, function(el){
+        var name = el.getAttribute('data-field');
+        if(el.type === 'checkbox') p[name] = el.checked;
+        else if(el.tagName === 'SELECT') p[name] = el.value;
+        else p[name] = el.value === '' ? null : parseFloat(el.value);
+      });
+      p.start_gcode = startGcodeEl.value;
+      p.end_gcode = endGcodeEl.value;
+      return p;
+    }
+
+    function scheduleRevalidate(){
+      if(pmDebounceTimer) clearTimeout(pmDebounceTimer);
+      pmDebounceTimer = setTimeout(runRevalidate, 350);
+    }
+    function runRevalidate(){
+      var mySeq = ++pmSeq;
+      var body = { profile: collectProfileFromForm(), allow_raw_gcode: !!allowRawEl.checked };
+      fetch('/api/printer/validate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      }).then(function(r){ return r.json(); }).then(function(j){
+        if(mySeq !== pmSeq) return; // a newer request already landed -- drop this stale one
+        applyServerResult(j);
+        refreshFromState();
+      }).catch(function(){ /* transient network error -- keep last known state */ });
+    }
+    if(nameInput) nameInput.addEventListener('input', scheduleRevalidate);
+    if(startGcodeEl) startGcodeEl.addEventListener('input', scheduleRevalidate);
+    if(endGcodeEl) endGcodeEl.addEventListener('input', scheduleRevalidate);
+    if(allowRawEl) allowRawEl.addEventListener('change', scheduleRevalidate);
+    if(clearanceInput) clearanceInput.addEventListener('input', scheduleRevalidate);
+
+    // ---- next / save ----------------------------------------------------
+    // saveBtn is the one primary action button in the footer, but it means
+    // two different things depending on stage: "Next" (review -> clearance)
+    // or "Save printer" (clearance -> actually saves). See B.5.
+    saveBtn.addEventListener('click', function(){
+      if(saveBtn.disabled) return;
+      if(pmState.stage !== 'clearance'){
+        enterClearanceStage();
+        return;
+      }
+      saveBtn.disabled = true;
+      var body = {
+        profile: collectProfileFromForm(),
+        allow_raw_gcode: !!allowRawEl.checked,
+        meta: {
+          source_format: pmState.detectedFormat,
+          source_file: pmState.sourceFile || '',
+          warnings: (pmState.importWarnings || []).concat(
+            (pmState.issues || [])
+              .filter(function(i){ return i.severity === 'warn'; })
+              .map(function(i){ return i.message; }))
+        }
+      };
+      if(pmState.mode === 'edit' && pmState.key) body.key = pmState.key;
+      fetch('/api/printer/save', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      }).then(function(r){
+        return r.json().then(function(j){ return { status: r.status, body: j }; });
+      }).then(function(res){
+        if(res.status !== 200 || !res.body.ok){
+          // The server re-validates from scratch and is authoritative -- if
+          // it disagrees with our last debounced snapshot, surface why. The
+          // report that explains it lives in the review stage, so send the
+          // user back there to see it rather than leaving them stranded on
+          // the clearance screen with no visible error.
+          pmState.issues = res.body.issues || pmState.issues;
+          backToReviewStage();
+          refreshFromState();
+          return;
+        }
+        return loadPrinterOptions(res.body.key).then(function(){ closeModal(); });
+      }).catch(function(err){
+        alert('Save failed: ' + err);
+        updateSaveButtonState();
+      });
+    });
+
+    // ---- edit / export / delete (sidebar meta row) --------------------
+    function openEditForKey(key){
+      resetState();
+      modal.style.display = 'flex';
+      closeBtn.focus();
+      fetch('/api/printer?key=' + encodeURIComponent(key)).then(function(r){ return r.json(); }).then(function(j){
+        if(!j.ok){ alert('Could not load printer: ' + (j.error || 'unknown error')); closeModal(); return; }
+        pmState.mode = 'edit';
+        pmState.key = key;
+        pmState.detectedFormat = j.meta && j.meta.source_format;
+        pmState.sourceFile = j.meta && j.meta.source_file;
+        return fetch('/api/printer/validate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profile: j.profile, allow_raw_gcode: false })
+        }).then(function(r2){ return r2.json(); }).then(function(vr){
+          applyServerResult(vr);
+          enterReviewStage();
+        });
+      }).catch(function(err){ alert('Could not load printer: ' + err); closeModal(); });
+    }
+    if(editBtn) editBtn.addEventListener('click', function(){ openEditForKey(design.printer); });
+    if(exportBtn) exportBtn.addEventListener('click', function(){
+      window.location.href = '/api/printer/export?key=' + encodeURIComponent(design.printer);
+    });
+
+    function resetDeleteConfirm(){
+      if(!deleteBtn) return;
+      deleteConfirming = false;
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.classList.remove('pm-link-confirm');
+    }
+    if(deleteBtn){
+      deleteBtn.addEventListener('click', function(){
+        if(!deleteConfirming){
+          deleteConfirming = true;
+          deleteBtn.textContent = 'Confirm?';
+          deleteBtn.classList.add('pm-link-confirm');
+          setTimeout(function(){ if(deleteConfirming) resetDeleteConfirm(); }, 3000);
+          return;
+        }
+        var key = design.printer;
+        resetDeleteConfirm();
+        fetch('/api/printer/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: key })
+        }).then(function(r){ return r.json(); }).then(function(j){
+          if(!j.ok){ alert('Delete failed: ' + (j.error || 'unknown error')); return; }
+          // Falls back to the server default automatically -- loadPrinterOptions
+          // drops any key that no longer exists in the refetched list.
+          loadPrinterOptions(null);
+        }).catch(function(err){ alert('Delete failed: ' + err); });
+      });
+    }
+  })();
 
   // ---- filament dropdown -------------------------------------------------
   var famSel = document.getElementById('d-filament');
@@ -830,6 +1858,23 @@
         pts[0].t = 0;
         pts[pts.length-1].t = 1.0;
         draw();
+      },
+      // Changes the editor's ceiling (e.g. a new printer's z_amp_max), the
+      // dashed reference line and its label, and re-clamps every existing
+      // control point into the new [lo, hi] range -- not just a paired
+      // number input, since the amp value lives entirely in these points.
+      // Returns how many points actually moved, so a caller can report it.
+      setRange: function(newHi, newRefVal, newRefLabel){
+        hi = newHi;
+        if(typeof newRefVal === 'number') refVal = newRefVal;
+        if(typeof newRefLabel === 'string') refLabel = newRefLabel;
+        var moved = 0;
+        for(var i = 0; i < pts.length; i++){
+          var clamped = Math.min(hi, Math.max(lo, pts[i].v));
+          if(clamped !== pts[i].v){ pts[i].v = clamped; moved++; }
+        }
+        draw();
+        return moved;
       }
     };
   }
@@ -854,6 +1899,15 @@
   document.getElementById('amp-reset').addEventListener('click', function(){ ampEditor.reset(); });
   document.getElementById('sil-reset').addEventListener('click', function(){ silEditor.reset(); });
   document.getElementById('width-reset').addEventListener('click', function(){ widthEditor.reset(); });
+
+  // Defensive no-op in the normal case (the /api/printers fetch above always
+  // resolves after this synchronous block finishes, and its own .then()
+  // already calls these) -- but if PRINTER_ZCAP somehow already has data by
+  // now, ampEditor exists here for the first time and should be synced to it
+  // immediately rather than showing the bootstrap 0.95 scale a tick longer
+  // than necessary. setRange()/re-clamping is idempotent either way.
+  applyPrinterCaps();
+  updateMachineSummary();
 
   // Smooth-curve checkbox for the silhouette editor.
   (function(){
@@ -1976,8 +3030,8 @@
   })();
 
   function applyDesignToUI(){
-    if(printerSel && design.printer){
-      printerSel.value = design.printer;
+    if(printerComboBtn && design.printer){
+      setPrinterComboValue(design.printer);
       if(PRINTER_BEDS[design.printer] && typeof window.setPreviewBedSize === 'function'){
         window.setPreviewBedSize(PRINTER_BEDS[design.printer][0], PRINTER_BEDS[design.printer][1]);
       }

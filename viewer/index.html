@@ -94,6 +94,38 @@
         <input type="file" id="load-design-file" accept=".json" hidden>
       </div>
 
+      <!-- ---- Persistent machine bar: the printer is context for every step, ---- -->
+      <!-- ---- not a Step-4-only choice. Visible above the step wizard in all ---- -->
+      <!-- ---- four steps. Uses --accent (blue), never --accent-purple.       ---- -->
+      <div id="machine-bar" class="mb-bar">
+        <div class="mb-row1">
+          <span class="mb-icon" aria-hidden="true">&#9881;</span>
+          <div class="mb-combo" id="printer-combo">
+            <button id="printer-combo-btn" class="mb-combo-btn" type="button"
+                    role="combobox" aria-expanded="false" aria-haspopup="listbox"
+                    aria-controls="printer-combo-list" aria-label="Printer">
+              <span id="printer-combo-label">&#8211;</span>
+              <span class="mb-combo-chevron" aria-hidden="true">&#9662;</span>
+            </button>
+            <div id="printer-combo-list" class="mb-combo-list" role="listbox" tabindex="-1" aria-label="Printer"></div>
+          </div>
+        </div>
+        <div id="mb-summary" class="mb-summary">&#8211;</div>
+        <div id="printer-meta" class="pm-meta" style="display:none">
+          <div class="pm-meta-row">
+            <span id="printer-meta-source" class="pm-meta-source"></span>
+            <span id="printer-meta-warn" class="pm-tag pm-tag-warn" style="display:none"></span>
+          </div>
+          <div class="pm-meta-actions">
+            <button id="printer-edit-btn" class="pm-link" type="button">Edit</button>
+            <button id="printer-export-btn" class="pm-link" type="button">Export</button>
+            <button id="printer-delete-btn" class="pm-link pm-link-danger" type="button">Delete</button>
+          </div>
+        </div>
+        <button id="printer-add-btn" class="btn btn-block mb-add-btn" type="button">+ Add custom printer</button>
+        <div id="mb-notice" class="mb-notice" style="display:none" role="status"></div>
+      </div>
+
       <div id="step-bar" class="step-bar">
         <button class="step-item" data-step="model"><span class="step-num">1</span><span class="step-label">Model</span></button>
         <button class="step-item" data-step="texture"><span class="step-num">2</span><span class="step-label">Texture</span></button>
@@ -199,6 +231,7 @@
           <canvas id="amp-curve" width="360" height="100"></canvas>
           <div id="slope-read" class="cv-note"></div>
         </div>
+        <div class="hint" id="amp-limit-hint" style="margin-top:-2px"></div>
         </div>
 
         <hr>
@@ -393,16 +426,9 @@
         </div>
       </div>
 
-      <!-- ---- Step 4: Generate (printer + generate/download) ---- -->
+      <!-- ---- Step 4: Generate (generate/download only; printer lives in the ---- -->
+      <!-- ---- persistent machine bar above the step wizard now).            ---- -->
       <div class="step-panel" id="step-generate">
-        <div class="group" id="printer-group">
-          <h2 id="sec-head-printer">Printer</h2>
-          <div id="sec-body-printer">
-          <div class="drow"><span>Printer</span>
-            <select id="d-printer" class="printer-select"></select></div>
-          </div>
-        </div>
-
         <div class="output-card" id="output-print">
           <h3 class="section-heading">Print it</h3>
           <div class="hint tight-top">Produces the single-wall non-planar G-code this app prints
@@ -425,11 +451,6 @@
             pattern) for slicing solid in another slicer. Z-waves and loop textures are toolpath-only
             and are not included.</div>
         </div>
-      </div>
-
-      <div id="step-nav" class="step-nav">
-        <button id="step-back" class="btn">Back</button>
-        <button id="step-next" class="btn btn-primary">Next</button>
       </div>
     </div>
     </div>
@@ -487,6 +508,14 @@
       <b>Playback:</b> space = play/pause &middot; <b>&#8592; &#8594;</b> step one turn &middot; Home/End = start/finish.
     </div>
     </div>
+    </div>
+    <!-- ---- Step nav (Back/Next) -- pinned as a sibling of #panel-scroll, ---- -->
+    <!-- ---- NOT a scroll-flow child, so it stays reachable regardless of  ---- -->
+    <!-- ---- panel content height. Design-mode only; toggled the same way ---- -->
+    <!-- ---- #mode-design/#mode-viewer are (see setAppMode in designer.js). ---- -->
+    <div id="step-nav" class="step-nav">
+      <button id="step-back" class="btn">Back</button>
+      <button id="step-next" class="btn btn-primary">Next</button>
     </div>
   </div>
 </div>
@@ -577,6 +606,114 @@
     <div class="pe-modal-footer">
       <button id="pe-reset-all" class="btn">Reset all</button>
       <button id="pe-modal-done" class="btn btn-primary">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<!-- Custom printer import/edit modal -- parses a Klipper/Orca/Prusa -->
+<!-- config or a previously exported Trident printer JSON, shows the -->
+<!-- safety report + editable field review, and saves it into the    -->
+<!-- server's custom printer registry. Uses the blue --accent (NOT   -->
+<!-- --accent-purple, which is reserved for Point Edit). Entry point -->
+<!-- is #printer-add-btn / #printer-edit-btn in the machine bar      -->
+<!-- (#machine-bar). Three stages: drop -> review -> clearance.      -->
+<!-- ============================================================= -->
+<div id="printer-modal" class="pm-modal" style="display:none">
+  <div class="pm-modal-backdrop"></div>
+  <div class="pm-modal-card" role="dialog" aria-modal="true" aria-labelledby="pm-modal-title">
+    <div class="pm-modal-header">
+      <h2 id="pm-modal-title">Add custom printer</h2>
+      <button id="pm-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
+    </div>
+    <div class="pm-modal-body">
+
+      <div id="pm-stage-drop" class="pm-stage">
+        <div class="drop pm-drop" id="pm-drop" tabindex="0" role="button">
+          Drop a printer config, or click to choose
+          <input type="file" id="pm-file" accept=".cfg,.json,.ini,.txt" hidden>
+        </div>
+        <div class="hint tight-top">Supported formats: Klipper <code>printer.cfg</code>,
+          OrcaSlicer / Bambu Studio machine <code>.json</code>, PrusaSlicer / SuperSlicer
+          <code>.ini</code>, or a previously exported Trident printer <code>.json</code>.</div>
+        <div id="pm-parse-error" class="pm-error" style="display:none"></div>
+      </div>
+
+      <div id="pm-stage-review" class="pm-stage" style="display:none">
+        <div class="pm-review-head">
+          <input type="text" id="pm-name" class="pm-name-input" maxlength="60" placeholder="Printer name">
+          <span id="pm-format-badge" class="pm-badge"></span>
+        </div>
+
+        <div id="pm-report" class="pm-report"></div>
+
+        <div id="pm-fields" class="pm-fields"></div>
+
+        <div class="pm-gcode-block">
+          <div class="pm-gcode-label">Start G-code</div>
+          <textarea id="pm-start-gcode" class="pm-gcode-textarea" rows="8" spellcheck="false"></textarea>
+        </div>
+        <div class="pm-gcode-block">
+          <div class="pm-gcode-label">End G-code</div>
+          <textarea id="pm-end-gcode" class="pm-gcode-textarea" rows="8" spellcheck="false"></textarea>
+        </div>
+
+        <div id="pm-stripped" class="pm-stripped" style="display:none">
+          <button id="pm-stripped-toggle" class="pm-stripped-toggle" type="button" aria-expanded="false">
+            <span id="pm-stripped-count">0</span> dangerous command(s) removed</button>
+          <ul id="pm-stripped-list" class="pm-stripped-list" style="display:none"></ul>
+          <label class="row pm-allow-raw"><span>Keep them anyway (advanced)</span>
+            <input type="checkbox" id="pm-allow-raw"></label>
+        </div>
+      </div>
+
+      <!-- ---- Stage C: non-planar clearance -- z_amp_max lives ONLY here, ---- -->
+      <!-- ---- never in the pm-fields review table above (see FIELD_SKIP).  ---- -->
+      <div id="pm-stage-clearance" class="pm-stage" style="display:none">
+        <div class="hint tight-top">How far can the nozzle dip below already-printed material
+          before something &#8212; the fan shroud, the probe body, another fixed part of the
+          toolhead &#8212; collides with it?</div>
+
+        <svg class="pm-clearance-svg" viewBox="0 0 220 90" width="220" height="90"
+             role="img" aria-label="Diagram of the nozzle tip dipping below the already-printed
+             wall, with the gap to the fixed hardware above it marked as the clearance">
+          <defs>
+            <pattern id="pm-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="6" class="pmc-hatch-line"></line>
+            </pattern>
+          </defs>
+          <rect x="8" y="38" width="204" height="44" class="pmc-fill"></rect>
+          <line x1="8" y1="38" x2="212" y2="38" class="pmc-surface"></line>
+          <rect x="88" y="8" width="44" height="14" rx="2" class="pmc-hardware"></rect>
+          <rect x="104" y="22" width="12" height="16" class="pmc-hardware"></rect>
+          <path d="M100,38 L120,38 L110,58 Z" class="pmc-tip"></path>
+          <line x1="150" y1="22" x2="150" y2="38" class="pmc-dim"></line>
+          <line x1="145" y1="22" x2="155" y2="22" class="pmc-dim"></line>
+          <line x1="145" y1="38" x2="155" y2="38" class="pmc-dim"></line>
+          <text x="158" y="33" class="pmc-label pmc-label-accent">gap</text>
+        </svg>
+        <div class="hint tight-top pmc-caption">Hatched area: the wall already printed. Boxes: the
+          nozzle and the fixed hardware above it (fan shroud / probe body). <b>gap</b>: the
+          clearance you are setting below.</div>
+
+        <div class="pm-field-row" id="pm-field-z_amp_max">
+          <span class="pm-field-label">Max wave amplitude (mm)</span>
+          <span class="pm-field-control">
+            <input type="number" step="any" id="pm-clearance-input" class="pm-field-input" data-field="z_amp_max">
+            <span class="pm-tag" id="pm-clearance-tag"></span>
+          </span>
+        </div>
+
+        <div class="hint">No config file on earth records this value. The figure above is a
+          conservative starting point derived from other measurements in this printer's config
+          &#8212; treat it as a guess, and confirm it with a real test print before raising it.</div>
+      </div>
+
+    </div>
+    <div class="pm-modal-footer">
+      <button id="pm-cancel-btn" class="btn" type="button">Cancel</button>
+      <button id="pm-back-btn" class="btn" type="button" style="display:none">Back</button>
+      <button id="pm-save-btn" class="btn btn-primary" type="button" disabled>Next</button>
     </div>
   </div>
 </div>
