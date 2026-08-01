@@ -339,6 +339,96 @@ prototyping settings for a second machine. Each profile carries its own
 safety limits (footprint, Z-rate, probe keep-out where applicable), enforced
 the same way regardless of which one is selected.
 
+Besides the Voron Trident and four Bambu Lab machines, nine stock Creality
+printers are built in: Ender 3 / Pro, Ender 3 V2, Ender 3 S1 / S1 Pro, Ender 3
+V3 SE, Ender 3 V3 KE, Ender 5 Plus, CR-10, K1 / K1C, and K1 Max. **Read this
+before picking one for a non-planar print**: stock Marlin Creality firmware
+caps Z feedrate at ~5 mm/s (`DEFAULT_MAX_FEEDRATE { 500, 500, 5, 25 }`) --
+five times slower than the Trident's 25 mm/s -- because this app's entire
+premise is non-planar Z modulation, that one number changes the character of
+every print on these machines: feedrates get clamped hard and estimated
+print times run substantially longer than the same design on a Trident or a
+Bambu machine. The built-in profiles use the real stock figure, not a
+rounded-up "looks faster" number, so the time estimate you see is honest. If
+your Ender 3 is flashed to Klipper with higher limits, raise `max_z_velocity`
+for it in the review dialog after importing your own `printer.cfg`. The three
+Klipper-firmware models (Ender 3 V3 KE, K1 / K1C, K1 Max) call the stock
+`START_PRINT` / `END_PRINT` macros the way the Trident profile calls
+`PRINT_START` / `PRINT_END`.
+
+## Adding your own printer
+
+Import a real config file and the app builds a validated profile from it:
+
+```bash
+# Klipper printer.cfg, OrcaSlicer/Bambu Studio/Creality Print machine .json,
+# Cura/Creality Slicer printer .def.json, PrusaSlicer/SuperSlicer .ini, or a
+# printer .json exported from this app
+python generate.py --import-printer ~/printer.cfg
+python generate.py --list-printers
+python generate.py --printer custom_my_voron --shape star --height 80
+```
+
+Creality owners: Creality Print 5.x machine profiles are an OrcaSlicer fork
+and parse through the same OrcaSlicer/Bambu Studio path above. Creality
+Slicer and older Creality Print are Cura-derived, so their printer definition
+(`.def.json`) is also supported directly -- point `--import-printer` at it
+the same way. Two Cura quirks are handled explicitly rather than guessed at:
+a `machine_center_is_zero: true` definition (delta-style centred origin) gets
+its safe print area left at the default inset with a note instead of a wrong
+guess, since this app assumes a front-left origin; and Cura's motion
+placeholders (`fdmprinter` ships 299792458000 -- the speed of light in mm/s --
+for any limit a definition never set) are treated as **missing** rather than
+clamped. That distinction matters: clamping a sentinel lands on this app's
+safety ceiling of 100 mm/s, which on the Ender 3 those definitions describe
+would be twenty times the real 5 mm/s. Dropping it instead falls back to the
+conservative default, so "unset" never quietly becomes "as fast as this app
+allows".
+
+In the app, **Printer -> + Add custom printer** does the same thing with a
+review dialog: drop the file, check every parsed value, fix anything flagged,
+save. Custom profiles live in `custom_printers/` (gitignored) and never
+shadow the built-ins.
+
+The parse is deliberately paranoid, because a wrong number here is a broken
+printer rather than a bad print:
+
+- **A missing value becomes a conservative default, never the Trident's.**
+  An unknown `max_z_velocity` becomes 10 mm/s, not 25 — silently inheriting
+  another machine's limits is exactly how a gantry gets wrecked.
+- **Every field has an absolute range** independent of what the file claims.
+  `max_z_velocity: 9999` is clamped and flagged; a bed size of zero is a hard
+  error. Non-finite values (`NaN`, `Infinity`) are refused outright — NaN
+  defeats every guard it passes through instead of tripping them.
+- **Cross-checks**: `max_z_velocity <= max_velocity`, safe area inside the
+  bed, `z_amp_max` derived from probe clearance rather than guessed. With no
+  bed mesh in the file, the safe area is inset from the bed edge, not assumed
+  to be the whole bed.
+- **Cura's `value` field is never evaluated.** A Cura printer definition's
+  `value` holds a Python expression (e.g. `"=machine_width / 2"`) that Cura
+  itself evaluates at slice time -- it is not a literal. Only `default_value`
+  is ever read; a setting that has only a `value` expression is skipped and
+  named in a note rather than parsed, let alone executed.
+- **Start/end G-code is sanitized, never passed through.** Foreign slicer
+  placeholders (`{first_layer_temperature[0]}`, `[bed_temperature]`) are
+  mapped onto ours and anything left over is escaped, so a template can never
+  blow up mid-generation. `M502`, `M500`, `M851`, `M303`,
+  `SET_KINEMATIC_POSITION` and friends are stripped unless you explicitly opt
+  back in. **Start G-code with no `G28` is a hard error** — an unhomed first
+  move is the classic way to drive a nozzle through a bed — and an explicit
+  `M82` is too, since the generator emits relative `E` deltas that an
+  absolute-mode printer would read as absolute targets.
+- **Hotend and bed `max_temp` are read from the config** and clamped in the
+  emitted G-code, so a filament profile can't ask for more than the hardware
+  allows.
+
+Klipper `PRINT_START` macros are called rather than inlined, with the
+parameter names read from the macro body (`EXTRUDER` vs `EXTRUDER_TEMP` vs
+`HOTEND`) so temperatures actually reach it.
+
+Run `python tools/test_printer_import.py` to exercise the whole pipeline,
+including an adversarial `hostile.cfg` fixture.
+
 ## The printer view
 
 `viewer/index.html` draws a recognisable Voron Trident — aluminium frame, bed
@@ -469,9 +559,16 @@ The generator refuses to emit unsafe motion:
 - No extruding move may go **below the bed** (wave amplitude ramps in from the base so
   the first layers stay planar and adhere).
 - Every feedrate is clamped so Z velocity ≤ `max_z_velocity`.
+- Nozzle and bed temperatures are clamped to the profile's `max_nozzle_temp` /
+  `max_bed_temp`, with a `; NOTE:` line in the output when a clamp bites.
 
 It calls your existing `PRINT_START` / `PRINT_END` macros and emits relative
 extrusion (`M83`), matching your `printer.cfg`.
+
+The numbers above are the *Trident's*. Every limit comes from the selected
+`PrinterProfile`, so an imported custom printer is held to its own — see
+[Adding your own printer](#adding-your-own-printer) for how those values are
+validated before they ever reach the generator.
 
 ## First-layer adhesion
 
@@ -542,6 +639,7 @@ generate.py                     CLI entry point
 serve.py                        static file server + JSON API for the browser app
 tools/make_sample_meshes.py     writes sample STLs into examples/
 tools/check_regression.py       byte-compares generated output against regression_ref/
+tools/test_printer_import.py    tests the custom-printer parser/validator (incl. a hostile config)
 calibrate.py                    calibration print suite (live-Z / flow / z-amp)
 presets.py                      curated, machine-safe presets
 trident_gcode/
@@ -554,6 +652,9 @@ trident_gcode/
   surface.py                    non-planar height fields (+ STL top sampling)
   profile_stack.py              unified contour-stack format (parametric shapes + sliced meshes)
   orca.py                       OrcaSlicer filament profile import
+  printer_import.py             parse a Klipper/Orca/Cura/Prusa printer config (no validation -- raw only)
+  printer_validate.py           the safety core: limits, clamps, G-code sanitation
+  printer_store.py              custom printer profiles on disk (custom_printers/)
   blobs.py                      blob-texture and loop-fabric site placement
   fullcontrol_export.py         export any toolpath as a FullControl script
   generators/
@@ -581,4 +682,5 @@ regression_ref/                 reference G-code checked by tools/check_regressi
 - [x] Asymmetric shaping (3D control cage, spine offset, ovality), blob and loop-fabric
       textures, multi-printer profiles, mesh upload, undo/redo — app-only so far
 - [x] Variable line width along the path
+- [x] Custom printer import (Klipper cfg / Orca / Prusa) with a validating parser
 - [ ] Feasibility study + prototype for true dynamic tri-Z bed tilt
