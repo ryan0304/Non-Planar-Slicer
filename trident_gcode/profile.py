@@ -68,6 +68,12 @@ class PrinterProfile:
     # Pressure advance G-code format. "klipper" or "marlin".
     pa_gcode_style: str = "klipper"
 
+    # --- Thermal ceilings (from the config's heater max_temp) ---
+    max_nozzle_temp: float = 300.0
+    max_bed_temp: float = 120.0
+    # Klipper's max_extrude_cross_section (mm^2). 0 = unknown/unset.
+    max_extrude_cross_section: float = 0.0
+
     @property
     def filament_area(self) -> float:
         r = self.filament_diameter / 2.0
@@ -102,32 +108,43 @@ class PrinterProfile:
 
 TRIDENT = PrinterProfile()
 
-_BAMBU_START = (
-    "M140 S{bed_temp:.0f}      ; start bed heating\n"
-    "G28                ; home all\n"
-    "G29                ; auto bed level\n"
-    "M190 S{bed_temp:.0f}      ; wait for bed\n"
-    "M104 S{nozzle_temp:.0f}   ; start nozzle heating\n"
-    "M109 S{nozzle_temp:.0f}   ; wait for nozzle\n"
-    "M83                ; relative extrusion\n"
-    "G92 E0\n"
-    "G1 Z5 F3000        ; lift nozzle\n"
-    "G1 X5 Y5 F6000     ; move to purge position\n"
-    "G1 Z0.3 F600\n"
-    "G1 X50 E8 F600     ; purge line\n"
-    "G1 X80 E5 F900\n"
-    "G1 E-0.5 F1800     ; retract\n"
-    "G1 Z2 F3000\n"
-    "G92 E0\n"
-    "M107               ; fan off for first layer(s)"
-)
-def _bambu_end(park_y: int) -> str:
+def _bambu_start(max_z_velocity: float) -> str:
+    # Same reasoning as the Creality templates below: a bare F3000 on a pure-Z
+    # lift is 50 mm/s, well over every Bambu profile's 30 mm/s Z ceiling. The
+    # firmware would clamp it harmlessly, but analyze_gcode reads the emitted
+    # file and reported a peak Z-rate of 50/30 on EVERY Bambu print -- a
+    # warning that fires unconditionally is a warning users learn to ignore,
+    # which is worse than no warning at all.
+    z_f = min(3000.0, max_z_velocity * 60.0)
+    return (
+        "M140 S{bed_temp:.0f}      ; start bed heating\n"
+        "G28                ; home all\n"
+        "G29                ; auto bed level\n"
+        "M190 S{bed_temp:.0f}      ; wait for bed\n"
+        "M104 S{nozzle_temp:.0f}   ; start nozzle heating\n"
+        "M109 S{nozzle_temp:.0f}   ; wait for nozzle\n"
+        "M83                ; relative extrusion\n"
+        "G92 E0\n"
+        f"G1 Z5 F{z_f:.0f}        ; lift nozzle\n"
+        "G1 X5 Y5 F6000     ; move to purge position\n"
+        "G1 Z0.3 F600\n"
+        "G1 X50 E8 F600     ; purge line\n"
+        "G1 X80 E5 F900\n"
+        "G1 E-0.5 F1800     ; retract\n"
+        f"G1 Z2 F{z_f:.0f}\n"
+        "G92 E0\n"
+        "M107               ; fan off for first layer(s)"
+    )
+
+
+def _bambu_end(park_y: int, max_z_velocity: float) -> str:
     # Park Y must stay on the bed: full-size Bambu beds park at the back
     # (Y200), the A1 Mini's 180 mm bed cannot reach that far.
+    z_f = min(3000.0, max_z_velocity * 60.0)
     return (
         "G1 E-2 F1800       ; retract\n"
         "G91                ; relative positioning\n"
-        "G1 Z10 F3000       ; lift nozzle\n"
+        f"G1 Z10 F{z_f:.0f}       ; lift nozzle\n"
         "G90                ; absolute positioning\n"
         f"G1 X5 Y{park_y} F6000   ; park\n"
         "M104 S0            ; heater off\n"
@@ -137,8 +154,11 @@ def _bambu_end(park_y: int) -> str:
     )
 
 
-_BAMBU_END = _bambu_end(200)
-_BAMBU_END_MINI = _bambu_end(170)
+# Every current Bambu profile shares a 30 mm/s Z ceiling.
+_BAMBU_Z_VEL = 30.0
+_BAMBU_START = _bambu_start(_BAMBU_Z_VEL)
+_BAMBU_END = _bambu_end(200, _BAMBU_Z_VEL)
+_BAMBU_END_MINI = _bambu_end(170, _BAMBU_Z_VEL)
 
 BAMBU_A1 = PrinterProfile(
     name="Bambu Lab A1",
@@ -151,6 +171,7 @@ BAMBU_A1 = PrinterProfile(
     start_gcode=_BAMBU_START,
     end_gcode=_BAMBU_END,
     pa_gcode_style="marlin",
+    max_nozzle_temp=300.0, max_bed_temp=100.0,
 )
 
 BAMBU_A1_MINI = PrinterProfile(
@@ -164,6 +185,7 @@ BAMBU_A1_MINI = PrinterProfile(
     start_gcode=_BAMBU_START,
     end_gcode=_BAMBU_END_MINI,
     pa_gcode_style="marlin",
+    max_nozzle_temp=300.0, max_bed_temp=100.0,
 )
 
 BAMBU_P1S = PrinterProfile(
@@ -177,6 +199,7 @@ BAMBU_P1S = PrinterProfile(
     start_gcode=_BAMBU_START,
     end_gcode=_BAMBU_END,
     pa_gcode_style="marlin",
+    max_nozzle_temp=300.0, max_bed_temp=110.0,
 )
 
 BAMBU_X1C = PrinterProfile(
@@ -190,7 +213,187 @@ BAMBU_X1C = PrinterProfile(
     start_gcode=_BAMBU_START,
     end_gcode=_BAMBU_END,
     pa_gcode_style="marlin",
+    max_nozzle_temp=300.0, max_bed_temp=110.0,
 )
+
+# ---------------------------------------------------------------------------
+# Creality profiles
+#
+# Stock Marlin Creality firmware ships DEFAULT_MAX_FEEDRATE { 500, 500, 5, 25 }
+# and a Z acceleration around 100 mm/s^2 -- a Z max feedrate 5x slower than the
+# Trident's. This app's whole premise is non-planar Z modulation, so that one
+# number changes the character of every print on these machines: feedrates
+# get clamped hard and print times run much longer. These are conservative
+# figures derived from public stock-firmware specs, not measured on real
+# hardware -- deliberately NOT rounded up to make prints look faster. Where a
+# machine is commonly flashed to Klipper with higher limits, the user can
+# raise these in the review dialog; the shipped default has to be honest
+# about the stock machine.
+# ---------------------------------------------------------------------------
+def _creality_marlin_start(bed_size_y: float, max_z_velocity: float) -> str:
+    # Purge line Y extent is parameterised off the bed depth so it fits every
+    # bed in the table (220mm-350mm deep) without running off the back.
+    purge_y = min(200.0, bed_size_y - 20.0)
+    # The lift and the diagonal move to/from the purge line both have a Z
+    # component. A generic F3000/F5000 (50/83 mm/s) is what most slicers
+    # print unconditionally and stock Marlin silently clamps to
+    # DEFAULT_MAX_FEEDRATE -- but this app's whole point is being honest
+    # about what the machine can actually do, so the built-in template
+    # itself must never ask for more Z speed than the profile's own
+    # max_z_velocity. Capping the *whole* move's feedrate (not just its Z
+    # component) at the Z limit is conservative but simple, and keeps every
+    # Z-bearing move's effective Z-rate safely under the ceiling regardless
+    # of how much of the move is XY vs Z.
+    z_f = min(3000.0, max_z_velocity * 60.0)
+    return (
+        "M140 S{bed_temp:.0f}     ; start bed heating\n"
+        "G28                      ; home all axes\n"
+        "M190 S{bed_temp:.0f}     ; wait for bed\n"
+        "M104 S{nozzle_temp:.0f}  ; start nozzle heating\n"
+        "M109 S{nozzle_temp:.0f}  ; wait for nozzle\n"
+        "M83                      ; relative extrusion\n"
+        "G92 E0\n"
+        f"G1 Z2.0 F{z_f:.0f}            ; lift\n"
+        f"G1 X5.1 Y20 Z0.28 F{z_f:.0f}  ; move to purge start\n"
+        f"G1 X5.1 Y{purge_y:.1f} Z0.28 F1500 E15   ; purge line up\n"
+        f"G1 X5.4 Y{purge_y:.1f} Z0.28 F5000\n"
+        "G1 X5.4 Y20 Z0.28 F1500 E15          ; purge line back\n"
+        "G92 E0\n"
+        f"G1 Z2.0 F{z_f:.0f}            ; lift away from the purge\n"
+        "M107                     ; fan off for first layer(s)"
+    )
+
+
+def _creality_marlin_end(bed_size_y: float, max_z_velocity: float) -> str:
+    # Park Y must stay on the bed -- reuse the same formula as the purge line
+    # so every bed depth in the table parks safely inside its travel.
+    park_y = min(200.0, bed_size_y - 20.0)
+    # Same reasoning as the start template: the Z lift here is a pure-Z move
+    # (zf=1.0), so its F must not exceed the profile's real max_z_velocity.
+    z_f = min(3000.0, max_z_velocity * 60.0)
+    return (
+        "G91                      ; relative positioning\n"
+        "G1 E-2 F2700             ; retract\n"
+        f"G1 Z10 F{z_f:.0f}             ; lift\n"
+        "G90                      ; absolute positioning\n"
+        f"G1 X5 Y{park_y:.1f} F3000    ; park, present the print\n"
+        "M104 S0                  ; heater off\n"
+        "M140 S0                  ; bed off\n"
+        "M107                     ; fan off\n"
+        "M84                      ; steppers off"
+    )
+
+
+# Creality's stock Klipper firmware exposes START_PRINT/END_PRINT macros
+# (the way Creality's own K1/K1 Max/Ender 3 V3 KE gcode_macro.cfg does),
+# analogous to how the Trident profile calls PRINT_START/PRINT_END.
+_CREALITY_KLIPPER_START = (
+    "START_PRINT EXTRUDER={nozzle_temp:.0f} BED={bed_temp:.0f}\n"
+    "M83\n"
+    "G92 E0\n"
+    "M107"
+)
+_CREALITY_KLIPPER_END = "END_PRINT"
+
+
+def _creality_marlin(**kwargs) -> PrinterProfile:
+    bed_size_y = kwargs.get("bed_size_y", 220.0)
+    max_z_velocity = kwargs["max_z_velocity"]
+    return PrinterProfile(
+        firmware="marlin",
+        z_min=0.0,
+        print_min_x=5.0, print_min_y=5.0,
+        print_max_x=kwargs["bed_size_x"] - 5.0, print_max_y=bed_size_y - 5.0,
+        nozzle_diameter=0.40, filament_diameter=1.75,
+        has_probe=False, probe_dx=0.0, probe_dy=0.0, probe_clearance=0.0, probe_radius=0.0,
+        z_amp_max=1.0,
+        start_gcode=_creality_marlin_start(bed_size_y, max_z_velocity),
+        end_gcode=_creality_marlin_end(bed_size_y, max_z_velocity),
+        pa_gcode_style="marlin",
+        **kwargs,
+    )
+
+
+def _creality_klipper(**kwargs) -> PrinterProfile:
+    bed_size_y = kwargs.get("bed_size_y", 220.0)
+    return PrinterProfile(
+        firmware="klipper",
+        z_min=0.0,
+        print_min_x=5.0, print_min_y=5.0,
+        print_max_x=kwargs["bed_size_x"] - 5.0, print_max_y=bed_size_y - 5.0,
+        nozzle_diameter=0.40, filament_diameter=1.75,
+        has_probe=False, probe_dx=0.0, probe_dy=0.0, probe_clearance=0.0, probe_radius=0.0,
+        z_amp_max=1.0,
+        start_gcode=_CREALITY_KLIPPER_START,
+        end_gcode=_CREALITY_KLIPPER_END,
+        pa_gcode_style="klipper",
+        **kwargs,
+    )
+
+
+CREALITY_ENDER3 = _creality_marlin(
+    name="Creality Ender 3 / Pro",
+    bed_size_x=220.0, bed_size_y=220.0, z_max=250.0,
+    max_velocity=200.0, max_z_velocity=5.0, max_accel=500.0, max_z_accel=100.0,
+    max_nozzle_temp=260.0, max_bed_temp=100.0,
+)
+
+CREALITY_ENDER3_V2 = _creality_marlin(
+    name="Creality Ender 3 V2",
+    bed_size_x=220.0, bed_size_y=220.0, z_max=250.0,
+    max_velocity=200.0, max_z_velocity=5.0, max_accel=500.0, max_z_accel=100.0,
+    max_nozzle_temp=260.0, max_bed_temp=100.0,
+)
+
+CREALITY_ENDER3_S1 = _creality_marlin(
+    name="Creality Ender 3 S1 / S1 Pro",
+    bed_size_x=220.0, bed_size_y=220.0, z_max=270.0,
+    max_velocity=200.0, max_z_velocity=5.0, max_accel=500.0, max_z_accel=100.0,
+    max_nozzle_temp=300.0, max_bed_temp=110.0,
+)
+
+CREALITY_ENDER3_V3_SE = _creality_marlin(
+    name="Creality Ender 3 V3 SE",
+    bed_size_x=220.0, bed_size_y=220.0, z_max=250.0,
+    max_velocity=250.0, max_z_velocity=10.0, max_accel=2500.0, max_z_accel=100.0,
+    max_nozzle_temp=260.0, max_bed_temp=100.0,
+)
+
+CREALITY_ENDER3_V3_KE = _creality_klipper(
+    name="Creality Ender 3 V3 KE",
+    bed_size_x=220.0, bed_size_y=220.0, z_max=240.0,
+    max_velocity=500.0, max_z_velocity=10.0, max_accel=8000.0, max_z_accel=100.0,
+    max_nozzle_temp=300.0, max_bed_temp=100.0,
+)
+
+CREALITY_ENDER5_PLUS = _creality_marlin(
+    name="Creality Ender 5 Plus",
+    bed_size_x=350.0, bed_size_y=350.0, z_max=400.0,
+    max_velocity=200.0, max_z_velocity=5.0, max_accel=500.0, max_z_accel=100.0,
+    max_nozzle_temp=260.0, max_bed_temp=110.0,
+)
+
+CREALITY_CR10 = _creality_marlin(
+    name="Creality CR-10",
+    bed_size_x=300.0, bed_size_y=300.0, z_max=400.0,
+    max_velocity=200.0, max_z_velocity=5.0, max_accel=500.0, max_z_accel=100.0,
+    max_nozzle_temp=260.0, max_bed_temp=100.0,
+)
+
+CREALITY_K1 = _creality_klipper(
+    name="Creality K1 / K1C",
+    bed_size_x=220.0, bed_size_y=220.0, z_max=250.0,
+    max_velocity=500.0, max_z_velocity=15.0, max_accel=20000.0, max_z_accel=500.0,
+    max_nozzle_temp=300.0, max_bed_temp=100.0,
+)
+
+CREALITY_K1_MAX = _creality_klipper(
+    name="Creality K1 Max",
+    bed_size_x=300.0, bed_size_y=300.0, z_max=300.0,
+    max_velocity=500.0, max_z_velocity=15.0, max_accel=20000.0, max_z_accel=500.0,
+    max_nozzle_temp=300.0, max_bed_temp=100.0,
+)
+
 
 # Registry: key -> profile instance. Used by serve.py's printer selector.
 PRINTER_PROFILES: dict[str, PrinterProfile] = {
@@ -199,4 +402,13 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
     "bambu_a1_mini": BAMBU_A1_MINI,
     "bambu_p1s": BAMBU_P1S,
     "bambu_x1c": BAMBU_X1C,
+    "creality_ender3": CREALITY_ENDER3,
+    "creality_ender3_v2": CREALITY_ENDER3_V2,
+    "creality_ender3_s1": CREALITY_ENDER3_S1,
+    "creality_ender3_v3_se": CREALITY_ENDER3_V3_SE,
+    "creality_ender3_v3_ke": CREALITY_ENDER3_V3_KE,
+    "creality_ender5_plus": CREALITY_ENDER5_PLUS,
+    "creality_cr10": CREALITY_CR10,
+    "creality_k1": CREALITY_K1,
+    "creality_k1_max": CREALITY_K1_MAX,
 }

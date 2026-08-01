@@ -66,6 +66,7 @@ class GcodeWriter:
     _max_z_rate: float = 0.0
     _lh_clamp_events: int = 0
     _width_clamp_events: int = 0
+    _temp_clamp_events: int = 0
     _last_fan_frac: float | None = None
     _blob_count: int = 0
     _moves: list = field(default_factory=list)   # (x,y,z,extruding,speed_mm_s) per move
@@ -81,9 +82,22 @@ class GcodeWriter:
                    f"layer_height={self.layer_height}")
         self._emit(f"; max_z_velocity={p.max_z_velocity} mm/s (feedrate clamped to honour this)")
         self._emit("")
+        # Never hand the profile's start_gcode a temperature above what the
+        # printer's own heaters are rated for -- a custom-imported profile's
+        # max_nozzle_temp/max_bed_temp is the safety ceiling, and clamping
+        # here (rather than raising) keeps a slightly-too-hot filament choice
+        # from aborting generation; the user just gets a visible NOTE instead.
+        nozzle_t = min(self.nozzle_temp, p.max_nozzle_temp)
+        bed_t = min(self.bed_temp, p.max_bed_temp)
+        if nozzle_t != self.nozzle_temp:
+            self._emit(f"; NOTE: nozzle temp {self.nozzle_temp:.0f} clamped to printer max {p.max_nozzle_temp:.0f}")
+            self._temp_clamp_events += 1
+        if bed_t != self.bed_temp:
+            self._emit(f"; NOTE: bed temp {self.bed_temp:.0f} clamped to printer max {p.max_bed_temp:.0f}")
+            self._temp_clamp_events += 1
         rendered = p.start_gcode.format_map({
-            "nozzle_temp": self.nozzle_temp,
-            "bed_temp": self.bed_temp,
+            "nozzle_temp": nozzle_t,
+            "bed_temp": bed_t,
             "material": self.material,
         })
         for line in rendered.splitlines():
@@ -343,6 +357,14 @@ class GcodeWriter:
         [0.5, 2.0]x nominal band. >0 means a requested width curve exceeded the
         safe band and was compensated."""
         return self._width_clamp_events
+
+    @property
+    def temp_clamp_events(self) -> int:
+        """How many of nozzle_temp/bed_temp were clamped down to the profile's
+        max_nozzle_temp/max_bed_temp ceiling (0, 1, or 2). >0 means the
+        requested print temperature exceeded what this printer's heaters are
+        rated for and generation silently capped it instead of failing."""
+        return self._temp_clamp_events
 
     def text(self) -> str:
         return "\n".join(self._lines) + "\n"

@@ -9,9 +9,11 @@ Pure standard library only. ASCII-only console/server strings.
 
 Safety is not optional: every design is generated through GcodeWriter (which
 clamps Z feedrate, volumetric flow, footprint, top Z) and then re-checked with
-analyze_gcode before it is returned. The wave amplitude is additionally clamped
-to the empirical probe keep-out ceiling (1.9 mm) on the server side, so a
-malicious or buggy client can never ask for an over-limit print.
+analyze_gcode before it is returned. Every Z-excursion ceiling -- wave
+amplitude, loop-fabric stitch dip, loop row height -- is additionally clamped
+server-side to the selected PrinterProfile's own z_amp_max (see amp_ceiling()
+below), so a malicious or buggy client can never ask for more Z dip than the
+chosen machine itself declares safe.
 
 Run:
 
@@ -32,6 +34,9 @@ from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 from trident_gcode import PRINTER_PROFILES, TRIDENT, GcodeWriter, PrinterProfile
+from trident_gcode import printer_store
+from trident_gcode.printer_import import parse as parse_printer_config, PrinterImportError
+from trident_gcode.printer_validate import validate_raw, validate_profile_dict
 from trident_gcode.blobs import BlobSpec, LoopSpec
 from trident_gcode.paths import SpiralSpec, circle, star, superellipse
 from trident_gcode.generators import build_continuous_spiral, build_profile_spiral
@@ -83,7 +88,8 @@ def _check_export_budget(n_layers, points_per_turn):
 def _get_profile(body):
     from dataclasses import replace
     key = str(body.get("printer") or DEFAULT_PRINTER_KEY)
-    profile = PRINTER_PROFILES.get(key, PRINTER_PROFILES[DEFAULT_PRINTER_KEY])
+    profiles = printer_store.all_profiles()
+    profile = profiles.get(key, profiles[DEFAULT_PRINTER_KEY])
     nozzle = body.get("nozzle")
     if nozzle:
         nd = float(nozzle)
@@ -94,8 +100,33 @@ def _get_profile(body):
 PORT = 8777
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+
+def amp_ceiling(profile) -> float:
+    """Max wave amplitude (mm) for this machine.
+
+    This is the profile's own z_amp_max -- the max Z excursion below
+    already-printed material before the toolhead fouls something. It was
+    previously a module constant fixed at the Trident's 0.95, which silently
+    capped high-clearance machines and, worse, allowed nearly 2.5x over the
+    limit on a custom printer that declared a tighter one.
+    """
+    return max(0.0, float(profile.z_amp_max))
+
+
+def loop_row_ceiling(profile) -> float:
+    """Max loop-fabric row height (mm) for this machine.
+
+    Derived from amp_ceiling the same way the client used to derive it, so the
+    two can never drift. Rounded because the naive subtraction is not exact in
+    binary floating point -- 0.95 - 0.3 is 0.6499999999999999, which reached
+    the browser and ended up as a number input's literal `min` attribute. A
+    clearance is a physical measurement; three decimals is far finer than
+    anyone can set a nozzle.
+    """
+    return round(max(0.4, amp_ceiling(profile) - 0.3), 3)
+
+
 # Server-side safety ceilings (mirror the UI clamps).
-AMP_MIN, AMP_MAX = 0.0, 0.95         # user-revised ceiling: z-amp < 1mm
 RADIUS_SCALE_MIN, RADIUS_SCALE_MAX = 0.2, 1.5
 # Empirical print-quality slope ceiling (amp*waves/radius): waves steeper than
 # this collapsed above half height on the 2026-07-05 test print (R3D PETG).
@@ -462,12 +493,22 @@ def _parse_blob_spec(body, radius: float | None = None) -> BlobSpec | None:
     )
 
 
-def _parse_loop_spec(body, radius: float | None = None) -> LoopSpec | None:
+def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | None:
     """Extract hanging-loop parameters from the request body.
 
     Returns None when loops are disabled.  ``loop_spacing_mm`` (with a known
     radius) overrides ``loop_per_turn`` via the circumference, like blobs.
+
+    row_mm and up_mm are Z excursions (the stitch dip / row height), so their
+    ceilings are derived from the selected machine's amp_ceiling() rather than
+    a fixed constant -- see amp_ceiling() for why. row_mm's cap mirrors the
+    formula the client already uses in applyPrinterCaps() (cap - 0.3, floored
+    at 0.4) so both paths agree. Each floor is min(1.0, cap): the old floor of
+    1.0 was larger than the Trident's 0.95 ceiling, which made the permitted
+    range empty.
     """
+    cap = amp_ceiling(profile)
+    cap_row = loop_row_ceiling(profile)
     per_turn = int(body.get("loop_per_turn", 0))
     spacing_mm = float(body.get("loop_spacing_mm", 0) or 0)
     if spacing_mm > 0 and radius:
@@ -490,8 +531,8 @@ def _parse_loop_spec(body, radius: float | None = None) -> LoopSpec | None:
         turn_stride=max(1, int(body.get("loop_turn_stride", 1))),
         align=align,
         jitter=max(0.0, min(float(body.get("loop_jitter", 0.5)), 1.0)),
-        row_mm=max(1.0, min(float(body.get("loop_row", 2.5)), 6.0)),
-        up_mm=max(1.0, min(float(body.get("loop_up", 3.5)), 8.0)),
+        row_mm=max(min(1.0, cap_row), min(float(body.get("loop_row", 2.5)), cap_row)),
+        up_mm=max(min(1.0, cap), min(float(body.get("loop_up", 3.5)), cap)),
         out_mm=max(0.0, min(float(body.get("loop_out", 0.5)), 5.0)),
         rejoin_mm=max(0.5, min(float(body.get("loop_rejoin", 2.0)), 6.0)),
         dwell_ms=max(0, min(int(body.get("loop_dwell", 0)), 2000)),
@@ -571,16 +612,19 @@ def generate_design(body):
     # output stays byte-identical.
     cage = _parse_cage(body.get("cage"))
 
+    # Resolved before amp_fn below: the amplitude ceiling is derived from the
+    # selected machine's own z_amp_max (amp_ceiling()), so the profile must be
+    # in scope first.
+    profile = _get_profile(body)
+
     # Server-side clamps (never trust the client). width_fn's band (0.6-1.8) is
     # tighter than the writer's hard [0.5, 2.0] line_width_override clamp -- the
     # writer's clamp is the real safety net, this just keeps a malicious/buggy
     # client from ever getting close to it.
-    amp_fn = _make_interp(amp_profile, AMP_MIN, AMP_MAX)
+    amp_fn = _make_interp(amp_profile, 0.0, amp_ceiling(profile))
     radius_interp = _make_smooth_interp if radius_profile_smooth else _make_interp
     radius_fn = radius_interp(radius_profile, RADIUS_SCALE_MIN, RADIUS_SCALE_MAX)
     width_fn = _make_interp(width_profile, 0.6, 1.8)
-
-    profile = _get_profile(body)
 
     # Line width: default like generate.py (~1.125x a 0.4 nozzle, rounded).
     nozzle = profile.nozzle_diameter
@@ -645,7 +689,7 @@ def generate_design(body):
     shape = _make_shape(shape_name, radius, star_points, star_depth)
 
     blob_spec = _parse_blob_spec(body, radius=radius)
-    loop_spec = _parse_loop_spec(body, radius=radius)
+    loop_spec = _parse_loop_spec(body, profile, radius=radius)
     overhang_flow_k = max(0.0, min(float(body.get("overhang_flow_k", 0.0)), 1.0))
     fan_overhang_min, fan_overhang_max = _parse_overhang_fan(body)
     fan_off_layers = max(0, min(int(body.get("fan_off_layers", 0) or 0), 50))
@@ -817,8 +861,13 @@ def generate_mesh_texture_design(body):
     z_waves = int(body.get("z_waves", 5))
     z_twist = float(body.get("z_twist", 0.0))
 
+    # Resolved before amp_fn below: the amplitude ceiling is derived from the
+    # selected machine's own z_amp_max (amp_ceiling()), so the profile must be
+    # in scope first.
+    profile = _get_profile(body)
+
     amp_profile = body.get("amp_profile") or [[0, 0.0], [1, 0.0]]
-    amp_fn = _make_interp(amp_profile, AMP_MIN, AMP_MAX)
+    amp_fn = _make_interp(amp_profile, 0.0, amp_ceiling(profile))
     # Server-side clamp tighter than the writer's hard [0.5, 2.0] line_width
     # override band -- see generate_design()'s width_fn for the rationale.
     width_profile = body.get("width_profile") or [[0, 1.0], [1, 1.0]]
@@ -831,8 +880,6 @@ def generate_mesh_texture_design(body):
 
     contours = stack_from_mesh(tris, layer_height, points_per_turn)
     heights = [layer_height * (i + 0.5) for i in range(len(contours))]
-
-    profile = _get_profile(body)
 
     # Line width: default like generate.py (~1.125x a 0.4 nozzle, rounded).
     nozzle = profile.nozzle_diameter
@@ -867,7 +914,7 @@ def generate_mesh_texture_design(body):
 
     mesh_radius = max(math.hypot(x, y) for c in contours for (x, y) in c) if contours else None
     blob_spec = _parse_blob_spec(body, radius=mesh_radius)
-    loop_spec = _parse_loop_spec(body, radius=mesh_radius)
+    loop_spec = _parse_loop_spec(body, profile, radius=mesh_radius)
     overhang_flow_k = max(0.0, min(float(body.get("overhang_flow_k", 0.0)), 1.0))
     fan_overhang_min, fan_overhang_max = _parse_overhang_fan(body)
     fan_off_layers = max(0, min(int(body.get("fan_off_layers", 0) or 0), 50))
@@ -1209,6 +1256,118 @@ def generate_export_stl(body):
 
 
 # --------------------------------------------------------------------------
+# Custom printer import/validate/save/delete/export API.
+#
+# The browser is never trusted: /validate and /save both run the FULL
+# printer_validate pipeline from scratch on whatever JSON arrives, exactly as
+# strict as the server-side parser path (/parse). Only printer_store.save_custom
+# ever writes to disk, and only after that re-validation has passed.
+# --------------------------------------------------------------------------
+PRINTER_UPLOAD_MAX_BYTES = 2 * 1024 * 1024  # 2 MB; mirrors printer_import's own cap
+
+
+def _profile_to_json(profile):
+    from dataclasses import asdict
+    return asdict(profile)
+
+
+def _issues_json(issues):
+    return [{"field": i.field, "message": i.message, "severity": i.severity} for i in issues]
+
+
+def _printer_entry_json(key, profile, custom, meta=None):
+    meta = meta or {}
+    warnings = meta.get("warnings") or []
+    # loop_row_max / loop_up_max mirror _parse_loop_spec's cap/cap_row formula
+    # exactly, computed here from the same amp_ceiling() so the client never
+    # re-derives it and the two can never drift apart.
+    cap = amp_ceiling(profile)
+    cap_row = loop_row_ceiling(profile)
+    return {
+        "key": key,
+        "name": profile.name,
+        "bed": [profile.bed_size_x, profile.bed_size_y],
+        "z_max": profile.z_max,
+        "z_amp_max": profile.z_amp_max,
+        "loop_row_max": cap_row,
+        "loop_up_max": cap,
+        "custom": bool(custom),
+        "source_format": meta.get("source_format") if custom else None,
+        "warnings": len(warnings) if custom else 0,
+    }
+
+
+def _validation_result_json(vr, detected_format=None, stripped_gcode=None):
+    out = {
+        "ok": vr.ok,
+        "profile": _profile_to_json(vr.profile),
+        "fields": [
+            {"name": f.name, "label": f.label, "unit": f.unit, "group": f.group,
+             "value": f.value, "source": f.source, "raw": f.raw, "note": f.note}
+            for f in vr.fields
+        ],
+        "issues": _issues_json(vr.issues),
+    }
+    if detected_format is not None:
+        out["detected_format"] = detected_format
+    if stripped_gcode is not None:
+        out["stripped_gcode"] = stripped_gcode
+    return out
+
+
+def _extract_stripped_gcode(source, allow_raw_gcode):
+    """Re-run sanitize_gcode just to recover the removed-line list for the API
+    response's `stripped_gcode` field. Cheap, and keeps ValidationResult's
+    shape exactly as specified (no extra fields bolted on) while still giving
+    the client the raw text of every line the safety scan stripped."""
+    from trident_gcode.printer_validate import sanitize_gcode
+    from trident_gcode.printer_import import RawConfig
+
+    def get(field_name):
+        if isinstance(source, RawConfig):
+            pf = source.fields.get(field_name)
+            return pf.value if pf is not None else None
+        if isinstance(source, dict):
+            return source.get(field_name)
+        return None
+
+    lines = []
+    for kind, field_name in (("start", "start_gcode"), ("end", "end_gcode")):
+        raw = get(field_name)
+        if raw:
+            _clean, _issues, stripped = sanitize_gcode(
+                str(raw), kind, allow_raw_gcode=allow_raw_gcode)
+            lines.extend(line for line, _reason in stripped)
+    return lines
+
+
+def _reject_nonfinite(token):
+    """json.loads accepts the bare tokens NaN/Infinity/-Infinity by default.
+
+    A non-finite number must never reach the generator: every comparison
+    against NaN is False, so it survives clamping AND defeats the guards meant
+    to catch it -- including GcodeWriter._check_bounds, whose out-of-bounds
+    tests would all silently pass. Refuse it at the door instead.
+    """
+    raise ValueError("non-finite number %s is not allowed" % token)
+
+
+def _read_json_body(handler):
+    """Read + parse a JSON request body. On malformed JSON, sends the 400
+    itself and returns None -- callers must check for that sentinel."""
+    try:
+        length = int(handler.headers.get("Content-Length", 0))
+    except (TypeError, ValueError):
+        length = 0
+    raw = handler.rfile.read(length) if length else b""
+    try:
+        return json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
+    except (ValueError, UnicodeDecodeError):
+        handler._send_json({"error": "Request body is not valid JSON."}, status=400)
+        return None
+
+
+# --------------------------------------------------------------------------
 # HTTP handler: static files + JSON API.
 # --------------------------------------------------------------------------
 class Handler(SimpleHTTPRequestHandler):
@@ -1236,16 +1395,19 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/printers":
+            custom = printer_store.list_custom()
             printers = []
             for key, prof in PRINTER_PROFILES.items():
-                printers.append({
-                    "key": key,
-                    "name": prof.name,
-                    "bed": [prof.bed_size_x, prof.bed_size_y],
-                    "z_max": prof.z_max,
-                    "z_amp_max": prof.z_amp_max,
-                })
+                printers.append(_printer_entry_json(key, prof, custom=False))
+            for key, entry in custom.items():
+                printers.append(_printer_entry_json(key, entry["profile"], custom=True, meta=entry["meta"]))
             self._send_json({"printers": printers, "default": DEFAULT_PRINTER_KEY})
+            return
+        if path == "/api/printer":
+            self._handle_get_printer(parse_qs(urlparse(self.path).query))
+            return
+        if path == "/api/printer/export":
+            self._handle_printer_export(parse_qs(urlparse(self.path).query))
             return
         if path == "/api/filaments":
             try:
@@ -1366,6 +1528,216 @@ class Handler(SimpleHTTPRequestHandler):
         # filename is accepted for client bookkeeping; not otherwise used server-side.
         _ = filename
 
+    def _handle_get_printer(self, query):
+        key = (query.get("key") or [None])[0]
+        if not key:
+            self._send_json({"ok": False, "error": "key is required"}, status=400)
+            return
+        profiles = printer_store.all_profiles()
+        profile = profiles.get(key)
+        if profile is None:
+            self._send_json({"ok": False, "error": "unknown printer key '%s'" % key}, status=404)
+            return
+        custom = printer_store.is_custom(key)
+        meta = {}
+        if custom:
+            loaded = printer_store.load_custom(key)
+            if loaded is not None:
+                meta = loaded[1]
+        self._send_json({
+            "ok": True, "key": key, "profile": _profile_to_json(profile),
+            "meta": meta, "custom": custom,
+        })
+
+    def _handle_printer_export(self, query):
+        key = (query.get("key") or [None])[0]
+        if not key:
+            self._send_json({"ok": False, "error": "key is required"}, status=400)
+            return
+        if printer_store.is_custom(key):
+            loaded = printer_store.load_custom(key)
+            if loaded is None:
+                self._send_json({"ok": False, "error": "unknown printer '%s'" % key}, status=404)
+                return
+            profile, meta = loaded
+        elif key in PRINTER_PROFILES:
+            profile, meta = PRINTER_PROFILES[key], {}
+        else:
+            self._send_json({"ok": False, "error": "unknown printer '%s'" % key}, status=404)
+            return
+
+        data_obj = {
+            "schema": "trident-printer/1",
+            "key": key,
+            "profile": _profile_to_json(profile),
+            "meta": meta,
+        }
+        payload = json.dumps(data_obj, indent=2).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Disposition", 'attachment; filename="%s.json"' % key)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _handle_printer_parse(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
+        if length <= 0:
+            self._send_json({"ok": False, "error": "empty request body", "detected_format": None},
+                             status=400)
+            return
+        if length > PRINTER_UPLOAD_MAX_BYTES:
+            self._send_json(
+                {"ok": False, "error": "file too large (max %d MB)" % (PRINTER_UPLOAD_MAX_BYTES // (1024 * 1024)),
+                 "detected_format": None}, status=400)
+            return
+
+        data = self.rfile.read(length)
+        filename = self.headers.get("X-Filename", "printer.cfg")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            self._send_json({"ok": False, "error": "file is not valid UTF-8 text",
+                              "detected_format": None}, status=400)
+            return
+
+        from trident_gcode.printer_import import detect_format
+        detected = detect_format(text, filename)
+        try:
+            raw = parse_printer_config(text, filename)
+        except PrinterImportError as e:
+            self._send_json({"ok": False, "error": str(e), "detected_format": detected}, status=400)
+            return
+        except Exception as e:
+            self._send_json({"ok": False, "error": "parse failed: %s" % e,
+                              "detected_format": detected}, status=400)
+            return
+
+        try:
+            vr = validate_raw(raw)
+            stripped = _extract_stripped_gcode(raw, allow_raw_gcode=False)
+            out = _validation_result_json(vr, detected_format=raw.fmt, stripped_gcode=stripped)
+            out["suggested_key"] = printer_store.make_key(vr.profile.name)
+            out["notes"] = list(raw.notes)
+        except Exception as e:
+            self._send_json({"ok": False, "error": "validation failed: %s" % e,
+                              "detected_format": raw.fmt}, status=400)
+            return
+        self._send_json(out, status=200)
+
+    def _handle_printer_validate(self):
+        body = _read_json_body(self)
+        if body is None:
+            return
+        profile_dict = body.get("profile") if isinstance(body, dict) else None
+        if not isinstance(profile_dict, dict):
+            profile_dict = {}
+        allow_raw = bool(body.get("allow_raw_gcode", False)) if isinstance(body, dict) else False
+        try:
+            vr = validate_profile_dict(profile_dict, allow_raw_gcode=allow_raw)
+            stripped = _extract_stripped_gcode(profile_dict, allow_raw_gcode=allow_raw)
+            out = _validation_result_json(vr, stripped_gcode=stripped)
+        except Exception as e:
+            self._send_json({"ok": False, "error": "validation failed: %s" % e}, status=400)
+            return
+        self._send_json(out, status=200)
+
+    def _handle_printer_save(self):
+        body = _read_json_body(self)
+        if body is None:
+            return
+        profile_dict = body.get("profile") if isinstance(body, dict) else None
+        if not isinstance(profile_dict, dict):
+            self._send_json({"ok": False, "error": "'profile' object is required"}, status=400)
+            return
+        allow_raw = bool(body.get("allow_raw_gcode", False))
+
+        try:
+            vr = validate_profile_dict(profile_dict, allow_raw_gcode=allow_raw)
+        except Exception as e:
+            self._send_json({"ok": False, "error": "validation failed: %s" % e}, status=400)
+            return
+        if not vr.ok:
+            self._send_json({"ok": False, "issues": _issues_json(vr.issues)}, status=400)
+            return
+
+        requested_key = body.get("key")
+        if requested_key and printer_store.is_custom(str(requested_key)):
+            key = str(requested_key)
+        elif requested_key and str(requested_key) in PRINTER_PROFILES:
+            self._send_json(
+                {"ok": False, "error": "'%s' is a built-in printer and cannot be overwritten" % requested_key},
+                status=400)
+            return
+        else:
+            key = printer_store.make_key(vr.profile.name)
+
+        meta_in = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+        import datetime as _dt
+        meta = dict(meta_in)
+        meta["source_format"] = meta_in.get("source_format")
+        meta["source_file"] = meta_in.get("source_file", "")
+        meta["imported_at"] = meta_in.get("imported_at") or _dt.datetime.now(_dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        # Re-validating an already-complete profile legitimately produces almost
+        # no warnings: "not found in config, using a conservative default" and
+        # "clamped from 99999" can only be said at IMPORT time, and by now those
+        # fields are all present and in range. Those are exactly the caveats
+        # worth remembering, so the import-time list is carried in meta and
+        # merged here. It is display-only text, but it still arrives from the
+        # browser, so it is bounded before being written to disk.
+        import_warnings = meta_in.get("warnings")
+        merged: list[str] = []
+        seen: set = set()
+
+        def _add(msg: str) -> None:
+            # De-duplicated: the client sends its import-time list plus whatever
+            # the latest re-validation produced, and those overlap heavily.
+            if msg and msg not in seen:
+                seen.add(msg)
+                merged.append(msg)
+
+        if isinstance(import_warnings, list):
+            for w in import_warnings[:100]:
+                if isinstance(w, str) and w.strip():
+                    _add(w.strip()[:300])
+        for i in vr.issues:
+            if i.severity == "warn":
+                _add(i.message)
+        meta["warnings"] = merged[:50]
+
+        try:
+            printer_store.save_custom(key, vr.profile, meta)
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+            return
+        except OSError as e:
+            self._send_json({"ok": False, "error": "could not save printer: %s" % e}, status=500)
+            return
+
+        self._send_json({
+            "ok": True, "key": key,
+            "printer": _printer_entry_json(key, vr.profile, custom=True, meta=meta),
+            "issues": _issues_json(vr.issues),
+        })
+
+    def _handle_printer_delete(self):
+        body = _read_json_body(self)
+        if body is None:
+            return
+        key = str(body.get("key") or "")
+        if not key or key in PRINTER_PROFILES or not printer_store.is_custom(key):
+            self._send_json({"ok": False, "error": "'%s' is not a deletable custom printer" % key},
+                             status=400)
+            return
+        if not printer_store.delete_custom(key):
+            self._send_json({"ok": False, "error": "could not delete '%s'" % key}, status=400)
+            return
+        self._send_json({"ok": True})
+
     def do_POST(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/upload_mesh":
@@ -1373,6 +1745,18 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == "/api/export_stl":
             self._handle_export_stl()
+            return
+        if path == "/api/printer/parse":
+            self._handle_printer_parse()
+            return
+        if path == "/api/printer/validate":
+            self._handle_printer_validate()
+            return
+        if path == "/api/printer/save":
+            self._handle_printer_save()
+            return
+        if path == "/api/printer/delete":
+            self._handle_printer_delete()
             return
         if path != "/api/generate":
             self.send_error(404, "Not Found")
@@ -1383,7 +1767,7 @@ class Handler(SimpleHTTPRequestHandler):
             length = 0
         raw = self.rfile.read(length) if length else b""
         try:
-            body = json.loads(raw.decode("utf-8")) if raw else {}
+            body = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
         except (ValueError, UnicodeDecodeError):
             self._send_json({"error": "Request body is not valid JSON."}, status=400)
             return
@@ -1416,7 +1800,7 @@ class Handler(SimpleHTTPRequestHandler):
             length = 0
         raw = self.rfile.read(length) if length else b""
         try:
-            body = json.loads(raw.decode("utf-8")) if raw else {}
+            body = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
         except (ValueError, UnicodeDecodeError):
             self._send_json({"error": "Request body is not valid JSON."}, status=400)
             return

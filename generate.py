@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Callable
 
@@ -105,6 +106,17 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--save-config", default=None, metavar="FILE.json",
                     help="write fully-resolved settings to a JSON config file, "
                          "then continue generating")
+
+    # Printer selection (built-in or custom-imported, see printer_store.py).
+    ap.add_argument("--printer", default=None, metavar="KEY",
+                    help="select a built-in or custom printer profile by key "
+                         "(see --list-printers). Applied before --nozzle and "
+                         "before a config file's 'machine' overrides.")
+    ap.add_argument("--list-printers", action="store_true",
+                    help="list available printer keys (built-in and custom) and exit")
+    ap.add_argument("--import-printer", default=None, metavar="FILE",
+                    help="parse + validate + save FILE as a new custom printer, "
+                         "print the safety report, and exit")
 
     # Geometry -- pick ONE mode: parametric --shape, --stl wrap, or --surface follow.
     ap.add_argument("--stl", default=None, help="path to an STL mesh to wrap a spiral around")
@@ -221,8 +233,77 @@ def main(argv: list[str] | None = None) -> int:
     # Pass 2: full parse (with config defaults baked in).
     args = ap.parse_args(argv)
 
+    # ---- printer meta-commands (list / import) -------------------------------
+    # Both exit before touching generation at all -- neither needs --out etc.
+    if args.list_printers:
+        from trident_gcode import printer_store
+        profiles = printer_store.all_profiles()
+        custom_keys = set(printer_store.list_custom().keys())
+        print(f"{'key':22s} {'name':24s} {'bed':12s} {'z_max':8s} custom")
+        for key in sorted(profiles):
+            p = profiles[key]
+            bed = f"{p.bed_size_x:.0f}x{p.bed_size_y:.0f}"
+            tag = "custom" if key in custom_keys else ""
+            print(f"{key:22s} {p.name:24.24s} {bed:12s} {p.z_max:<8.0f} {tag}")
+        return 0
+
+    if args.import_printer:
+        from trident_gcode.printer_import import parse as parse_printer_config, PrinterImportError
+        from trident_gcode.printer_validate import validate_raw
+        from trident_gcode import printer_store
+        path = args.import_printer
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError as e:
+            print(f"ERROR: cannot read '{path}': {e}", file=sys.stderr)
+            return 1
+        filename = os.path.basename(path)
+        try:
+            raw = parse_printer_config(text, filename)
+        except PrinterImportError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+
+        vr = validate_raw(raw)
+        for issue in vr.issues:
+            stream = sys.stderr if issue.severity == "error" else sys.stdout
+            print(f"  [{issue.severity.upper()}] {issue.field or '(general)'}: {issue.message}",
+                  file=stream)
+        if not vr.ok:
+            print("ERROR: import failed validation - see errors above. Nothing was saved.",
+                  file=sys.stderr)
+            return 1
+
+        key = printer_store.make_key(vr.profile.name)
+        import datetime as _dt
+        meta = {
+            "source_format": raw.fmt,
+            "source_file": filename,
+            "imported_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "warnings": [i.message for i in vr.issues if i.severity == "warn"],
+        }
+        printer_store.save_custom(key, vr.profile, meta)
+        print(f"Saved custom printer '{key}' ({vr.profile.name})")
+        print(f"  bed   : {vr.profile.bed_size_x:.0f} x {vr.profile.bed_size_y:.0f} mm, "
+              f"z_max {vr.profile.z_max:.0f} mm")
+        print(f"  warn  : {len(meta['warnings'])} warning(s)")
+        return 0
+
     # ---- machine profile ----------------------------------------------------
-    profile = PrinterProfile(nozzle_diameter=args.nozzle)
+    if args.printer:
+        from trident_gcode import printer_store
+        from dataclasses import replace
+        profiles = printer_store.all_profiles()
+        if args.printer not in profiles:
+            print(f"ERROR: unknown printer '{args.printer}'. Valid keys: "
+                  f"{', '.join(sorted(profiles))}", file=sys.stderr)
+            return 1
+        # nozzle_diameter still comes from --nozzle (existing CLI precedence:
+        # an explicit CLI flag always wins over any profile default).
+        profile = replace(profiles[args.printer], nozzle_diameter=args.nozzle)
+    else:
+        profile = PrinterProfile(nozzle_diameter=args.nozzle)
 
     # Apply "machine" block from config file if present.
     if pre_args.config:
