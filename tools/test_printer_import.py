@@ -142,6 +142,187 @@ def test_prusa_ender3():
 # guard for the relative-extrusion trap -- the generator emits E deltas, so
 # M82 would massively over-extrude on a real machine).
 # ---------------------------------------------------------------------------
+def test_klipper_inline_comments():
+    """Vendor configs annotate every line; the parser must survive that.
+
+    Two real failures this guards, both from one user's FLY-D5 config:
+    a section header with a trailing comment ("[printer]   # note") does not
+    end with ']', so the whole section was silently dropped and its keys read
+    back as "not found in config"; and a value with a trailing comment
+    ("180   # note") reached the validator with the comment attached and
+    failed as "not a number". Klipper reads both fine -- it parses with
+    configparser(inline_comment_prefixes=(';', '#')).
+    """
+    text = _read_fixture("klipper_inline_comments.cfg")
+    raw = parse_printer_config(text, "klipper_inline_comments.cfg")
+    check(raw.fmt == "klipper_cfg", "inline_comments: detected format", raw.fmt)
+
+    vr = validate_raw(raw)
+    p = vr.profile
+    check(vr.ok, "inline_comments: validates with no errors",
+          "; ".join(i.message for i in vr.issues if i.severity == "error"))
+
+    # The display name is the whole-line comment ABOVE [printer]. Finding it
+    # means the name lookup recognises a header that carries a trailing
+    # comment; when it compared for an exact "[printer]" it found nothing here
+    # and every FLY/BTT config imported under its filename instead. The
+    # header's own "# machine settings" must NOT be mistaken for the name.
+    check(p.name == "FLY-D5 Mini",
+          "inline_comments: display name read from the comment above [printer]",
+          repr(p.name))
+
+    # Sections whose HEADER carried a comment must still be found.
+    check((p.max_velocity, p.max_z_velocity, p.max_accel, p.max_z_accel)
+          == (400.0, 15.0, 7500.0, 100.0),
+          "inline_comments: [printer] found despite a commented header",
+          f"{p.max_velocity},{p.max_z_velocity},{p.max_accel},{p.max_z_accel}")
+    check((p.nozzle_diameter, p.filament_diameter) == (0.4, 1.75),
+          "inline_comments: [extruder] found despite a commented header",
+          f"{p.nozzle_diameter},{p.filament_diameter}")
+    check((p.max_nozzle_temp, p.max_bed_temp) == (280.0, 120.0),
+          "inline_comments: heater max_temp values parsed",
+          f"{p.max_nozzle_temp},{p.max_bed_temp}")
+
+    # Values whose line carried a comment must parse as numbers.
+    check((p.bed_size_x, p.bed_size_y, p.z_max, p.z_min) == (180.0, 180.0, 180.0, -5.0),
+          "inline_comments: commented values parsed as numbers",
+          f"{p.bed_size_x},{p.bed_size_y},{p.z_max},{p.z_min}")
+
+    # A start macro with no temperature params can't be called with
+    # temperatures, so it is inlined -- and that inlined body sets no
+    # temperature and no M83, which the user must be told about.
+    msgs = [i.message for i in vr.issues if i.severity == "warn"]
+    check(any("never sets a temperature" in m for m in msgs),
+          "inline_comments: warns that the start macro never heats", str(msgs))
+    check(any("no M83" in m for m in msgs),
+          "inline_comments: warns that the start macro sets no M83", str(msgs))
+    check(any("[include" in n for n in raw.notes),
+          "inline_comments: notes that [include] files were not uploaded", str(raw.notes))
+
+    # The macro body gets INLINED (no temperature params to call it with), and
+    # its printer.cfg '#' comments must become ';' on the way out. A G-code
+    # file has no '#' comment rule -- Klipper strips only ';' -- so a line like
+    # "#M117 Printing" would be sent as a command and answered with "Unknown
+    # command", aborting the print on the first layer.
+    sg = p.start_gcode
+    offenders = [ln for ln in sg.splitlines()
+                 if ln.strip().startswith("#") or " #" in ln.split(";", 1)[0]]
+    check(not offenders,
+          "inline_comments: no '#' survives into the emitted start G-code", str(offenders[:3]))
+    check(any("'#' comment" in m for m in msgs),
+          "inline_comments: warns that '#' comments were rewritten to ';'", str(msgs))
+
+
+def test_analyze_footprint_is_always_finite():
+    """No axis may report an infinite bound, however degenerate the G-code.
+
+    analyze_gcode seeds every axis at +/-inf and only folds an axis into the
+    footprint once it has actually been commanded, so that a start-G-code Z
+    lift can't record the assumed origin as real toolpath. An axis that is
+    never commanded then keeps the sentinel -- and GcodeAnalysis.footprint
+    returns -inf, which serve.py rounds straight into json.dumps. The default
+    encoder writes the bare token `-Infinity`, which is not valid JSON, so the
+    browser's JSON.parse throws away the entire stats response rather than one
+    field. Non-finite values must be resolved before they leave the analyzer.
+    """
+    import math
+    with tempfile.TemporaryDirectory() as td:
+        # Z-only motion: X and Y are never commanded at all.
+        path = os.path.join(td, "z_only.gcode")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("G28\nG90\nM83\nG1 Z5 F600\nG1 Z10 F600\nG1 Z15 F600\n")
+        a = analyze_gcode(path)
+
+        finite = all(math.isfinite(v) for v in list(a.min) + list(a.max))
+        check(finite, "analyze_footprint: no infinite bound on an uncommanded axis",
+              f"min={a.min} max={a.max}")
+        check(all(math.isfinite(v) for v in a.footprint) and math.isfinite(a.height),
+              "analyze_footprint: footprint and height are finite",
+              f"footprint={a.footprint} height={a.height}")
+
+        # The actual failure mode: serve.py's stats dict must round-trip.
+        stats = {"height_mm": round(a.height, 1),
+                 "footprint_mm": [round(a.footprint[0], 1), round(a.footprint[1], 1)]}
+        blob = json.dumps(stats)
+        check("Infinity" not in blob and "NaN" not in blob,
+              "analyze_footprint: stats serialize to valid JSON", blob)
+        try:
+            json.loads(blob, parse_constant=_reject_constant)
+            parse_ok = True
+        except ValueError:
+            parse_ok = False
+        check(parse_ok, "analyze_footprint: a strict JSON parser accepts the stats", blob)
+
+        # An axis that IS commanded still reports its true span, not 0 -- the
+        # sentinel fix must not undo the thing the sentinel was added for.
+        path2 = os.path.join(td, "xy.gcode")
+        with open(path2, "w", encoding="utf-8") as fh:
+            fh.write("G28\nG90\nM83\nG1 Z0.2 F600\nG1 X60 Y60 F3000\n"
+                     "G1 X120 Y60 E1 F1200\nG1 X120 Y120 E1\n")
+        b = analyze_gcode(path2)
+        check((b.min[0], b.max[0], b.min[1], b.max[1]) == (60.0, 120.0, 60.0, 120.0),
+              "analyze_footprint: a commanded axis still reports its true span",
+              f"min={b.min} max={b.max}")
+
+
+def _reject_constant(name: str):
+    """json.loads accepts the bare tokens NaN/Infinity by default; this makes
+    them an error so the test cannot pass on a value a strict parser rejects."""
+    raise ValueError(f"non-finite constant {name} in JSON")
+
+
+def test_hash_comment_is_not_a_command():
+    """A '#' comment must never read as a command.
+
+    Every presence and blocked-token check runs on _command_text, which strips
+    ';' and '(...)' but knows nothing about '#'. printer.cfg comments with '#',
+    so before those comments were rewritten a line was scanned with a command
+    head of literally '#PRINT_START' or '#M502'. Two consequences, both real:
+
+      * _has_start_macro_call searches the head for PRINT_START, and
+        '#PRINT_START' contains it -- so a comment merely MENTIONING the macro
+        counted as a call, which suppresses both the missing-G28 error and the
+        missing-temperature warning. A config that never homes was cleared.
+      * '#M502' matches no blocked token, so the stripper left it in place.
+
+    ('#G28' was never a hole: the homing check anchors on ^\\s*G28 and '#' is
+    not whitespace. The macro-call check is the one that anchors loosely.)
+    """
+    # 1. A commented mention of the start macro must not suppress the checks.
+    clean, issues, _ = sanitize_gcode(
+        "#PRINT_START is called by the slicer\nG1 Z5 F600\n", "start")
+    errs = [i.message for i in issues if i.severity == "error"]
+    check(any("G28" in m for m in errs),
+          "hash_comment: '#PRINT_START' does not count as a start-macro call",
+          str(errs))
+    check("#" not in clean,
+          "hash_comment: no '#' survives sanitation", repr(clean))
+    check("PRINT_START" in clean,
+          "hash_comment: the author's text is rewritten, not deleted", repr(clean))
+
+    # 2. A real macro call still counts -- the rule must not break working
+    #    configs, or every Klipper user gets an error they have to ignore.
+    _, issues_ok, _ = sanitize_gcode(
+        "PRINT_START EXTRUDER=200 BED=60    # start the print\n", "start")
+    check(not any(i.severity == "error" for i in issues_ok),
+          "hash_comment: a real PRINT_START with a trailing '#' comment still counts",
+          str([i.message for i in issues_ok]))
+
+    # 3. Blocked tokens must not hide behind a leading '#'.
+    clean3, _, _ = sanitize_gcode("G28\nM104 S200\n#M502\nM83\n", "start")
+    commanded3 = [ln.strip() for ln in clean3.splitlines()
+                  if ln.strip() and not ln.strip().startswith(";")]
+    check(not any("M502" in ln.upper() for ln in commanded3),
+          "hash_comment: '#M502' is not left as an executable line", str(commanded3))
+
+    # 4. A '#' that is NOT comment syntax (no preceding whitespace) is left
+    #    alone, matching configparser's inline-comment rule.
+    clean4, _, _ = sanitize_gcode("G28\nM117 lot#42\nM83\n", "start")
+    check("lot#42" in clean4,
+          "hash_comment: a '#' inside a token is not treated as a comment",
+          repr(clean4))
+
+
 def test_cura_ender3():
     text = _read_fixture("cura_ender3.def.json")
     raw = parse_printer_config(text, "cura_ender3.def.json")
@@ -274,13 +455,30 @@ def test_hostile():
         i.severity == "error" and "G28" in i.message for i in vr.issues)
     check(has_g28_error, "hostile: missing-G28 error present")
 
+    # The error above is the load-bearing one. The fixture's macro body says
+    # "#PRINT_START is called by the slicer, honest" -- a printer.cfg comment.
+    # Read as a command it is a start-macro CALL, and a start-macro call
+    # suppresses both the missing-G28 error and the missing-temperature
+    # warning, clearing a config that never homes at all. So has_g28_error
+    # above only stays true while '#' is rewritten to ';'.
+    commanded = [ln.strip() for ln in p.start_gcode.splitlines()
+                 if ln.strip() and not ln.strip().startswith(";")]
+    check(not any("PRINT_START" in ln.split()[0].upper() for ln in commanded),
+          "hostile: no line CALLS PRINT_START -- the '#PRINT_START' is a comment",
+          str(commanded))
+
     removed = {
         i.message.split("'")[1] for i in vr.issues
         if i.message.startswith("removed '")
     }
     check({"M502", "M851", "M303"} <= removed, "hostile: M502/M851/M303 stripped", str(removed))
-    check("M502" not in p.start_gcode and "M851" not in p.start_gcode and "M303" not in p.start_gcode,
-          "hostile: dangerous commands absent from the sanitized profile text")
+    # Commanded lines only, not a substring scan of the whole block: the
+    # fixture's "#M502" is preserved as the comment ";M502" on purpose, and a
+    # comment naming a dangerous code is exactly what must be allowed through
+    # while the command itself is not.
+    check(not any(ln.split()[0].upper() in {"M502", "M851", "M303"} for ln in commanded),
+          "hostile: dangerous commands absent from the sanitized profile text",
+          str(commanded))
 
     try:
         p.start_gcode.format_map({"nozzle_temp": 200.0, "bed_temp": 60.0, "material": "PLA"})
@@ -705,6 +903,9 @@ def main() -> int:
     test_klipper_trident()
     test_orca_machine()
     test_prusa_ender3()
+    test_klipper_inline_comments()
+    test_analyze_footprint_is_always_finite()
+    test_hash_comment_is_not_a_command()
     test_cura_ender3()
     test_cura_center_zero()
     test_creality_print_machine()

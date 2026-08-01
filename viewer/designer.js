@@ -1370,6 +1370,9 @@
       }
       input.className = 'pm-field-input';
       input.setAttribute('data-field', f.name);
+      // These hold machine values, not prose -- "klipper", "corexy" and the
+      // like otherwise get a red spellcheck squiggle that reads as an error.
+      input.spellcheck = false;
       control.appendChild(input);
 
       var tag = document.createElement('span');
@@ -1438,6 +1441,77 @@
         reportEl.appendChild(reportHead(warns.length + ' warning(s)', 'pm-report-head-warn'));
         warns.forEach(function(i){ reportEl.appendChild(reportRow(i)); });
       }
+      reportEl.appendChild(reportCopyButton(errors, warns));
+    }
+
+    // Plain-text dump of the whole report. These messages are the useful thing
+    // to paste into a forum post or a bug report when a config will not import,
+    // and they are otherwise unselectable -- each row is a <button>, so a drag
+    // selects nothing.
+    function reportText(errors, warns){
+      var lines = [];
+      var name = (nameInput && nameInput.value) || 'custom printer';
+      lines.push(name + ' -- ' + (pmState.detectedFormat || 'unknown format'));
+      lines.push('');
+      if(errors.length){
+        lines.push(errors.length + ' error(s):');
+        errors.forEach(function(i){ lines.push('  - ' + i.message); });
+        lines.push('');
+      }
+      if(warns.length){
+        lines.push(warns.length + ' warning(s):');
+        warns.forEach(function(i){ lines.push('  - ' + i.message); });
+      }
+      var stripped = pmState.strippedGcode || [];
+      if(stripped.length){
+        lines.push('');
+        lines.push(stripped.length + ' G-code line(s) removed:');
+        stripped.forEach(function(s){
+          lines.push('  - ' + (typeof s === 'string' ? s : (s.line + ' -- ' + s.reason)));
+        });
+      }
+      return lines.join('\n');
+    }
+
+    function reportCopyButton(errors, warns){
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pm-report-copy';
+      btn.textContent = 'Copy report';
+      btn.addEventListener('click', function(){
+        var text = reportText(errors, warns);
+        function done(ok){
+          btn.textContent = ok ? 'Copied' : 'Press Ctrl+C';
+          btn.classList.toggle('pm-report-copy-done', ok);
+          setTimeout(function(){
+            btn.textContent = 'Copy report';
+            btn.classList.remove('pm-report-copy-done');
+          }, 2000);
+        }
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(text).then(function(){ done(true); },
+                                                    function(){ fallback(text, done); });
+        } else {
+          fallback(text, done);
+        }
+      });
+      return btn;
+    }
+
+    // Clipboard API needs a secure context; if it is unavailable, drop the
+    // text into a selected textarea so Ctrl+C still works.
+    function fallback(text, done){
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', 'readonly');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch(e) { ok = false; }
+      document.body.removeChild(ta);
+      done(ok);
     }
     function reportHead(text, cls){
       var h = document.createElement('div');
@@ -1466,7 +1540,12 @@
         }
         if(issue.message.indexOf('M83') !== -1){
           el.appendChild(makeQuickFix('Insert M83', function(){
-            insertStartLine('M83                ; relative extrusion');
+            // Appended, not prepended: M83 only has to be in effect for the
+            // moves WE emit, which follow the whole start block. Putting it
+            // first would also switch any purge line inside the user's own
+            // start G-code into relative E and silently change how much it
+            // extrudes.
+            appendStartLine('M83                ; relative extrusion');
           }));
         }
       }
@@ -1480,8 +1559,14 @@
       b.addEventListener('click', onClick);
       return b;
     }
+    // G28 must precede all motion, so homing is prepended.
     function insertStartLine(line){
       startGcodeEl.value = line + '\n' + startGcodeEl.value;
+      scheduleRevalidate();
+    }
+    function appendStartLine(line){
+      var cur = startGcodeEl.value.replace(/\s+$/, '');
+      startGcodeEl.value = (cur ? cur + '\n' : '') + line;
       scheduleRevalidate();
     }
     function focusField(fieldName){

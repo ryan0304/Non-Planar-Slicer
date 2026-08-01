@@ -581,6 +581,45 @@ def _parse_prusa_ini(text: str, filename: str) -> RawConfig:
 # klipper_cfg -- Klipper's printer.cfg (section/key INI-ish, with multi-line
 # gcode_macro bodies)
 # ---------------------------------------------------------------------------
+_SECTION_RE = re.compile(r'\[([^\]]+)\]\s*(.*)$')
+
+# Klipper reads printer.cfg with
+# configparser.RawConfigParser(inline_comment_prefixes=(';', '#')), so a
+# comment may follow a value on the same line. Requiring whitespace before
+# the marker matches configparser and leaves a '#' that is genuinely part of
+# a value alone.
+_INLINE_COMMENT_RE = re.compile(r'(?:^|\s)[#;]')
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Drop a trailing '# ...' / '; ...' comment from a config value."""
+    m = _INLINE_COMMENT_RE.search(value)
+    return (value[:m.start()] if m else value).strip()
+
+
+def _section_header(line: str) -> str | None:
+    """Return the section name if ``line`` is a section header, else None.
+
+    Every place that needs to recognise a header goes through this, so the
+    parser and the things that search the raw text cannot drift apart about
+    what one looks like. They did: once headers were allowed to carry a
+    trailing comment, the parser accepted "[printer]  # machine settings" but
+    _klipper_name_from_comment still compared for an exact "[printer]", so the
+    display name silently stopped being found on precisely the vendor configs
+    that motivated the change.
+
+    A commented-out header ("#[printer]") is not a header -- the regex is
+    anchored at the start of the stripped line, so '#' fails to match.
+    """
+    m = _SECTION_RE.match(line.strip())
+    if not m:
+        return None
+    trailing = m.group(2).strip()
+    if trailing and trailing[0] not in ("#", ";"):
+        return None
+    return m.group(1).strip()
+
+
 def _parse_klipper_sections(text: str) -> dict[str, dict[str, str]]:
     """Split printer.cfg into {section_name: {key: value}}.
 
@@ -606,11 +645,19 @@ def _parse_klipper_sections(text: str) -> dict[str, dict[str, str]]:
         stripped = raw_line.strip()
         if stripped[0] in ("#", ";"):
             continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            current = stripped[1:-1].strip()
-            sections.setdefault(current, {})
-            current_key = None
-            continue
+        if stripped.startswith("["):
+            # A section header may carry a trailing comment: vendor configs
+            # (FLY, BTT, Voron kits) annotate almost every line, so
+            # "[printer]   # printer settings" is the common shape, not the
+            # exception. Requiring the line to END with ']' silently dropped
+            # those headers, and every key under them was then attributed to
+            # the previous section or discarded.
+            name = _section_header(stripped)
+            if name is not None:
+                current = name
+                sections.setdefault(current, {})
+                current_key = None
+                continue
         if current is None:
             continue
 
@@ -621,7 +668,7 @@ def _parse_klipper_sections(text: str) -> dict[str, dict[str, str]]:
             continue
         idx = min(candidates)
         key = stripped[:idx].strip()
-        val = stripped[idx + 1:].strip()
+        val = _strip_inline_comment(stripped[idx + 1:])
         sections[current][key] = val
         current_key = key
 
@@ -640,18 +687,26 @@ def _parse_pair(raw: str) -> tuple[float, float] | None:
 
 def _klipper_name_from_comment(text: str) -> str | None:
     """A comment on the line immediately above [printer] is treated as the
-    printer's display name (a common Klipper config convention)."""
+    printer's display name (a common Klipper config convention).
+
+    Only a WHOLE-line comment above the header counts. A comment on the header
+    itself ("[printer]  # machine settings") is an annotation, not a name --
+    harvesting it would label every vendor config "machine settings", which is
+    worse than falling back to the filename.
+    """
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        if line.strip().lower() == "[printer]":
-            for j in range(i - 1, -1, -1):
-                prev = lines[j].strip()
-                if not prev:
-                    continue
-                if prev[0] in ("#", ";"):
-                    return prev.lstrip("#;").strip()
-                break
+        name = _section_header(line)
+        if name is None or name.lower() != "printer":
+            continue
+        for j in range(i - 1, -1, -1):
+            prev = lines[j].strip()
+            if not prev:
+                continue
+            if prev[0] in ("#", ";"):
+                return prev.lstrip("#;").strip()
             break
+        break
     return None
 
 

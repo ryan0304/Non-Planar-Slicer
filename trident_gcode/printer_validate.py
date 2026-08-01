@@ -258,6 +258,30 @@ _MAX_GCODE_LINES = 500
 _START_MACRO_RE = re.compile(r'(PRINT_START|START_PRINT|PRINT_BEGIN)', re.IGNORECASE)
 
 
+def _hash_comments_to_semicolons(text: str) -> tuple[str, int]:
+    """Rewrite config-style '#' comments as G-code ';' comments.
+
+    printer.cfg is read by configparser, where '#' starts a comment. A G-code
+    FILE has no such rule -- Klipper strips only ';'. So a macro body inlined
+    into our start G-code carries '#' lines that the printer would try to
+    EXECUTE: '#M117 Printing' comes back as 'Unknown command' and aborts the
+    print. Rewriting rather than deleting keeps the author's text visible.
+
+    Only '#' at the start of a line or preceded by whitespace counts, matching
+    configparser's inline-comment rule and leaving a '#' inside a value alone.
+    """
+    out = []
+    n = 0
+    for line in text.splitlines():
+        m = re.search(r'(?:^|\s)#', line)
+        if m:
+            idx = m.end() - 1
+            line = line[:idx] + ";" + line[idx + 1:]
+            n += 1
+        out.append(line)
+    return "\n".join(out), n
+
+
 def _command_text(text: str) -> str:
     """Strip comments, leaving only lines the printer actually executes.
 
@@ -312,6 +336,16 @@ def sanitize_gcode(text: str, kind: str, *, allow_raw_gcode: bool = False
             "error"))
         lines = lines[:_MAX_GCODE_LINES]
     text = "\n".join(lines)
+
+    text, hash_comments = _hash_comments_to_semicolons(text)
+    if hash_comments:
+        issues.append(Issue(
+            field_name,
+            f"rewrote {hash_comments} '#' comment(s) to ';'. In printer.cfg '#' starts a "
+            f"comment, but in a G-code FILE it does not -- Klipper only strips ';', so a "
+            f"line like '#M117 Printing' would have been sent as a command and answered "
+            f"with 'Unknown command', aborting the print.",
+            "warn"))
 
     text = _normalize_placeholders(text)
     text, escaped_names = _escape_unknown_braces(text)

@@ -614,14 +614,27 @@ label.radio-inline { cursor:pointer; }
 .pm-modal-card { position:relative; width:min(760px, 94vw); max-height:88vh; display:flex; flex-direction:column;
   background:var(--surface); border:1px solid var(--accent); border-radius:var(--radius-lg);
   box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden; }
-.pm-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4);
-  border-bottom:1px solid var(--line); flex:none; }
+/* Horizontal padding is --sp-6 (24px), not --sp-4: this card is up to 760px
+   wide and prose runs the full width, so 16px left the text visibly crowding
+   the border. Header, body and footer share the inset so everything lines up
+   on one vertical edge. Narrow viewports drop back to 16px below. */
+.pm-modal-header { display:flex; align-items:center; justify-content:space-between;
+  padding:var(--sp-3) var(--sp-6); border-bottom:1px solid var(--line); flex:none; }
 .pm-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
-.pm-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4); }
-.pm-modal-footer { display:flex; justify-content:flex-end; gap:8px; padding:var(--sp-3) var(--sp-4);
-  border-top:1px solid var(--line); flex:none; }
+.pm-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4) var(--sp-6); }
+.pm-modal-footer { display:flex; justify-content:flex-end; gap:8px;
+  padding:var(--sp-3) var(--sp-6); border-top:1px solid var(--line); flex:none; }
+@media (max-width: 560px) {
+  .pm-modal-header, .pm-modal-footer { padding-left:var(--sp-4); padding-right:var(--sp-4); }
+  .pm-modal-body { padding-left:var(--sp-4); padding-right:var(--sp-4); }
+}
 
 .pm-drop { margin-bottom:0; }
+/* .hint.tight-top pulls a caption up by 2px, which is right under a form row
+   but wrong under the drop zone: that has a visible dashed border, and the
+   -2px dragged the text into it (measured gap: -2px, i.e. overlapping).
+   Later in the file than .hint.tight-top and equal specificity, so this wins. */
+.pm-drop + .hint { margin-top:var(--sp-3); }
 .pm-error { margin-top:var(--sp-3); font-size:12px; color:var(--danger); }
 
 .pm-review-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:var(--sp-3); }
@@ -640,6 +653,13 @@ label.radio-inline { cursor:pointer; }
 .pm-report-head:first-child { margin-top:0; }
 .pm-report-head-error { color:var(--danger); }
 .pm-report-head-warn { color:var(--warn); }
+/* Copies the whole report as plain text. Sits at the end of the list rather
+   than in the heading: the heading is per-severity, the report is one thing. */
+.pm-report-copy { margin-top:var(--sp-3); background:none; border:1px solid var(--line);
+  color:var(--ink-muted); font-family:var(--font-ui); font-size:11px; padding:4px 10px;
+  border-radius:999px; cursor:pointer; transition:color .15s, border-color .15s; }
+.pm-report-copy:hover { color:var(--ink); border-color:var(--ink-muted); }
+.pm-report-copy-done { color:var(--ok); border-color:var(--ok); }
 .pm-issue { display:flex; flex-wrap:wrap; align-items:center; gap:8px; width:100%;
   border-left:2px solid var(--line); color:var(--ink); font-size:12px;
   line-height:1.4; padding:4px 0 4px 8px; margin-bottom:2px; }
@@ -660,8 +680,12 @@ button.pm-issue-msg:hover { text-decoration:underline; }
   font-size:12px; padding:5px 0; border-bottom:1px solid var(--line); }
 .pm-field-label { color:var(--ink-muted); flex:1 1 140px; min-width:0; }
 .pm-field-control { display:flex; align-items:center; gap:6px; flex:0 0 auto; }
-.pm-field-input { background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:6px;
-  padding:3px 5px; font-size:12px; width:92px; }
+/* background-COLOR, never the `background` shorthand: this class is also worn
+   by <select> (see select.pm-field-input below), and the shorthand resets
+   background-repeat/position to their initials -- which tiled the chevron SVG
+   across the whole control as a sawtooth pattern behind the value. */
+.pm-field-input { background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
 .pm-field-input:focus { border-color:var(--accent); outline:none; }
 select.pm-field-input { width:116px; padding-right:24px; }
 .pm-tag { flex:0 0 auto; font-size:10px; font-family:var(--font-mono); text-transform:uppercase;

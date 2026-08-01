@@ -61,6 +61,9 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
     rel_e = False           # M82 absolute / M83 relative
     abs_xyz = True          # G90/G91
     have = False
+    # An axis counts toward the footprint only after it has been explicitly
+    # commanded at least once (see the bounds update below).
+    seen_x = seen_y = seen_z = False
 
     # --- Print-time / Z-accel-demand state (see model notes below) ---
     max_v = profile.max_velocity
@@ -156,9 +159,9 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
                 except ValueError:
                     continue
                 c = tok[0]
-                if c == "X": nx = v if abs_xyz else x + v
-                elif c == "Y": ny = v if abs_xyz else y + v
-                elif c == "Z": nz = v if abs_xyz else z + v
+                if c == "X": nx = v if abs_xyz else x + v; seen_x = True
+                elif c == "Y": ny = v if abs_xyz else y + v; seen_y = True
+                elif c == "Z": nz = v if abs_xyz else z + v; seen_z = True
                 elif c == "F": curF = v
                 elif c == "E":
                     de = v if rel_e else (v - e)
@@ -296,11 +299,34 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
                     # isn't misread as a blob deposit.
                     pending_retract += -de
 
-                for i, val in enumerate((nx, ny, nz)):
+                # Only fold an axis into the footprint once it has actually
+                # been commanded. The parser starts every axis at 0, so a
+                # start-G-code move that touches only Z (a lift before the
+                # first travel) otherwise records the ASSUMED origin (0,0) as
+                # real toolpath -- reporting "X[0,120]" for a part genuinely
+                # spanning X[60,120], and warning that it falls outside the
+                # safe area when it does not. A warning that fires on every
+                # print is one users learn to ignore.
+                for i, (val, was_set) in enumerate(
+                        ((nx, seen_x), (ny, seen_y), (nz, seen_z))):
+                    if not was_set:
+                        continue
                     a.min[i] = min(a.min[i], val)
                     a.max[i] = max(a.max[i], val)
             x, y, z = nx, ny, nz
             have = True
+
+    # An axis that was never commanded is still holding its +/-inf sentinel,
+    # and those must not leave this function. GcodeAnalysis.footprint would
+    # return -inf, serve.py rounds it straight into json.dumps, and the
+    # default encoder emits the bare token `-Infinity` -- which is not valid
+    # JSON, so the browser's JSON.parse discards the WHOLE stats response, not
+    # just the footprint. format_report would print "X inf--inf" for the same
+    # reason. A zero span at the origin is the honest reading of an axis that
+    # never moved, and it restores the pre-sentinel behaviour for that case.
+    for i in range(3):
+        if a.min[i] == math.inf:
+            a.min[i] = a.max[i] = 0.0
 
     _evaluate(a, profile)
     return a
