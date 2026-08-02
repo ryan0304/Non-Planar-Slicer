@@ -431,12 +431,23 @@ def _parse_overhang_fan(body):
     return fan_min, fan_max
 
 
-def _parse_nozzle_temp(body):
-    """User-requested nozzle temp override, clamped to 150-320 C.
+def _parse_nozzle_temp(body, profile):
+    """User-requested nozzle temp override, bounded by ``profile``.
 
     Returns None when absent/null/empty/0 -- meaning "don't touch it", so the
     profile's (and any selected filament's) own default keeps flowing through
     unchanged. Only a genuine, non-zero value becomes an override.
+
+    The ceiling comes from the SELECTED profile, never from a constant here.
+    A hardcoded 320 let a request for 320 C through on every built-in profile
+    in the app -- they declare 260 or 300, so the module constant was looser
+    than every real machine it was supposed to be protecting. That is the same
+    shape as the AMP_MAX bug in CLAUDE.md: a limit typed into serve.py belongs
+    on the profile. 320 is kept only as an absolute backstop for a profile
+    that somehow declares something wilder.
+
+    The 150 floor stays absolute: there is no min_nozzle_temp on the profile,
+    and a cold-extrude floor is not something a config should be able to relax.
     """
     raw = body.get("nozzle_temp")
     if raw is None or raw == "":
@@ -445,9 +456,16 @@ def _parse_nozzle_temp(body):
         temp = float(raw)
     except (TypeError, ValueError):
         return None
+    # float() accepts the strings "NaN"/"Infinity", and every comparison
+    # against NaN is False -- it would survive the min()/max() below rather
+    # than being clamped by it (it currently lands on the floor only by luck
+    # of Python's argument order). Reject non-finite at the boundary.
+    if not math.isfinite(temp):
+        return None
     if temp == 0:
         return None
-    return max(150.0, min(temp, 320.0))
+    ceiling = min(320.0, float(profile.max_nozzle_temp))
+    return max(150.0, min(temp, ceiling))
 
 
 def _parse_blob_spec(body, radius: float | None = None) -> BlobSpec | None:
@@ -652,7 +670,7 @@ def generate_design(body):
     # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
     # nozzle_temp, which would otherwise silently clobber an explicit user
     # override. The user's choice must win over the filament's default.
-    nozzle_temp = _parse_nozzle_temp(body)
+    nozzle_temp = _parse_nozzle_temp(body, profile)
     if nozzle_temp is not None:
         writer_kwargs["nozzle_temp"] = nozzle_temp
 
@@ -906,7 +924,7 @@ def generate_mesh_texture_design(body):
     # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
     # nozzle_temp, which would otherwise silently clobber an explicit user
     # override. The user's choice must win over the filament's default.
-    nozzle_temp = _parse_nozzle_temp(body)
+    nozzle_temp = _parse_nozzle_temp(body, profile)
     if nozzle_temp is not None:
         writer_kwargs["nozzle_temp"] = nozzle_temp
 
@@ -1617,7 +1635,13 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         try:
-            vr = validate_raw(raw)
+            # repair=True: this IS the import boundary -- a freshly uploaded
+            # config becoming a profile for the first time. A start block
+            # with no heating at all is a guaranteed abort (Klipper refuses
+            # to extrude below min_extrude_temp), so it gets fixed here, not
+            # just warned about. Re-validation later (edit stage, /api/
+            # printer/validate) must NOT repeat this -- see sanitize_gcode.
+            vr = validate_raw(raw, repair=True)
             stripped = _extract_stripped_gcode(raw, allow_raw_gcode=False)
             out = _validation_result_json(vr, detected_format=raw.fmt, stripped_gcode=stripped)
             out["suggested_key"] = printer_store.make_key(vr.profile.name)

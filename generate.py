@@ -265,7 +265,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {e}", file=sys.stderr)
             return 1
 
-        vr = validate_raw(raw)
+        # repair=True: the CLI import path saves straight into the store with
+        # no review step, so a start block with no heating at all (Klipper
+        # refuses to extrude below min_extrude_temp -- a guaranteed abort,
+        # not a risk) must be fixed here rather than merely warned about.
+        vr = validate_raw(raw, repair=True)
         for issue in vr.issues:
             stream = sys.stderr if issue.severity == "error" else sys.stdout
             print(f"  [{issue.severity.upper()}] {issue.field or '(general)'}: {issue.message}",

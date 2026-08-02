@@ -1,10 +1,17 @@
 """On-disk persistence for custom (user-imported) printer profiles.
 
-Custom printers live in ``<repo_root>/custom_printers/<key>.json`` and are
-merged with the built-in PRINTER_PROFILES registry only at READ time, via
-``all_profiles()`` -- the built-in dict itself is never mutated (principle 5
-of the import spec: custom profiles must never shadow or corrupt the
-built-ins).
+Custom printers live under a per-user data directory (see ``store_dir()``)
+and are merged with the built-in PRINTER_PROFILES registry only at READ time,
+via ``all_profiles()`` -- the built-in dict itself is never mutated
+(principle 5 of the import spec: custom profiles must never shadow or
+corrupt the built-ins).
+
+Why per-user rather than next to the code: a shipped app is typically
+installed into a read-only location (Program Files, /Applications, ...), and
+even where it isn't, a single shared directory would let one user on a
+multi-user machine see (and silently inherit) another user's imported
+printers. Neither is acceptable for a file that ends up feeding motion
+limits to a physical machine.
 
 Every read re-validates the stored profile with printer_validate. A hand
 -edited or corrupted file could otherwise reach the generator with an unsafe
@@ -17,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from dataclasses import asdict
 
@@ -38,9 +46,104 @@ def _repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _legacy_store_dir() -> str:
+    """The old, pre-per-user location: ``<repo_root>/custom_printers``. Kept
+    only as a migration source -- never written to, never read from
+    directly by anything else in this module."""
+    return os.path.join(_repo_root(), "custom_printers")
+
+
+def _default_data_dir() -> str:
+    """The per-user data directory for this platform. Pure function of
+    sys.platform/the environment so tests can exercise every branch by
+    monkeypatching ``sys.platform`` (this module's attribute) and the
+    relevant env vars, without touching the real user profile."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        if not base:
+            # Conservative fallback if APPDATA is somehow unset.
+            base = os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
+        return os.path.join(base, "TridentGcode", "printers")
+    if sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library",
+                             "Application Support", "TridentGcode", "printers")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg and os.path.isabs(xdg):
+        return os.path.join(xdg, "trident-gcode", "printers")
+    return os.path.join(os.path.expanduser("~"), ".local", "share",
+                         "trident-gcode", "printers")
+
+
+def _env_override_dir() -> str | None:
+    """TRIDENT_PRINTER_DIR, honoured only when it is an absolute path -- a
+    relative value is ambiguous (relative to what? the cwd a server was
+    launched from is not something a user should have to reason about for a
+    setting that controls where their printer data lives), so it is treated
+    as unset and the default is used instead."""
+    override = os.environ.get("TRIDENT_PRINTER_DIR")
+    if not override:
+        return None
+    if not os.path.isabs(override):
+        print(f"WARNING: TRIDENT_PRINTER_DIR={override!r} is not an absolute "
+              f"path; ignoring it and using the default printer directory.",
+              file=sys.stderr)
+        return None
+    return override
+
+
+def _copy_legacy_files(old_dir: str, new_dir: str) -> int:
+    """Copy every ``custom_*.json`` file from ``old_dir`` into ``new_dir``
+    that does not already exist there. Never overwrites, never deletes or
+    otherwise modifies ``old_dir`` -- that directory may hold real user data,
+    so the worst this function is allowed to do on failure is copy nothing.
+    Returns the number of files copied."""
+    if not os.path.isdir(old_dir):
+        return 0
+    try:
+        names = os.listdir(old_dir)
+    except OSError:
+        return 0
+    copied = 0
+    for fn in names:
+        if not (fn.startswith("custom_") and fn.endswith(".json")):
+            continue
+        src = os.path.join(old_dir, fn)
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(new_dir, fn)
+        if os.path.exists(dst):
+            continue
+        try:
+            shutil.copy2(src, dst)
+            copied += 1
+        except OSError:
+            continue
+    return copied
+
+
+# Migration is attempted at most once per process: store_dir() may be called
+# many times (once per request in a long-running server), and re-listing the
+# legacy directory on every call would be pure overhead once the one-time
+# copy has already happened (or been confirmed unnecessary).
+_migration_attempted = False
+
+
+def _maybe_migrate_legacy_store(new_dir: str) -> None:
+    global _migration_attempted
+    if _migration_attempted:
+        return
+    _migration_attempted = True
+    old_dir = _legacy_store_dir()
+    copied = _copy_legacy_files(old_dir, new_dir)
+    if copied:
+        print(f"NOTE: migrated {copied} custom printer file(s) from "
+              f"{old_dir} to {new_dir}.", file=sys.stderr)
+
+
 def store_dir() -> str:
-    d = os.path.join(_repo_root(), "custom_printers")
+    d = _env_override_dir() or _default_data_dir()
     os.makedirs(d, exist_ok=True)
+    _maybe_migrate_legacy_store(d)
     return d
 
 

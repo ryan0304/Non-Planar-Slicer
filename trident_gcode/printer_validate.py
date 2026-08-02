@@ -309,7 +309,130 @@ def _has_start_macro_call(code: str) -> bool:
     return False
 
 
-def sanitize_gcode(text: str, kind: str, *, allow_raw_gcode: bool = False
+def _has_parameterized_start_macro_call(code: str) -> bool:
+    """True when a line CALLS a start macro AND passes it arguments (a bare
+    '=' anywhere on the line, Klipper's only call syntax for macro params).
+    That is the signal that the macro is responsible for heating -- e.g. a
+    synthesized 'PRINT_START EXTRUDER={nozzle_temp:.0f} BED={bed_temp:.0f}'
+    call. A bare, param-less call ('PRINT_START' alone) gives no such
+    guarantee, so it does NOT count here (unlike _has_start_macro_call, which
+    is deliberately more permissive for the pre-existing "never sets a
+    temperature" warning)."""
+    for line in code.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        head = s.split(None, 1)[0]
+        if _START_MACRO_RE.search(head) and "=" in s:
+            return True
+    return False
+
+
+_TEMP_CMD_RE = re.compile(r'^\s*(M109|M190|M104|M140)\b', re.IGNORECASE)
+_G28_LINE_RE = re.compile(r'^\s*G28\b', re.IGNORECASE)
+_M82_LINE_RE = re.compile(r'^\s*M82\b', re.IGNORECASE)
+_M83_LINE_RE = re.compile(r'^\s*M83\b', re.IGNORECASE)
+
+_AUTO_TAG = "[auto-added]"
+
+
+def _repair_missing_heating(text: str) -> tuple[str, list[Issue]]:
+    """Insert heating (and M83, if also missing) into a start G-code block
+    that has none of it at all.
+
+    Real report that motivated this: a Klipper PRINT_START macro with no
+    EXTRUDER/BED params got inlined verbatim by the importer (see
+    printer_import._parse_klipper_cfg). Its body reset the extruder, homed,
+    called the user's own sub-macro, and lifted Z -- and never heated
+    anything and never set M83. Klipper refuses to extrude below
+    min_extrude_temp (default 170C), so that block is not a risky print, it
+    is a guaranteed abort on the first extrusion move. Most users cannot
+    diagnose or hand-fix that, so it is repaired here instead of merely
+    warned about.
+
+    Placement (matches the user's own working, hand-fixed config):
+      - M140 (bed, no wait) goes at the very TOP, so the bed starts heating
+        immediately, in parallel with homing.
+      - M190/M104/M109 go immediately AFTER the LAST G28 (or right after the
+        M140 if there is no G28 at all): the nozzle is heated LAST, after
+        homing has already happened, so it oozes less onto the bed before
+        the first move.
+      - M83 (relative extrusion) is appended at the very END of the block,
+        if missing and only if the block does not already set M82 -- an
+        M82 hard error must never be silently resolved by adding M83 next
+        to it; see the M82 check below in sanitize_gcode, which still fires.
+        Appending rather than prepending means it cannot change the
+        extrusion semantics of a purge line already in the user's own start
+        G-code, and it lands after any macro call the block makes (which
+        might itself set M82 or M83).
+
+    Only called when repair=True (import time only -- see sanitize_gcode)
+    AND only when NO heating is present in any recognised form: an explicit
+    M104/M109/M140/M190 command, or a start-macro call that itself carries
+    parameters (see _has_parameterized_start_macro_call). A comment that
+    merely MENTIONS one of those commands does not count -- ``text`` here is
+    expected to already have had '#' rewritten to ';' and placeholders
+    normalized/escaped (sanitize_gcode's ordering), so _command_text(text)
+    reflects only what the printer would actually execute.
+
+    Returns (possibly-modified text, extra Issues to report). Never touches
+    ``text`` at all (returns it unchanged, with an empty issue list) when
+    heating is already present in either of the forms above.
+    """
+    code_lines = _command_text(text).splitlines()
+
+    has_temp = any(_TEMP_CMD_RE.match(ln) for ln in code_lines)
+    has_macro_params = _has_parameterized_start_macro_call("\n".join(code_lines))
+    if has_temp or has_macro_params:
+        return text, []
+
+    lines = text.splitlines()
+
+    bed_line = ("M140 S{bed_temp:.0f}          ; " + _AUTO_TAG +
+                " start heating the bed now, in parallel with homing")
+    lines.insert(0, bed_line)
+
+    # Recompute against the NEW lines (with M140 already prepended) to find
+    # the LAST G28 -- the shift by one line is deliberate, not a bug.
+    code_after_bed = _command_text("\n".join(lines)).splitlines()
+    g28_idx = None
+    for i, ln in enumerate(code_after_bed):
+        if _G28_LINE_RE.match(ln):
+            g28_idx = i
+    insert_at = (g28_idx + 1) if g28_idx is not None else 1
+
+    nozzle_block = [
+        "M190 S{bed_temp:.0f}          ; " + _AUTO_TAG + " wait for the bed to finish heating",
+        "M104 S{nozzle_temp:.0f}       ; " + _AUTO_TAG + " start heating the nozzle last, so it oozes less before the first move",
+        "M109 S{nozzle_temp:.0f}       ; " + _AUTO_TAG + " wait for the nozzle to reach temp before extruding",
+    ]
+    lines[insert_at:insert_at] = nozzle_block
+
+    issues = [Issue(
+        "start_gcode",
+        "start G-code never set a temperature -- Klipper refuses to extrude below "
+        "min_extrude_temp, so this would have aborted on the first extrusion move. "
+        "Automatically added M140/M190/M104/M109 (bed heats first, in parallel with "
+        "homing; nozzle heats last, after homing, so it oozes less before the first "
+        "move). Lines are marked " + _AUTO_TAG + " -- review them before printing.",
+        "warn")]
+
+    has_m82 = any(_M82_LINE_RE.match(ln) for ln in code_lines)
+    has_m83 = any(_M83_LINE_RE.match(ln) for ln in code_lines)
+    if not has_m82 and not has_m83:
+        m83_line = "M83                            ; " + _AUTO_TAG + " relative extrusion (this generator emits E deltas)"
+        lines.append(m83_line)
+        issues.append(Issue(
+            "start_gcode",
+            "no M83 and no start macro seen; automatically appended M83 at the end of "
+            "the start block, since this generator emits relative extrusion (E deltas "
+            "per move). Line is marked " + _AUTO_TAG + " -- review it before printing.",
+            "warn"))
+
+    return "\n".join(lines), issues
+
+
+def sanitize_gcode(text: str, kind: str, *, allow_raw_gcode: bool = False, repair: bool = False
                     ) -> tuple[str, list[Issue], list[tuple[str, str]]]:
     """Normalize placeholders, escape unknown ones, and strip dangerous
     commands from ``text`` (start or end G-code, selected by ``kind``).
@@ -319,6 +442,17 @@ def sanitize_gcode(text: str, kind: str, *, allow_raw_gcode: bool = False
     -command scan. The format_map round-trip check (mandatory -- this is the
     guarantee that a bad template cannot blow up generation) always runs
     before returning.
+
+    ``repair`` opts into auto-inserting heating (and M83) into a start block
+    that has none at all -- see _repair_missing_heating. It defaults to
+    False and must stay that way except on the actual import path: this
+    function also runs every time the review dialog re-validates the
+    textarea as the user edits it, and if repair fired there too, a user who
+    deliberately deleted the auto-inserted heating would find it silently
+    reappearing on the next keystroke -- not "editable" at all. Only the
+    caller that turns an uploaded file into a profile for the first time
+    (serve.py's /api/printer/parse handler, generate.py's --import-printer)
+    passes repair=True.
     """
     issues: list[Issue] = []
     stripped: list[tuple[str, str]] = []
@@ -356,6 +490,10 @@ def sanitize_gcode(text: str, kind: str, *, allow_raw_gcode: bool = False
             "unrecognised placeholder(s) " + ", ".join("{%s}" % n for n in shown) +
             " will be printed literally as comments/text - edit or remove them.",
             "warn"))
+
+    if repair and kind == "start":
+        text, repair_issues = _repair_missing_heating(text)
+        issues.extend(repair_issues)
 
     out_lines: list[str] = []
     for line in text.splitlines():
@@ -708,6 +846,13 @@ def _validate_probe_extra(source, field_name: str, has_probe: bool,
     return value
 
 
+# The non-planar dip allowed on a printer whose real clearance we do not know.
+# Deliberately small: it caps how far the nozzle drops below already-printed
+# material, so under-guessing costs print quality while over-guessing costs
+# hardware. Not tied to any specific machine -- see _validate_z_amp_max.
+_Z_AMP_MAX_UNKNOWN_DEFAULT = 0.4
+
+
 def _validate_z_amp_max(source, has_probe: bool, probe_clearance: float,
                          issues: list[Issue], fields_out: list[FieldInfo]) -> float:
     label, unit, group = _FIELD_META["z_amp_max"]
@@ -741,25 +886,48 @@ def _validate_z_amp_max(source, has_probe: bool, probe_clearance: float,
                                              source="parsed", raw=raw_text, note=None))
             return clamped
 
-    # Derived: never default higher than these formulas -- the user can raise
-    # it explicitly afterwards (still clamped to 10 above).
-    if has_probe:
-        value = min(0.95, max(0.2, probe_clearance * 0.5))
-    else:
-        value = 1.0
+    # No config format on earth records this value, so there is nothing to
+    # derive it FROM. It used to be computed as
+    #     has_probe -> min(0.95, max(0.2, probe_clearance * 0.5))
+    #     else      -> 1.0
+    # which was wrong twice over:
+    #
+    #   * 0.95 is the TRIDENT's measured constant (CLAUDE.md: revised down
+    #     empirically after a probe strike). probe_clearance is itself never
+    #     parsed by any of the five importers -- it is always its own 2.0
+    #     default -- so the formula collapsed to min(0.95, 1.0) = 0.95 for
+    #     essentially every imported machine. That is "missing config values
+    #     become another machine's numbers", the exact invariant CLAUDE.md
+    #     names, dressed up as a derivation.
+    #   * the no-probe branch (1.0) was LOOSER than the probe branch (0.95).
+    #     Probe detection is a fixed list of section-name heads, so an
+    #     unrecognised probe reads as "no probe" and was handed MORE dip.
+    #     Hardware we failed to detect must get more margin, not less.
+    #
+    # One flat conservative floor instead, on the same footing as CLAUDE.md's
+    # "an unknown max_z_velocity is 10 mm/s": low enough that it cannot drive
+    # the nozzle into printed material on a machine we know nothing about.
+    # Smaller is unambiguously safer here -- this caps how far the nozzle dips
+    # below already-printed material. It is a GUESS, not a measurement; the
+    # user raises it deliberately after a test print.
+    value = _Z_AMP_MAX_UNKNOWN_DEFAULT
     issues.append(Issue("z_amp_max",
-                         f"{label} defaulted to {_fmt_num(value)} mm - this is an empirical "
-                         f"value, confirm it with a test print.",
+                         f"{label} is not recorded in any printer config, so it was set to a "
+                         f"conservative {_fmt_num(value)} mm. This is a guess, not a measurement - "
+                         f"raise it only after a test print confirms the toolhead clears the "
+                         f"printed wall.",
                          "warn"))
     fields_out.append(FieldInfo("z_amp_max", label, unit, group, value=value, source="default",
-                                 raw=None, note="derived from probe clearance; confirm with a test print"))
+                                 raw=None,
+                                 note="conservative default; not derivable from any config - "
+                                      "confirm with a test print before raising"))
     return value
 
 
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
-def _validate(source, *, allow_raw_gcode: bool = False) -> ValidationResult:
+def _validate(source, *, allow_raw_gcode: bool = False, repair: bool = False) -> ValidationResult:
     issues: list[Issue] = []
     fields_out: list[FieldInfo] = []
 
@@ -814,15 +982,17 @@ def _validate(source, *, allow_raw_gcode: bool = False) -> ValidationResult:
     if start_ext is not None:
         raw_start = str(start_ext[0])
         clean_start, gcode_issues, stripped_start = sanitize_gcode(
-            raw_start, "start", allow_raw_gcode=allow_raw_gcode)
+            raw_start, "start", allow_raw_gcode=allow_raw_gcode, repair=repair)
         issues.extend(gcode_issues)
         note = f"{len(stripped_start)} dangerous line(s) removed" if stripped_start else None
         fields_out.append(FieldInfo("start_gcode", start_label, start_unit, start_group,
                                      value=clean_start, source="parsed",
                                      raw=start_ext[1] or raw_start, note=note))
     else:
+        # The generic default already heats (see _DEFAULT_START_GCODE), so
+        # repair is a guaranteed no-op here -- passed anyway for uniformity.
         clean_start, gcode_issues, stripped_start = sanitize_gcode(
-            _DEFAULT_START_GCODE, "start", allow_raw_gcode=allow_raw_gcode)
+            _DEFAULT_START_GCODE, "start", allow_raw_gcode=allow_raw_gcode, repair=repair)
         issues.extend(gcode_issues)
         issues.append(Issue("start_gcode",
                              "no start G-code found; installed a generic safe default - review it.",
@@ -951,15 +1121,24 @@ def _validate(source, *, allow_raw_gcode: bool = False) -> ValidationResult:
     return ValidationResult(profile=profile, fields=fields_out, issues=issues)
 
 
-def validate_raw(raw: RawConfig, *, allow_raw_gcode: bool = False) -> ValidationResult:
-    return _validate(raw, allow_raw_gcode=allow_raw_gcode)
+def validate_raw(raw: RawConfig, *, allow_raw_gcode: bool = False, repair: bool = False) -> ValidationResult:
+    """``repair`` defaults to False; pass True only from the actual import
+    boundary (a freshly uploaded/loaded config becoming a profile for the
+    first time), never from a re-validation of something already imported --
+    see sanitize_gcode's docstring for why."""
+    return _validate(raw, allow_raw_gcode=allow_raw_gcode, repair=repair)
 
 
-def validate_profile_dict(d: dict, *, allow_raw_gcode: bool = False) -> ValidationResult:
+def validate_profile_dict(d: dict, *, allow_raw_gcode: bool = False, repair: bool = False) -> ValidationResult:
     """Validate a browser-supplied profile dict. Exactly as strict as
     validate_raw -- the browser is never trusted, so every field goes through
     the same LIMITS/derived-rule/sanitize_gcode pipeline, just with
-    source="parsed" instead of provenance tied to a parsed config file."""
+    source="parsed" instead of provenance tied to a parsed config file.
+
+    ``repair`` defaults to False for the same reason as validate_raw: the
+    review dialog's live re-validation and the final save both go through
+    this function, and repairing on every call would make the auto-inserted
+    heating reappear the instant a user deleted it."""
     if not isinstance(d, dict):
         d = {}
-    return _validate(d, allow_raw_gcode=allow_raw_gcode)
+    return _validate(d, allow_raw_gcode=allow_raw_gcode, repair=repair)

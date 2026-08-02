@@ -489,6 +489,235 @@ def test_hostile():
 
     check(vr.ok is False, "hostile: ok is False")
 
+    # --- repair=True must coexist safely with every adversarial check above ---
+    # This is hostile.cfg's counter-example for auto-repair-at-import
+    # (printer_validate._repair_missing_heating): the macro body hides a fake
+    # "#M109 S200" behind a '#' comment. Read as a command that would satisfy
+    # the "already has heating" check and suppress repair entirely, leaving
+    # the real abort-on-first-extrusion bug unfixed. Read correctly as a
+    # comment (after the '#'->';' rewrite), repair still fires.
+    vr2 = validate_raw(raw, repair=True)
+    p2 = vr2.profile
+    commanded2 = [ln.strip() for ln in p2.start_gcode.splitlines()
+                  if ln.strip() and not ln.strip().startswith(";")]
+    check(any(ln.split()[0].upper() == "M109" for ln in commanded2),
+          "hostile+repair: a REAL M109 is inserted despite the fake commented one",
+          str(commanded2))
+    check(any(ln.split()[0].upper() == "M140" for ln in commanded2),
+          "hostile+repair: a REAL M140 (bed heat) is inserted", str(commanded2))
+
+    # The fixture's macro body already has a real (uncommented) M83 -- repair
+    # must not insert a second one next to it.
+    m83_count = sum(1 for ln in commanded2 if ln.split()[0].upper() == "M83")
+    check(m83_count == 1, "hostile+repair: M83 is not duplicated", str(commanded2))
+
+    # Dangerous tokens must still be stripped when repair=True -- repair is
+    # not a bypass of the rest of sanitize_gcode.
+    check(not any(ln.split()[0].upper() in {"M502", "M851", "M303"} for ln in commanded2),
+          "hostile+repair: dangerous commands are still stripped", str(commanded2))
+
+    # No G28 anywhere in the fixture and no real start-macro call -- repair
+    # only adds heating/M83, it does not and must not fabricate homing.
+    has_g28_error2 = any(
+        i.severity == "error" and "G28" in i.message for i in vr2.issues)
+    check(has_g28_error2, "hostile+repair: missing-G28 error still present after repair")
+    check(vr2.ok is False, "hostile+repair: ok is still False (G28 still missing)")
+
+    try:
+        p2.start_gcode.format_map({"nozzle_temp": 200.0, "bed_temp": 60.0, "material": "PLA"})
+        fmt_ok2 = True
+    except (KeyError, IndexError):
+        fmt_ok2 = False
+    check(fmt_ok2, "hostile+repair: format_map on the repaired template does not raise")
+
+
+# ---------------------------------------------------------------------------
+# 4b. klipper_delegating_macro.cfg -- the real user report, end to end.
+#
+# A PRINT_START macro with no EXTRUDER/BED params gets inlined verbatim by
+# the importer. Its body resets the extruder, homes, calls the user's own
+# sub-macro (PRINT_HUAXIAN), and lifts Z -- and never heats anything and
+# never sets M83. Klipper refuses to extrude below min_extrude_temp (default
+# 170C), so this is a guaranteed abort on the first extrusion move, not a
+# risk -- and WITHOUT repair, it still validates ok:True (only a warning),
+# which is exactly the historical bug this feature fixes.
+# ---------------------------------------------------------------------------
+def test_klipper_delegating_macro():
+    text = _read_fixture("klipper_delegating_macro.cfg")
+    raw = parse_printer_config(text, "klipper_delegating_macro.cfg")
+    check(raw.fmt == "klipper_cfg", "delegating_macro: detected format", raw.fmt)
+
+    # Without repair (the default -- what re-validation/editing uses), this
+    # reproduces the historical bug: it validates ok:True with only a
+    # warning, even though the block can never actually print.
+    vr_norepair = validate_raw(raw)
+    check(vr_norepair.ok,
+          "delegating_macro: without repair, this reproduces the historical bug "
+          "(ok:True despite being unprintable)",
+          "; ".join(i.message for i in vr_norepair.issues if i.severity == "error"))
+    warn_msgs0 = [i.message for i in vr_norepair.issues if i.severity == "warn"]
+    check(any("never sets a temperature" in m for m in warn_msgs0),
+          "delegating_macro: without repair, only the ordinary warning fires",
+          str(warn_msgs0))
+    check("M140" not in vr_norepair.profile.start_gcode,
+          "delegating_macro: without repair, the block is left broken",
+          vr_norepair.profile.start_gcode)
+
+    # With repair=True (the actual import path -- serve.py's
+    # /api/printer/parse and generate.py's --import-printer), the block is
+    # fixed automatically.
+    vr = validate_raw(raw, repair=True)
+    check(vr.ok, "delegating_macro: validates clean (ok) once repaired",
+          "; ".join(i.message for i in vr.issues if i.severity == "error"))
+    p = vr.profile
+    heads = [ln.split()[0] for ln in p.start_gcode.splitlines()
+              if ln.strip() and not ln.strip().startswith(";")]
+    check(heads == ["M140", "G92", "G28", "M190", "M104", "M109", "PRINT_HUAXIAN", "G1", "M83"],
+          "delegating_macro: repaired order matches the mandated placement", str(heads))
+
+    warn_msgs = [i.message for i in vr.issues if i.severity == "warn"]
+    check(any("Automatically added" in m for m in warn_msgs),
+          "delegating_macro: repair issue explains what was added", str(warn_msgs))
+    check(not any("never sets a temperature" in m for m in warn_msgs),
+          "delegating_macro: the now-inaccurate warning is gone, replaced by the repair issue",
+          str(warn_msgs))
+
+    try:
+        p.start_gcode.format_map({"nozzle_temp": 210.0, "bed_temp": 60.0, "material": "PLA"})
+        renders = True
+    except (KeyError, IndexError, ValueError):
+        renders = False
+    check(renders, "delegating_macro: repaired start_gcode renders without raising")
+
+
+# ---------------------------------------------------------------------------
+# 4c. Auto-repair unit coverage: order/placement, gating conditions, and the
+# opt-in-only-at-import contract, all exercised directly through
+# sanitize_gcode(..., repair=True) for precise control over each case.
+# ---------------------------------------------------------------------------
+_BACKGROUND_BLOCK = (
+    "G92 E0                         # reset extruder\n"
+    "G28                            # home all\n"
+    "PRINT_HUAXIAN                  # their own sub-macro\n"
+    "G1 Z20 F3000                   # raise gantry"
+)
+
+
+def test_auto_repair_start_gcode():
+    # --- A. the real user report: exact order/placement --------------------
+    clean, issues, _stripped = sanitize_gcode(_BACKGROUND_BLOCK, "start", repair=True)
+    lines = clean.splitlines()
+    heads = [ln.split()[0] for ln in lines]
+    check(heads == ["M140", "G92", "G28", "M190", "M104", "M109", "PRINT_HUAXIAN", "G1", "M83"],
+          "repair: real-world block gets the exact mandated order/placement", str(heads))
+    check(lines[0].startswith("M140 S{bed_temp:.0f}"), "repair: M140 is the very first line", lines[0])
+    check(lines[3].startswith("M190 S{bed_temp:.0f}") and lines[4].startswith("M104 S{nozzle_temp:.0f}")
+          and lines[5].startswith("M109 S{nozzle_temp:.0f}"),
+          "repair: M190/M104/M109 sit immediately after the last G28, in that order", str(lines[3:6]))
+    check(lines[-1].startswith("M83"), "repair: M83 is appended at the very end", lines[-1])
+    warn_msgs = [i.message for i in issues if i.severity == "warn"]
+    check(any("Automatically added" in m and "M140" in m for m in warn_msgs),
+          "repair: issue explains the added heating lines", str(warn_msgs))
+    check(any("appended M83" in m for m in warn_msgs),
+          "repair: issue explains the added M83 line", str(warn_msgs))
+    check(not any(i.severity == "error" for i in issues),
+          "repair: the real-world block has zero errors after repair", str(issues))
+    try:
+        clean.format_map({"nozzle_temp": 210.0, "bed_temp": 60.0, "material": "PLA"})
+        renders = True
+    except (KeyError, IndexError, ValueError):
+        renders = False
+    check(renders, "repair: the repaired real-world block still survives format_map")
+
+    # --- B. no G28 at all: the three post-home commands land right after M140 ---
+    clean_b, _i, _s = sanitize_gcode("PRINT_HUAXIAN\nG1 Z5 F600", "start", repair=True)
+    heads_b = [ln.split()[0] for ln in clean_b.splitlines()]
+    check(heads_b == ["M140", "M190", "M104", "M109", "PRINT_HUAXIAN", "G1", "M83"],
+          "repair: with no G28 at all, heating lands directly after M140", str(heads_b))
+
+    # --- C. heating already present (any of the 4 forms) -> no repair at all ---
+    for existing in ("G28\nM104 S200\nM83", "G28\nM109 S200\nM83",
+                     "G28\nM140 S60\nM83", "G28\nM190 S60\nM83"):
+        clean_c, issues_c, _s = sanitize_gcode(existing, "start", repair=True)
+        check(clean_c == existing,
+              f"repair: no-op when heating already present ({existing.splitlines()[1]})",
+              repr(clean_c))
+        check(not any("automatically added" in i.message.lower() for i in issues_c),
+              "repair: no repair issue is raised when heating is already present",
+              str([i.message for i in issues_c]))
+
+    # --- D. a parameterized start-macro call counts as heating -> no repair ---
+    clean_d, _issues_d, _s = sanitize_gcode(
+        "PRINT_START EXTRUDER=210 BED=60\nG28\nM83", "start", repair=True)
+    check("M140" not in clean_d and "auto-added" not in clean_d,
+          "repair: a parameterized macro call (literal temps) suppresses repair entirely", clean_d)
+    clean_d2, _issues_d2, _s = sanitize_gcode(
+        "PRINT_START EXTRUDER={nozzle_temp:.0f} BED={bed_temp:.0f}\nG28\nM83",
+        "start", repair=True)
+    check("M140" not in clean_d2 and "auto-added" not in clean_d2,
+          "repair: a synthesized (placeholder) parameterized macro call also suppresses repair",
+          clean_d2)
+
+    # --- E. a COMMENT mentioning a temperature command must not count ------
+    clean_e, _issues_e, _s = sanitize_gcode(
+        "; M109 S200 is set elsewhere\nG28\nM83", "start", repair=True)
+    code_e = [ln.strip() for ln in clean_e.splitlines()
+              if ln.strip() and not ln.strip().startswith(";")]
+    check(any(ln.split()[0] == "M109" for ln in code_e),
+          "repair: a commented '; M109 ...' does not count as heating -- repair still fires",
+          str(code_e))
+
+    # E2. Same idea, but for the macro-call-with-params check, and shaped
+    # exactly like hostile.cfg's own "#PRINT_START is called by the slicer,
+    # honest" counter-example: a '#' with NO space before the macro name.
+    # This one is genuinely load-bearing (unlike a plain "; M109 ..." above,
+    # which a leading '^\s*' anchor already rejects regardless of whether
+    # comments are stripped first): split(None,1)[0] on the raw, un-stripped
+    # line glues the marker onto the macro name as ONE token (";PRINT_START"),
+    # and a naive substring search on that raw token finds "PRINT_START"
+    # inside it and "=" later in the line -- so an implementation that skips
+    # _command_text() here would wrongly read this comment as a parameterized
+    # start-macro call and suppress repair entirely, leaving the printer
+    # unable to heat.
+    clean_e2, _issues_e2, _s = sanitize_gcode(
+        "#PRINT_START EXTRUDER=210 BED=60 was tried once\nG28\nM83", "start", repair=True)
+    code_e2 = [ln.strip() for ln in clean_e2.splitlines()
+               if ln.strip() and not ln.strip().startswith(";")]
+    check(any(ln.split()[0] == "M109" for ln in code_e2),
+          "repair: a '#PRINT_START EXTRUDER=...' comment (no space, hostile.cfg-style) "
+          "does not count as a parameterized macro call -- repair still fires",
+          str(code_e2))
+
+    # --- F. M82 stays a hard error and is NEVER masked by the M83 repair ---
+    clean_f, issues_f, _s = sanitize_gcode("G28\nM82\nG92 E0", "start", repair=True)
+    errs_f = [i.message for i in issues_f if i.severity == "error"]
+    check(any("M82" in m and "over-extrude" in m for m in errs_f),
+          "repair: M82 is still a hard error after repair runs", str(errs_f))
+    code_f = [ln.strip() for ln in clean_f.splitlines()
+              if ln.strip() and not ln.strip().startswith(";")]
+    check(not any(ln.split()[0] == "M83" for ln in code_f),
+          "repair: M83 is NOT appended when M82 is present (would mask the error)", str(code_f))
+    check(any(ln.split()[0] == "M140" for ln in code_f),
+          "repair: heating is still added even though M82 is present (independent problems)",
+          str(code_f))
+
+    # --- G. repair=False (the default / re-validation path) never fires ----
+    clean_g, issues_g, _s = sanitize_gcode(_BACKGROUND_BLOCK, "start")  # repair defaults False
+    check("M140" not in clean_g, "repair: repair=False (default) leaves the block unrepaired", clean_g)
+    warn_g = [i.message for i in issues_g if i.severity == "warn"]
+    check(any("never sets a temperature" in m for m in warn_g),
+          "repair: repair=False still emits the ordinary missing-temperature warning", str(warn_g))
+    check(any("no M83" in m for m in warn_g),
+          "repair: repair=False still emits the ordinary missing-M83 warning", str(warn_g))
+
+    # --- also via validate_profile_dict (the re-validate/save path) --------
+    prof_dict = {"name": "x", "bed_size_x": 235, "bed_size_y": 235, "z_max": 250,
+                 "start_gcode": _BACKGROUND_BLOCK, "end_gcode": "M104 S0\nM140 S0"}
+    vr_reval = validate_profile_dict(prof_dict)  # repair defaults False
+    check("M140" not in vr_reval.profile.start_gcode,
+          "repair: validate_profile_dict (re-validate/save path) never auto-repairs",
+          vr_reval.profile.start_gcode)
+
 
 # ---------------------------------------------------------------------------
 # 5. End-to-end smoke: build a small vase on each imported profile and check
@@ -596,6 +825,188 @@ def test_store_roundtrip(tmp_store: Path):
     finally:
         store_mod.store_dir = orig_store_dir
         store_mod._invalidate_cache()
+
+
+# ---------------------------------------------------------------------------
+# 6a. Store directory resolution: per-user path, env override, migration.
+#
+# store_dir() used to resolve to <repo_root>/custom_printers -- fine for a
+# dev checkout, wrong for a shipped app: the install directory is typically
+# read-only, and a single shared directory would let one user on a
+# multi-user machine see (and silently inherit) another user's imported
+# printers. These tests exercise the replacement without ever touching the
+# real per-user data directory: TRIDENT_PRINTER_DIR always points at a
+# tempfile.TemporaryDirectory(), and the per-platform check calls the pure
+# _default_data_dir() helper directly rather than store_dir() itself.
+# ---------------------------------------------------------------------------
+def test_store_dir_env_override(tmp_path: Path):
+    import trident_gcode.printer_store as store_mod
+
+    orig_env = os.environ.get("TRIDENT_PRINTER_DIR")
+    orig_migrated = store_mod._migration_attempted
+    target = tmp_path / "override_dir"
+    try:
+        os.environ["TRIDENT_PRINTER_DIR"] = str(target)
+        store_mod._migration_attempted = True  # migration is covered separately below
+        d = store_mod.store_dir()
+        check(os.path.normcase(os.path.abspath(d)) == os.path.normcase(os.path.abspath(str(target))),
+              "store_dir: TRIDENT_PRINTER_DIR override is honoured", f"{d} vs {target}")
+        check(os.path.isdir(d), "store_dir: override directory is created if missing")
+    finally:
+        if orig_env is None:
+            os.environ.pop("TRIDENT_PRINTER_DIR", None)
+        else:
+            os.environ["TRIDENT_PRINTER_DIR"] = orig_env
+        store_mod._migration_attempted = orig_migrated
+
+    # A relative override must be REJECTED, not resolved relative to the cwd
+    # (ambiguous -- relative to what? a server's launch directory is not
+    # something a user should have to reason about for where their printer
+    # data lives). Test the pure resolver directly so a bad env var can never
+    # cause this test to create/touch the real default data directory.
+    orig_env2 = os.environ.get("TRIDENT_PRINTER_DIR")
+    try:
+        os.environ["TRIDENT_PRINTER_DIR"] = "relative/not_absolute"
+        resolved = store_mod._env_override_dir()
+        check(resolved is None, "store_dir: a relative TRIDENT_PRINTER_DIR is ignored",
+              repr(resolved))
+    finally:
+        if orig_env2 is None:
+            os.environ.pop("TRIDENT_PRINTER_DIR", None)
+        else:
+            os.environ["TRIDENT_PRINTER_DIR"] = orig_env2
+
+
+def test_default_data_dir_per_platform():
+    import trident_gcode.printer_store as store_mod
+
+    orig_platform = store_mod.sys.platform
+    orig_appdata = os.environ.get("APPDATA")
+    orig_xdg = os.environ.get("XDG_DATA_HOME")
+    try:
+        store_mod.sys.platform = "win32"
+        os.environ["APPDATA"] = r"C:\Users\tester\AppData\Roaming"
+        d = store_mod._default_data_dir()
+        check(d == os.path.join(r"C:\Users\tester\AppData\Roaming", "TridentGcode", "printers"),
+              "default_data_dir: windows resolves to %APPDATA%\\TridentGcode\\printers", d)
+
+        store_mod.sys.platform = "darwin"
+        d = store_mod._default_data_dir()
+        expected_mac = os.path.join(os.path.expanduser("~"), "Library",
+                                     "Application Support", "TridentGcode", "printers")
+        check(d == expected_mac,
+              "default_data_dir: macOS resolves to ~/Library/Application Support/TridentGcode/printers", d)
+
+        # os.path.isabs() is bound to the HOST os.path module (ntpath on this
+        # test runner even while we masquerade as "linux" for sys.platform),
+        # so the absolute path used here must be one the host itself
+        # recognises as absolute -- os.path.abspath() guarantees that on any
+        # platform, which a hardcoded "/tmp/..." does not on Windows.
+        store_mod.sys.platform = "linux"
+        xdg_abs = os.path.abspath(os.path.join("xdgdata_test_root"))
+        os.environ["XDG_DATA_HOME"] = xdg_abs
+        d = store_mod._default_data_dir()
+        check(d == os.path.join(xdg_abs, "trident-gcode", "printers"),
+              "default_data_dir: linux honours an absolute XDG_DATA_HOME", d)
+
+        os.environ.pop("XDG_DATA_HOME", None)
+        d = store_mod._default_data_dir()
+        expected_fallback = os.path.join(os.path.expanduser("~"), ".local", "share",
+                                          "trident-gcode", "printers")
+        check(d == expected_fallback,
+              "default_data_dir: linux falls back to ~/.local/share/trident-gcode/printers "
+              "when XDG_DATA_HOME is unset", d)
+
+        os.environ["XDG_DATA_HOME"] = "relative/xdg"
+        d = store_mod._default_data_dir()
+        check(d == expected_fallback,
+              "default_data_dir: a relative XDG_DATA_HOME is not honoured, falls back", d)
+    finally:
+        store_mod.sys.platform = orig_platform
+        for name, val in (("APPDATA", orig_appdata), ("XDG_DATA_HOME", orig_xdg)):
+            if val is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = val
+
+
+def test_migration_copies_without_overwriting(tmp_path: Path):
+    import trident_gcode.printer_store as store_mod
+
+    old_dir = tmp_path / "legacy" / "custom_printers"
+    new_dir = tmp_path / "newloc"
+    old_dir.mkdir(parents=True)
+    new_dir.mkdir(parents=True)
+
+    (old_dir / "custom_a.json").write_text('{"marker": "old-a"}', encoding="utf-8")
+    (old_dir / "custom_b.json").write_text('{"marker": "old-b"}', encoding="utf-8")
+    (old_dir / "not_custom.json").write_text('{"marker": "ignored"}', encoding="utf-8")
+    (new_dir / "custom_a.json").write_text('{"marker": "existing-a"}', encoding="utf-8")
+
+    copied = store_mod._copy_legacy_files(str(old_dir), str(new_dir))
+    check(copied == 1, "migration: only the missing file is copied", str(copied))
+    check((new_dir / "custom_b.json").exists(), "migration: custom_b.json was copied")
+    check(json.loads((new_dir / "custom_a.json").read_text(encoding="utf-8"))["marker"] == "existing-a",
+          "migration: pre-existing custom_a.json in the new dir was NOT overwritten")
+    check(not (new_dir / "not_custom.json").exists(),
+          "migration: files not matching custom_*.json are not migrated")
+    check((old_dir / "custom_a.json").exists() and (old_dir / "custom_b.json").exists(),
+          "migration: the legacy directory is left untouched (not deleted)")
+
+    copied_again = store_mod._copy_legacy_files(str(old_dir), str(new_dir))
+    check(copied_again == 0, "migration: re-running the copy is idempotent", str(copied_again))
+
+
+def test_store_dir_triggers_migration_once(tmp_path: Path):
+    import trident_gcode.printer_store as store_mod
+
+    old_dir = tmp_path / "legacy2"
+    new_dir = tmp_path / "target2"
+    old_dir.mkdir(parents=True)
+    (old_dir / "custom_z.json").write_text('{"marker": "z"}', encoding="utf-8")
+
+    orig_legacy_fn = store_mod._legacy_store_dir
+    orig_env = os.environ.get("TRIDENT_PRINTER_DIR")
+    orig_migrated = store_mod._migration_attempted
+    store_mod._legacy_store_dir = lambda: str(old_dir)
+    try:
+        os.environ["TRIDENT_PRINTER_DIR"] = str(new_dir)
+        store_mod._migration_attempted = False
+        d = store_mod.store_dir()
+        check(os.path.isfile(os.path.join(d, "custom_z.json")),
+              "store_dir: an end-to-end call migrates a legacy file into the new store dir")
+        check(store_mod._migration_attempted is True,
+              "store_dir: migration is marked attempted after the first call")
+
+        # One-shot per process: deleting the migrated file and calling
+        # store_dir() again must NOT bring it back, or a user deleting an
+        # imported printer would find it silently restored on next launch.
+        os.remove(os.path.join(d, "custom_z.json"))
+        store_mod.store_dir()
+        check(not os.path.isfile(os.path.join(d, "custom_z.json")),
+              "store_dir: migration does not re-run within the same process")
+    finally:
+        store_mod._legacy_store_dir = orig_legacy_fn
+        if orig_env is None:
+            os.environ.pop("TRIDENT_PRINTER_DIR", None)
+        else:
+            os.environ["TRIDENT_PRINTER_DIR"] = orig_env
+        store_mod._migration_attempted = orig_migrated
+
+
+def test_key_traversal_guard():
+    """The _KEY_RE guard is the only thing standing between a stored key and
+    a filesystem path; re-check it explicitly (independent of
+    test_store_roundtrip) since store_dir()'s relocation is exactly the kind
+    of change that could tempt someone to "simplify" key handling nearby."""
+    import trident_gcode.printer_store as store_mod
+
+    bad_keys = ("../evil", "custom_../x", "trident", "", "custom_" + "x" * 49)
+    for bad_key in bad_keys:
+        check(not store_mod._is_valid_key(bad_key),
+              f"key guard: {bad_key!r} is rejected")
+    check(store_mod._is_valid_key("custom_my_printer"),
+          "key guard: a well-formed key is accepted")
 
 
 # ---------------------------------------------------------------------------
@@ -899,6 +1310,85 @@ def test_regression():
           result.stdout[-800:] + result.stderr[-800:])
 
 
+def test_nozzle_temp_ceiling_comes_from_the_profile():
+    """The nozzle-temp override must be bounded by the SELECTED profile.
+
+    serve.py used to clamp with a module constant, `max(150, min(temp, 320))`.
+    Every built-in profile declares 260 or 300, so the constant was looser than
+    every real machine it was meant to protect -- a request for 320 C went
+    through on a printer declaring 260. CLAUDE.md names this exact shape: a
+    limit typed into serve.py belongs on the profile.
+
+    float() also accepts the strings "NaN"/"Infinity", and every comparison
+    against NaN is False, so it survives min()/max() rather than being clamped
+    by it. Non-finite input must be rejected at the boundary, not clamped.
+    """
+    import serve
+    from dataclasses import replace
+
+    p260 = replace(TRIDENT, max_nozzle_temp=260.0)
+    check(serve._parse_nozzle_temp({"nozzle_temp": "320"}, p260) == 260.0,
+          "nozzle_temp: 320 requested on a 260 C profile is capped at 260",
+          str(serve._parse_nozzle_temp({"nozzle_temp": "320"}, p260)))
+    check(serve._parse_nozzle_temp({"nozzle_temp": "250"}, p260) == 250.0,
+          "nozzle_temp: an in-range value passes through untouched")
+    check(serve._parse_nozzle_temp({"nozzle_temp": "100"}, p260) == 150.0,
+          "nozzle_temp: the 150 C cold-extrude floor still applies")
+
+    # No profile may be raised ABOVE its own declared ceiling by this path.
+    for key, prof in PRINTER_PROFILES.items():
+        got = serve._parse_nozzle_temp({"nozzle_temp": "999"}, prof)
+        check(got is not None and got <= prof.max_nozzle_temp + 1e-9,
+              f"nozzle_temp: '{key}' cannot be driven above its own max_nozzle_temp",
+              f"{got} vs {prof.max_nozzle_temp}")
+
+    for bad in ("NaN", "Infinity", "-Infinity"):
+        check(serve._parse_nozzle_temp({"nozzle_temp": bad}, p260) is None,
+              f"nozzle_temp: {bad!r} is rejected, not clamped",
+              str(serve._parse_nozzle_temp({"nozzle_temp": bad}, p260)))
+
+
+def test_z_amp_max_default_is_not_another_machines_number():
+    """An unknown non-planar clearance must not inherit the Trident's value.
+
+    The old derivation was min(0.95, max(0.2, probe_clearance * 0.5)) with a
+    no-probe branch of 1.0. probe_clearance is never parsed by ANY of the five
+    importers, so it is always its own 2.0 default and the formula collapsed to
+    0.95 -- the Trident's empirically measured constant -- for essentially
+    every imported machine. CLAUDE.md: missing values become conservative
+    defaults, never another machine's.
+
+    The no-probe branch was also LOOSER (1.0 > 0.95). Probe detection is a
+    fixed list of section-name heads, so an unrecognised probe reads as "no
+    probe"; undetected hardware must get more margin, not less.
+    """
+    from trident_gcode.profile import TRIDENT as _T
+
+    seen = {}
+    for fx in ("klipper_trident.cfg", "klipper_inline_comments.cfg"):
+        vr = validate_raw(parse_printer_config(_read_fixture(fx), fx))
+        seen[fx] = (vr.profile.z_amp_max, vr.profile.has_probe)
+
+    for fx, (val, _probe) in seen.items():
+        check(val != _T.z_amp_max,
+              f"z_amp_max: {fx} does not inherit the Trident's measured {_T.z_amp_max}",
+              str(val))
+        check(0.0 < val <= 0.5,
+              f"z_amp_max: {fx} defaults into the conservative band", str(val))
+
+    probe_val = seen["klipper_trident.cfg"][0]        # has_probe True
+    noprobe_val = seen["klipper_inline_comments.cfg"][0]  # has_probe False
+    check(noprobe_val <= probe_val,
+          "z_amp_max: a printer with NO detected probe is never given more dip "
+          "than one with a probe", f"no-probe {noprobe_val} vs probe {probe_val}")
+
+    # The built-in Trident keeps its real measured constant -- this fix must
+    # only change what is GUESSED for an import, never a measured value.
+    check(_T.z_amp_max == 0.95,
+          "z_amp_max: the built-in TRIDENT profile still declares its measured 0.95",
+          str(_T.z_amp_max))
+
+
 def main() -> int:
     test_klipper_trident()
     test_orca_machine()
@@ -910,6 +1400,8 @@ def main() -> int:
     test_cura_center_zero()
     test_creality_print_machine()
     test_hostile()
+    test_klipper_delegating_macro()
+    test_auto_repair_start_gcode()
     test_comment_evasion()
     test_sanitize_is_idempotent()
     test_non_finite_rejected()
@@ -917,12 +1409,23 @@ def main() -> int:
     test_builtin_start_gcode_z_feedrates()
     test_creality_limits()
     test_machine_derived_ceilings()
+    test_nozzle_temp_ceiling_comes_from_the_profile()
+    test_z_amp_max_default_is_not_another_machines_number()
 
     with tempfile.TemporaryDirectory() as tmp:
         test_smoke(Path(tmp))
 
     with tempfile.TemporaryDirectory() as tmp:
         test_store_roundtrip(Path(tmp) / "custom_printers")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        test_store_dir_env_override(Path(tmp))
+    test_default_data_dir_per_platform()
+    with tempfile.TemporaryDirectory() as tmp:
+        test_migration_copies_without_overwriting(Path(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_store_dir_triggers_migration_once(Path(tmp))
+    test_key_traversal_guard()
 
     test_regression()
 
