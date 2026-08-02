@@ -468,6 +468,47 @@ def _parse_nozzle_temp(body, profile):
     return max(150.0, min(temp, ceiling))
 
 
+def _parse_bed_temp(body, profile):
+    """User-requested bed temp override, bounded by ``profile``.
+
+    Mirrors _parse_nozzle_temp with ONE deliberate difference: a nozzle at
+    0 C is meaningless (there's no such thing as "no nozzle temp"), so that
+    path treats 0 as "no override". A bed is different -- 0 C means "bed off",
+    which is a real, requestable setting (see the built-in end_gcode templates,
+    which all send "M140 S0" on purpose). So here, 0 is preserved as a genuine
+    override rather than being folded into "absent". This is not a new output
+    class: trident_gcode/orca.py's FilamentSettings.writer_kwargs() already
+    passes a filament's bed_temp straight through, so bed_temp=0 is reachable
+    today; this just lets a user ask for it explicitly too.
+
+    Returns None only when the request is absent/null/empty/unparseable/non-
+    finite -- meaning "don't touch it", so the profile's (and any selected
+    filament's) own default keeps flowing through unchanged.
+
+    The ceiling comes from the SELECTED profile's max_bed_temp, never from a
+    constant here -- same reasoning as the nozzle version and the same shape
+    CLAUDE.md warns about (a limit typed into serve.py belongs on the profile).
+    Unlike the nozzle temp there is no absolute floor other than 0: a bed
+    genuinely can be run at 0.
+    """
+    raw = body.get("bed_temp")
+    if raw is None or raw == "":
+        return None
+    try:
+        temp = float(raw)
+    except (TypeError, ValueError):
+        return None
+    # float() accepts the strings "NaN"/"Infinity", and every comparison
+    # against NaN is False -- it would survive the min()/max() below rather
+    # than being clamped by it, and could reach the writer's own min() at
+    # gcode.py:91 to be emitted as "M140 Snan". Reject non-finite at the
+    # boundary; never clamp it.
+    if not math.isfinite(temp):
+        return None
+    ceiling = float(profile.max_bed_temp)
+    return max(0.0, min(temp, ceiling))
+
+
 def _parse_blob_spec(body, radius: float | None = None) -> BlobSpec | None:
     """Extract blob parameters from the request body.
 
@@ -668,11 +709,14 @@ def generate_design(body):
         writer_kwargs.update(fs.writer_kwargs())
 
     # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
-    # nozzle_temp, which would otherwise silently clobber an explicit user
-    # override. The user's choice must win over the filament's default.
+    # nozzle_temp/bed_temp, which would otherwise silently clobber an explicit
+    # user override. The user's choice must win over the filament's default.
     nozzle_temp = _parse_nozzle_temp(body, profile)
     if nozzle_temp is not None:
         writer_kwargs["nozzle_temp"] = nozzle_temp
+    bed_temp = _parse_bed_temp(body, profile)
+    if bed_temp is not None:
+        writer_kwargs["bed_temp"] = bed_temp
 
     writer = GcodeWriter(**writer_kwargs)
 
@@ -922,11 +966,14 @@ def generate_mesh_texture_design(body):
         writer_kwargs.update(fs.writer_kwargs())
 
     # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
-    # nozzle_temp, which would otherwise silently clobber an explicit user
-    # override. The user's choice must win over the filament's default.
+    # nozzle_temp/bed_temp, which would otherwise silently clobber an explicit
+    # user override. The user's choice must win over the filament's default.
     nozzle_temp = _parse_nozzle_temp(body, profile)
     if nozzle_temp is not None:
         writer_kwargs["nozzle_temp"] = nozzle_temp
+    bed_temp = _parse_bed_temp(body, profile)
+    if bed_temp is not None:
+        writer_kwargs["bed_temp"] = bed_temp
 
     writer = GcodeWriter(**writer_kwargs)
 
@@ -1301,6 +1348,10 @@ def _printer_entry_json(key, profile, custom, meta=None):
     # re-derives it and the two can never drift apart.
     cap = amp_ceiling(profile)
     cap_row = loop_row_ceiling(profile)
+    # max_nozzle_temp/max_bed_temp: computed here (mirroring the 320 C
+    # absolute backstop _parse_nozzle_temp applies server-side) so the client
+    # never re-derives its input "max" attribute from a hardcoded HTML value
+    # and the two can never drift apart. See _parse_nozzle_temp/_parse_bed_temp.
     return {
         "key": key,
         "name": profile.name,
@@ -1309,6 +1360,8 @@ def _printer_entry_json(key, profile, custom, meta=None):
         "z_amp_max": profile.z_amp_max,
         "loop_row_max": cap_row,
         "loop_up_max": cap,
+        "max_nozzle_temp": min(320.0, float(profile.max_nozzle_temp)),
+        "max_bed_temp": float(profile.max_bed_temp),
         "custom": bool(custom),
         "source_format": meta.get("source_format") if custom else None,
         "warnings": len(warnings) if custom else 0,

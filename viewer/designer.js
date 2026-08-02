@@ -29,7 +29,7 @@
     base_style: "spiral", skirt: 0,
     bottom: "solid",
     star_points: 5, star_depth: 0.35,
-    print_speed: 40, filament: "", line_width: null, nozzle_temp: null,
+    print_speed: 40, filament: "", line_width: null, nozzle_temp: null, bed_temp: null,
     pattern: "", pattern_amp: 1.0, pattern_waves: 12,
     pattern_bands: 6, pattern_twist: 0, pattern_phase: 0,
     pattern_fade_in: 0.10, pattern_fade_out: 0, pattern_alternate: false,
@@ -666,6 +666,31 @@
       var mname = (meta && meta.name) || 'This printer';
       note.textContent = mname + ' allows loops up to ' + fmtMm(caps.up) +
         'mm tall' + (caps.up < 1.5 ? ' (probe keep-out limit)' : '') + '.';
+    }
+
+    // Nozzle/bed temp ceilings: server-computed (see _printer_entry_json) so
+    // the client never re-derives max_nozzle_temp's 320 C absolute backstop
+    // and the two can never drift apart -- same shape as loop_up/loop_row
+    // above. Clamp a now-out-of-range current value back down, same as those.
+    var nozzleT = document.getElementById('d-nozzletemp');
+    if(nozzleT && meta && typeof meta.max_nozzle_temp === 'number'){
+      nozzleT.max = meta.max_nozzle_temp;
+      var ntv = parseFloat(nozzleT.value);
+      if(!isNaN(ntv) && ntv > meta.max_nozzle_temp){
+        nozzleT.value = meta.max_nozzle_temp;
+        design.nozzle_temp = meta.max_nozzle_temp;
+        changed++;
+      }
+    }
+    var bedT = document.getElementById('d-bedtemp');
+    if(bedT && meta && typeof meta.max_bed_temp === 'number'){
+      bedT.max = meta.max_bed_temp;
+      var btv = parseFloat(bedT.value);
+      if(!isNaN(btv) && btv > meta.max_bed_temp){
+        bedT.value = meta.max_bed_temp;
+        design.bed_temp = meta.max_bed_temp;
+        changed++;
+      }
     }
 
     // Amp curve: rescale the editor to the new ceiling and re-clamp every
@@ -2912,6 +2937,21 @@
     });
   })();
 
+  // Blank = auto (selected filament's own bed temp); only a real value
+  // overrides. Unlike nozzle temp, 0 is a meaningful override here (bed off)
+  // -- this input never treats 0 as "no value", it stores exactly what was
+  // typed, same as every other numeric field. See serve.py _parse_bed_temp.
+  (function(){
+    var el = document.getElementById('d-bedtemp');
+    if(!el) return;
+    if(design.bed_temp != null) el.value = design.bed_temp;
+    el.addEventListener('input', function(){
+      var v = parseFloat(el.value);
+      design.bed_temp = (el.value === '' || Number.isNaN(v)) ? null : v;
+      persistDesign();
+    });
+  })();
+
   // Live "flow line width" readout mirroring serve.py: line_width = round(nozzle*1.125, 3),
   // or the explicit override. Purely informational; stale tracking is already handled
   // by bindSelect('d-nozzle') -> persistDesign().
@@ -3359,6 +3399,8 @@
     if(lwEl) lwEl.value = design.line_width != null ? design.line_width : '';
     var nozzleTempEl = document.getElementById('d-nozzletemp');
     if(nozzleTempEl) nozzleTempEl.value = design.nozzle_temp != null ? design.nozzle_temp : '';
+    var bedTempEl = document.getElementById('d-bedtemp');
+    if(bedTempEl) bedTempEl.value = design.bed_temp != null ? design.bed_temp : '';
     var bottomRadios = document.querySelectorAll('input[name="d-bottom"]');
     bottomRadios.forEach(function(r){ r.checked = r.value === design.bottom; });
     var nozzleEl = document.getElementById('d-nozzle');
@@ -3633,6 +3675,12 @@
     // _parse_nozzle_temp().
     if(design.nozzle_temp != null && design.nozzle_temp !== ''){
       body.nozzle_temp = design.nozzle_temp;
+    }
+    // Same contract via serve.py's _parse_bed_temp(), EXCEPT 0 is a real,
+    // meaningful override (bed off) and must be sent, not treated as unset --
+    // this check is "!= null", not truthy, so 0 passes through correctly.
+    if(design.bed_temp != null && design.bed_temp !== ''){
+      body.bed_temp = design.bed_temp;
     }
     // Point Edit Modifiers: each block is only sent when its modifier is
     // enabled AND would actually do something (server tolerates malformed/

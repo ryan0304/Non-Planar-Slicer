@@ -415,8 +415,9 @@
         <div class="drow"><span>Print speed (mm/s)</span><input type="number" id="d-speed" min="20" max="90" step="1"></div>
         <div class="drow stacked"><span>Filament</span><select id="d-filament"></select></div>
         <div class="drow"><span>Line width override</span><input type="number" id="d-lwoverride" min="0.1" max="1.2" step="0.05" placeholder="auto"></div>
-        <div class="drow"><span>Nozzle temp (C)</span><input type="number" id="d-nozzletemp" class="wide-input" min="150" max="320" step="5" placeholder="auto (filament)"></div>
-        <div class="hint" style="margin-top:2px">Leave blank to use the selected filament's temperature; set it to override.</div>
+        <div class="drow"><span>Nozzle temp (C)</span><input type="number" id="d-nozzletemp" class="wide-input" min="150" step="5" placeholder="auto (filament)"></div>
+        <div class="drow"><span>Bed temp (C)</span><input type="number" id="d-bedtemp" class="wide-input" min="0" step="5" placeholder="auto (filament)"></div>
+        <div class="hint" style="margin-top:2px">Leave blank to use the selected filament's temperatures; set either to override. Bed temp can be set to 0 to turn the bed heater off.</div>
 
         <div class="cv-editor">
           <div class="cv-head"><b>Line width over height</b><span class="cv-reset" id="width-reset">reset</span></div>

@@ -321,8 +321,12 @@ window.PARAM_HELP = {
     param: "line_width", def: "auto (nozzle diameter x 1.125)"
   },
   "d-nozzletemp": {
-    desc: "Leave blank to use the selected filament's temperature; set it to override. The ceiling comes from your printer profile's max nozzle temperature, with a 150 C floor.",
+    desc: "Leave blank to use the selected filament's temperature; set it to override. Bounded by your printer profile's max nozzle temperature, with a 150 C floor.",
     param: "nozzle_temp", def: "auto (filament temperature)"
+  },
+  "d-bedtemp": {
+    desc: "Leave blank to use the selected filament's bed temperature; set it to override. Unlike nozzle temp, 0 is a valid override here and turns the bed heater off. Bounded by your printer profile's max bed temperature.",
+    param: "bed_temp", def: "auto (filament bed temperature)"
   },
 
   // ---- Point Edit Modifiers modal -------------------------------------------

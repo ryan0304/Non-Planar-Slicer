@@ -1348,6 +1348,63 @@ def test_nozzle_temp_ceiling_comes_from_the_profile():
               str(serve._parse_nozzle_temp({"nozzle_temp": bad}, p260)))
 
 
+def test_bed_temp_ceiling_comes_from_the_profile():
+    """The bed-temp override must be bounded by the SELECTED profile, mirroring
+    _parse_nozzle_temp -- with one deliberate difference: 0 is a real bed
+    setting ("bed off"), not "no override", so it must NOT be swallowed the
+    way a 0 C nozzle_temp is. See serve.py's _parse_bed_temp docstring.
+
+    Same non-finite hazard as the nozzle path: float() accepts "NaN"/
+    "Infinity"/"-Infinity", and every comparison against NaN is False, so it
+    would survive min()/max() clamping (and the writer's own min() at
+    gcode.py:91) to be emitted as "M140 Snan" if not rejected at the boundary.
+    """
+    import serve
+    from dataclasses import replace
+
+    p100 = replace(TRIDENT, max_bed_temp=100.0)
+
+    # Over-ceiling request is capped to the profile's own max_bed_temp.
+    check(serve._parse_bed_temp({"bed_temp": "150"}, p100) == 100.0,
+          "bed_temp: 150 requested on a 100 C profile is capped at 100",
+          str(serve._parse_bed_temp({"bed_temp": "150"}, p100)))
+
+    # In-range value passes through untouched.
+    check(serve._parse_bed_temp({"bed_temp": "60"}, p100) == 60.0,
+          "bed_temp: an in-range value passes through untouched",
+          str(serve._parse_bed_temp({"bed_temp": "60"}, p100)))
+
+    # 0 is preserved as a REAL override -- the one deliberate asymmetry with
+    # nozzle_temp, where 0 means "no override" instead.
+    got_zero = serve._parse_bed_temp({"bed_temp": "0"}, p100)
+    check(got_zero == 0.0 and got_zero is not None,
+          "bed_temp: 0 is preserved as a genuine override, not swallowed",
+          str(got_zero))
+
+    # Blank / absent gives None (no override -- filament/profile default flows
+    # through), same contract as nozzle_temp.
+    check(serve._parse_bed_temp({"bed_temp": ""}, p100) is None,
+          "bed_temp: blank string gives None", str(serve._parse_bed_temp({"bed_temp": ""}, p100)))
+    check(serve._parse_bed_temp({}, p100) is None,
+          "bed_temp: absent key gives None", str(serve._parse_bed_temp({}, p100)))
+    check(serve._parse_bed_temp({"bed_temp": "not-a-number"}, p100) is None,
+          "bed_temp: unparseable string gives None",
+          str(serve._parse_bed_temp({"bed_temp": "not-a-number"}, p100)))
+
+    # NaN/Infinity/-Infinity are rejected outright, never clamped.
+    for bad in ("NaN", "Infinity", "-Infinity"):
+        check(serve._parse_bed_temp({"bed_temp": bad}, p100) is None,
+              f"bed_temp: {bad!r} is rejected, not clamped",
+              str(serve._parse_bed_temp({"bed_temp": bad}, p100)))
+
+    # No built-in profile may be driven above its own declared max_bed_temp.
+    for key, prof in PRINTER_PROFILES.items():
+        got = serve._parse_bed_temp({"bed_temp": "999"}, prof)
+        check(got is not None and got <= prof.max_bed_temp + 1e-9,
+              f"bed_temp: '{key}' cannot be driven above its own max_bed_temp",
+              f"{got} vs {prof.max_bed_temp}")
+
+
 def test_z_amp_max_default_is_not_another_machines_number():
     """An unknown non-planar clearance must not inherit the Trident's value.
 
@@ -1410,6 +1467,7 @@ def main() -> int:
     test_creality_limits()
     test_machine_derived_ceilings()
     test_nozzle_temp_ceiling_comes_from_the_profile()
+    test_bed_temp_ceiling_comes_from_the_profile()
     test_z_amp_max_default_is_not_another_machines_number()
 
     with tempfile.TemporaryDirectory() as tmp:
