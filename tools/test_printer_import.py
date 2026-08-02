@@ -828,26 +828,26 @@ def test_store_roundtrip(tmp_store: Path):
 
 
 # ---------------------------------------------------------------------------
-# 6a. Store directory resolution: per-user path, env override, migration.
+# 6a. Store directory resolution: per-user path, env override.
 #
-# store_dir() used to resolve to <repo_root>/custom_printers -- fine for a
-# dev checkout, wrong for a shipped app: the install directory is typically
-# read-only, and a single shared directory would let one user on a
-# multi-user machine see (and silently inherit) another user's imported
-# printers. These tests exercise the replacement without ever touching the
-# real per-user data directory: TRIDENT_PRINTER_DIR always points at a
-# tempfile.TemporaryDirectory(), and the per-platform check calls the pure
-# _default_data_dir() helper directly rather than store_dir() itself.
+# This is the DISK store, which now serves the generate.py CLI only (the
+# browser uses the session store in 6b). store_dir() used to resolve to
+# <repo_root>/custom_printers -- fine for a dev checkout, wrong for a shipped
+# app: the install directory is typically read-only, and a single shared
+# directory would let one user on a multi-user machine see (and silently
+# inherit) another user's imported printers. These tests exercise the
+# replacement without ever touching the real per-user data directory:
+# TRIDENT_PRINTER_DIR always points at a tempfile.TemporaryDirectory(), and
+# the per-platform check calls the pure _default_data_dir() helper directly
+# rather than store_dir() itself.
 # ---------------------------------------------------------------------------
 def test_store_dir_env_override(tmp_path: Path):
     import trident_gcode.printer_store as store_mod
 
     orig_env = os.environ.get("TRIDENT_PRINTER_DIR")
-    orig_migrated = store_mod._migration_attempted
     target = tmp_path / "override_dir"
     try:
         os.environ["TRIDENT_PRINTER_DIR"] = str(target)
-        store_mod._migration_attempted = True  # migration is covered separately below
         d = store_mod.store_dir()
         check(os.path.normcase(os.path.abspath(d)) == os.path.normcase(os.path.abspath(str(target))),
               "store_dir: TRIDENT_PRINTER_DIR override is honoured", f"{d} vs {target}")
@@ -857,7 +857,6 @@ def test_store_dir_env_override(tmp_path: Path):
             os.environ.pop("TRIDENT_PRINTER_DIR", None)
         else:
             os.environ["TRIDENT_PRINTER_DIR"] = orig_env
-        store_mod._migration_attempted = orig_migrated
 
     # A relative override must be REJECTED, not resolved relative to the cwd
     # (ambiguous -- relative to what? a server's launch directory is not
@@ -930,68 +929,202 @@ def test_default_data_dir_per_platform():
                 os.environ[name] = val
 
 
-def test_migration_copies_without_overwriting(tmp_path: Path):
+def test_no_legacy_resurrection(tmp_path: Path):
+    """A deleted printer must STAY deleted across a process restart.
+
+    store_dir() used to copy every custom_*.json out of the old
+    <repo_root>/custom_printers directory on the first call in each process,
+    skipping names that already existed. That made a delete non-durable: the
+    UI removed the file from the data directory, and the next launch copied
+    it straight back in from the legacy directory. The migration is gone, and
+    this test is the counter-example that keeps it gone -- re-adding a
+    copy-in-on-start of any kind will fail here.
+    """
     import trident_gcode.printer_store as store_mod
 
-    old_dir = tmp_path / "legacy" / "custom_printers"
-    new_dir = tmp_path / "newloc"
-    old_dir.mkdir(parents=True)
-    new_dir.mkdir(parents=True)
+    for attr in ("_legacy_store_dir", "_copy_legacy_files", "_maybe_migrate_legacy_store",
+                 "_migration_attempted"):
+        check(not hasattr(store_mod, attr),
+              f"no-resurrection: printer_store has no {attr} (legacy migration stays removed)")
 
-    (old_dir / "custom_a.json").write_text('{"marker": "old-a"}', encoding="utf-8")
-    (old_dir / "custom_b.json").write_text('{"marker": "old-b"}', encoding="utf-8")
-    (old_dir / "not_custom.json").write_text('{"marker": "ignored"}', encoding="utf-8")
-    (new_dir / "custom_a.json").write_text('{"marker": "existing-a"}', encoding="utf-8")
+    legacy = tmp_path / "custom_printers"
+    legacy.mkdir(parents=True)
+    (legacy / "custom_ghost.json").write_text('{"marker": "ghost"}', encoding="utf-8")
 
-    copied = store_mod._copy_legacy_files(str(old_dir), str(new_dir))
-    check(copied == 1, "migration: only the missing file is copied", str(copied))
-    check((new_dir / "custom_b.json").exists(), "migration: custom_b.json was copied")
-    check(json.loads((new_dir / "custom_a.json").read_text(encoding="utf-8"))["marker"] == "existing-a",
-          "migration: pre-existing custom_a.json in the new dir was NOT overwritten")
-    check(not (new_dir / "not_custom.json").exists(),
-          "migration: files not matching custom_*.json are not migrated")
-    check((old_dir / "custom_a.json").exists() and (old_dir / "custom_b.json").exists(),
-          "migration: the legacy directory is left untouched (not deleted)")
-
-    copied_again = store_mod._copy_legacy_files(str(old_dir), str(new_dir))
-    check(copied_again == 0, "migration: re-running the copy is idempotent", str(copied_again))
-
-
-def test_store_dir_triggers_migration_once(tmp_path: Path):
-    import trident_gcode.printer_store as store_mod
-
-    old_dir = tmp_path / "legacy2"
-    new_dir = tmp_path / "target2"
-    old_dir.mkdir(parents=True)
-    (old_dir / "custom_z.json").write_text('{"marker": "z"}', encoding="utf-8")
-
-    orig_legacy_fn = store_mod._legacy_store_dir
+    target = tmp_path / "store"
     orig_env = os.environ.get("TRIDENT_PRINTER_DIR")
-    orig_migrated = store_mod._migration_attempted
-    store_mod._legacy_store_dir = lambda: str(old_dir)
+    orig_cwd = os.getcwd()
     try:
-        os.environ["TRIDENT_PRINTER_DIR"] = str(new_dir)
-        store_mod._migration_attempted = False
+        # cwd next to the legacy directory: if anything ever resolves the old
+        # location relatively, this is where it would find it.
+        os.chdir(str(tmp_path))
+        os.environ["TRIDENT_PRINTER_DIR"] = str(target)
         d = store_mod.store_dir()
-        check(os.path.isfile(os.path.join(d, "custom_z.json")),
-              "store_dir: an end-to-end call migrates a legacy file into the new store dir")
-        check(store_mod._migration_attempted is True,
-              "store_dir: migration is marked attempted after the first call")
-
-        # One-shot per process: deleting the migrated file and calling
-        # store_dir() again must NOT bring it back, or a user deleting an
-        # imported printer would find it silently restored on next launch.
-        os.remove(os.path.join(d, "custom_z.json"))
-        store_mod.store_dir()
-        check(not os.path.isfile(os.path.join(d, "custom_z.json")),
-              "store_dir: migration does not re-run within the same process")
+        store_mod.store_dir()  # a second call stands in for a second process
+        check(not os.path.isfile(os.path.join(d, "custom_ghost.json")),
+              "no-resurrection: a legacy custom_printers/ file is never copied into the store")
+        check(os.listdir(d) == [],
+              "no-resurrection: a fresh store directory starts empty", str(os.listdir(d)))
     finally:
-        store_mod._legacy_store_dir = orig_legacy_fn
+        os.chdir(orig_cwd)
         if orig_env is None:
             os.environ.pop("TRIDENT_PRINTER_DIR", None)
         else:
             os.environ["TRIDENT_PRINTER_DIR"] = orig_env
-        store_mod._migration_attempted = orig_migrated
+
+
+# ---------------------------------------------------------------------------
+# 6b. Session store: the browser-facing, in-memory half.
+#
+# The browser owns the durable copy (localStorage) and replays it on load, so
+# these entries must be scoped to one session and must never leak into
+# another. A shared store let any visitor see, select and DELETE another
+# visitor's imported printer -- and selecting someone else's printer means
+# generating G-code against a bed size and motion limits that are not the
+# machine on the desk.
+# ---------------------------------------------------------------------------
+def test_session_store_isolation():
+    import trident_gcode.printer_store as store_mod
+
+    text = _read_fixture("klipper_trident.cfg")
+    vr = validate_raw(parse_printer_config(text, "klipper_trident.cfg"))
+    a, b = "aaaa1111bbbb2222", "cccc3333dddd4444"
+
+    store_mod._reset_sessions()
+    try:
+        key = store_mod.session_make_key(a, vr.profile.name)
+        store_mod.session_save(a, key, vr.profile, {"source_format": "klipper_cfg"})
+
+        check(key in store_mod.session_list(a), "session: saved key is visible in its own session")
+        check(store_mod.session_list(b) == {},
+              "session: another session sees NOTHING of it", str(store_mod.session_list(b)))
+        check(key not in store_mod.session_all_profiles(b),
+              "session: another session cannot resolve the key to a profile")
+        check(key in store_mod.session_all_profiles(a) and "trident" in store_mod.session_all_profiles(a),
+              "session: all_profiles merges built-ins with this session's custom")
+
+        check(store_mod.session_delete(b, key) is False,
+              "session: another session cannot delete it")
+        check(key in store_mod.session_list(a),
+              "session: it survives the other session's delete attempt")
+        check(store_mod.session_delete(a, key) is True,
+              "session: its own session can delete it")
+
+        # An absent/garbage session id is an empty set, never an error and
+        # never a peek at somebody else's bucket.
+        for bad_sid in (None, "", "short", "UPPERCASE1234567", "has spaces 123", "x" * 65):
+            check(store_mod.session_list(bad_sid) == {},
+                  f"session: malformed session id {bad_sid!r} yields an empty store")
+            check(not store_mod.is_valid_session(bad_sid),
+                  f"session: is_valid_session rejects {bad_sid!r}")
+            raised = False
+            try:
+                store_mod.session_save(bad_sid, "custom_x", vr.profile, {})
+            except ValueError:
+                raised = True
+            check(raised, f"session: session_save refuses session id {bad_sid!r}")
+
+        # Key rules are the disk store's rules -- traversal shapes and
+        # built-in names are refused here too.
+        for bad_key in ("../evil", "custom_../x", "trident", "", "custom_" + "x" * 49):
+            raised = False
+            try:
+                store_mod.session_save(a, bad_key, vr.profile, {})
+            except ValueError:
+                raised = True
+            check(raised, f"session: session_save rejects key {bad_key!r}")
+    finally:
+        store_mod._reset_sessions()
+
+
+def test_session_store_caps():
+    """Both caps are fed by an untrusted client, so both must actually hold."""
+    import trident_gcode.printer_store as store_mod
+
+    text = _read_fixture("klipper_trident.cfg")
+    vr = validate_raw(parse_printer_config(text, "klipper_trident.cfg"))
+
+    store_mod._reset_sessions()
+    try:
+        sid = "capcapcap123456"
+        for i in range(store_mod.MAX_PRINTERS_PER_SESSION):
+            store_mod.session_save(sid, f"custom_p{i}", vr.profile, {})
+        raised = False
+        try:
+            store_mod.session_save(sid, "custom_one_too_many", vr.profile, {})
+        except ValueError:
+            raised = True
+        check(raised, "session: per-session printer cap is enforced")
+        check(store_mod.session_is_custom(sid, "custom_p0"),
+              "session: a full session keeps its EXISTING printers (no silent eviction)")
+        # Overwriting an existing key must still work at the cap, or editing
+        # a printer would become impossible once full.
+        store_mod.session_save(sid, "custom_p0", vr.profile, {"edited": True})
+        check(store_mod.session_list(sid)["custom_p0"]["meta"].get("edited") is True,
+              "session: an existing key can still be overwritten at the cap")
+
+        store_mod._reset_sessions()
+        first = "s000000000000001"
+        store_mod.session_save(first, "custom_first", vr.profile, {})
+        for i in range(store_mod.MAX_SESSIONS):
+            store_mod.session_save(f"sess{i:012d}", "custom_x", vr.profile, {})
+        check(store_mod.session_list(first) == {},
+              "session: the least-recently-used session is evicted past MAX_SESSIONS")
+        check(len(store_mod._sessions) <= store_mod.MAX_SESSIONS,
+              "session: total session count stays bounded", str(len(store_mod._sessions)))
+    finally:
+        store_mod._reset_sessions()
+
+
+def test_unknown_printer_key_is_refused():
+    """serve.py's _get_profile must REFUSE an unresolvable key, not fall back
+    to the default printer.
+
+    It used to do profiles.get(key, profiles[DEFAULT_PRINTER_KEY]). With
+    custom printers now held in a session store that empties on restart,
+    "key not found" is an ordinary condition -- and the old fallback would
+    quietly generate with the Trident's 250x250 bed and its motion limits for
+    someone who had selected a 180x180 machine. There is no conservative
+    default bed size, so the only safe answer is an error.
+    """
+    import serve
+
+    store_mod = sys.modules["trident_gcode.printer_store"]
+    store_mod._reset_sessions()
+    try:
+        raised = ""
+        try:
+            serve._get_profile({"printer": "custom_not_here", "_session": "aaaa1111bbbb2222"})
+        except ValueError as e:
+            raised = str(e)
+        check("unknown printer" in raised,
+              "generate: an unknown printer key raises instead of falling back", raised)
+
+        # The same key, in the session that actually holds it, resolves.
+        text = _read_fixture("klipper_trident.cfg")
+        vr = validate_raw(parse_printer_config(text, "klipper_trident.cfg"))
+        sid = "eeee5555ffff6666"
+        store_mod.session_save(sid, "custom_mine", vr.profile, {})
+        got = serve._get_profile({"printer": "custom_mine", "_session": sid})
+        check(got.name == vr.profile.name, "generate: a key in this session resolves", got.name)
+
+        # ...and the SAME key from a different session is refused rather than
+        # silently resolving to the default machine.
+        raised2 = ""
+        try:
+            serve._get_profile({"printer": "custom_mine", "_session": "9999888877776666"})
+        except ValueError as e:
+            raised2 = str(e)
+        check("unknown printer" in raised2,
+              "generate: another session's key is refused, not defaulted", raised2)
+
+        # No printer named at all is still the default -- that is a request
+        # that never asked for a specific machine, not a lookup failure.
+        dflt = serve._get_profile({"_session": sid})
+        check(dflt.name == serve.PRINTER_PROFILES[serve.DEFAULT_PRINTER_KEY].name,
+              "generate: an unspecified printer still uses the default", dflt.name)
+    finally:
+        store_mod._reset_sessions()
 
 
 def test_key_traversal_guard():
@@ -1480,9 +1613,10 @@ def main() -> int:
         test_store_dir_env_override(Path(tmp))
     test_default_data_dir_per_platform()
     with tempfile.TemporaryDirectory() as tmp:
-        test_migration_copies_without_overwriting(Path(tmp))
-    with tempfile.TemporaryDirectory() as tmp:
-        test_store_dir_triggers_migration_once(Path(tmp))
+        test_no_legacy_resurrection(Path(tmp))
+    test_session_store_isolation()
+    test_session_store_caps()
+    test_unknown_printer_key_is_refused()
     test_key_traversal_guard()
 
     test_regression()

@@ -1,5 +1,86 @@
 (function(){
   'use strict';
+
+  // ---- browser-owned custom printers -------------------------------------
+  // Custom printers live HERE, in this browser, and only here. The server
+  // keeps them in a per-session dict that dies with the process, so this
+  // localStorage copy is the durable one and gets replayed on every load.
+  //
+  // The consequence is deliberate and worth stating plainly: clearing your
+  // browser data deletes your imported printers, and you re-import the .cfg.
+  // That is a lifetime a user can actually predict, unlike a file quietly
+  // written into %APPDATA% that outlives every "clear cache" they try.
+  //
+  // The session id is not a credential -- it only picks which bucket of
+  // replayed printers this browser sees. The server grants it no authority,
+  // and the localhost-only bind is what actually keeps other machines out.
+  var SESSION_KEY = 'trident_session';
+  var PRINTERS_KEY = 'trident_printers';
+  var MAX_STORED_PRINTERS = 32;
+
+  var sessionId = null;
+  try { sessionId = localStorage.getItem(SESSION_KEY); } catch(e){}
+  if(!/^[a-z0-9]{8,64}$/.test(sessionId || '')){
+    sessionId = '';
+    // Math.random is fine: this is a namespace, not a secret.
+    while(sessionId.length < 24) sessionId += Math.random().toString(36).slice(2);
+    sessionId = sessionId.slice(0, 24);
+    try { localStorage.setItem(SESSION_KEY, sessionId); } catch(e){}
+  }
+
+  // Every /api/ call goes through this so no call site can forget the header
+  // and silently fall back to "no custom printers".
+  function apiFetch(url, opts){
+    opts = opts || {};
+    var headers = {};
+    if(opts.headers){ for(var k in opts.headers){ if(Object.prototype.hasOwnProperty.call(opts.headers, k)) headers[k] = opts.headers[k]; } }
+    headers['X-Trident-Session'] = sessionId;
+    opts.headers = headers;
+    return fetch(url, opts);
+  }
+
+  function loadStoredPrinters(){
+    var arr;
+    try { arr = JSON.parse(localStorage.getItem(PRINTERS_KEY) || '[]'); } catch(e){ arr = []; }
+    return Array.isArray(arr) ? arr : [];
+  }
+  function writeStoredPrinters(arr){
+    try { localStorage.setItem(PRINTERS_KEY, JSON.stringify(arr.slice(0, MAX_STORED_PRINTERS))); } catch(e){}
+  }
+  function upsertStoredPrinter(key, profile, meta){
+    if(!key || !profile) return;
+    var arr = loadStoredPrinters().filter(function(p){ return p && p.key !== key; });
+    arr.push({ key: key, profile: profile, meta: meta || {} });
+    writeStoredPrinters(arr);
+  }
+  function removeStoredPrinter(key){
+    writeStoredPrinters(loadStoredPrinters().filter(function(p){ return p && p.key !== key; }));
+  }
+
+  // Push this browser's saved printers back into the server session. Resolves
+  // even on failure -- a replay that cannot reach the server must not stop
+  // the app from loading with its built-in printers.
+  function replayStoredPrinters(){
+    var stored = loadStoredPrinters();
+    if(!stored.length) return Promise.resolve(null);
+    return apiFetch('/api/printer/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ printers: stored })
+    }).then(function(r){ return r.json(); }).then(function(j){
+      // A printer the server refuses is gone for good -- keeping it in
+      // localStorage would retry the same rejection on every single load.
+      // Drop it here and tell the user why once, rather than silently.
+      if(j && j.rejected && j.rejected.length){
+        j.rejected.forEach(function(x){ removeStoredPrinter(x.key); });
+        var lines = j.rejected.map(function(x){ return '  - ' + (x.key || '(unnamed)') + ': ' + x.reason; });
+        alert('These saved custom printers could no longer be validated and have been '
+              + 'removed. Re-import the printer config to use them again:\n\n'
+              + lines.join('\n'));
+      }
+      return j;
+    }).catch(function(){ return null; });
+  }
+
   // Bootstrap-only ceiling used for the very first synchronous render of the
   // amp curve editor, before /api/printers has resolved (the default printer
   // is "trident", whose z_amp_max happens to be this same 0.95, so there is
@@ -953,7 +1034,7 @@
   // after a save); otherwise the previous design.printer is kept if it still
   // exists, falling back to the server default (used after a delete).
   function loadPrinterOptions(preferKey){
-    return fetch('/api/printers').then(function(r){ return r.json(); }).then(function(j){
+    return apiFetch('/api/printers').then(function(r){ return r.json(); }).then(function(j){
       printerComboList.innerHTML = '';
       printerComboOptions = [];
       // Group like Bambu Studio / OGcode: brand-prefixed printers get their
@@ -1018,7 +1099,12 @@
   }
 
   if(printerComboBtn && printerComboList){
-    loadPrinterOptions().catch(function(){ /* keep static option, if any */ });
+    // Replay first: /api/printers only reports what this session holds, so
+    // asking before the replay lands would show the built-ins alone and
+    // reset design.printer away from the user's custom machine.
+    replayStoredPrinters()
+      .then(function(){ return loadPrinterOptions(); })
+      .catch(function(){ /* keep static option, if any */ });
 
     printerComboBtn.addEventListener('click', function(){
       if(printerComboOpenState) closePrinterCombo(); else openPrinterCombo();
@@ -1215,7 +1301,7 @@
       }
       var reader = new FileReader();
       reader.onload = function(e){
-        fetch('/api/printer/parse', {
+        apiFetch('/api/printer/parse', {
           method: 'POST',
           headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
           body: e.target.result
@@ -1707,7 +1793,7 @@
     function runRevalidate(){
       var mySeq = ++pmSeq;
       var body = { profile: collectProfileFromForm(), allow_raw_gcode: !!allowRawEl.checked };
-      fetch('/api/printer/validate', {
+      apiFetch('/api/printer/validate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
       }).then(function(r){ return r.json(); }).then(function(j){
         if(mySeq !== pmSeq) return; // a newer request already landed -- drop this stale one
@@ -1745,7 +1831,7 @@
         }
       };
       if(pmState.mode === 'edit' && pmState.key) body.key = pmState.key;
-      fetch('/api/printer/save', {
+      apiFetch('/api/printer/save', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
       }).then(function(r){
         return r.json().then(function(j){ return { status: r.status, body: j }; });
@@ -1761,6 +1847,10 @@
           refreshFromState();
           return;
         }
+        // Mirror the server's OWN validated profile, not the form snapshot:
+        // validation clamps and repairs values, and storing the pre-clamp
+        // version would replay something the server never accepted.
+        upsertStoredPrinter(res.body.key, res.body.profile, res.body.meta);
         return loadPrinterOptions(res.body.key).then(function(){ closeModal(); });
       }).catch(function(err){
         alert('Save failed: ' + err);
@@ -1773,13 +1863,13 @@
       resetState();
       modal.style.display = 'flex';
       closeBtn.focus();
-      fetch('/api/printer?key=' + encodeURIComponent(key)).then(function(r){ return r.json(); }).then(function(j){
+      apiFetch('/api/printer?key=' + encodeURIComponent(key)).then(function(r){ return r.json(); }).then(function(j){
         if(!j.ok){ alert('Could not load printer: ' + (j.error || 'unknown error')); closeModal(); return; }
         pmState.mode = 'edit';
         pmState.key = key;
         pmState.detectedFormat = j.meta && j.meta.source_format;
         pmState.sourceFile = j.meta && j.meta.source_file;
-        return fetch('/api/printer/validate', {
+        return apiFetch('/api/printer/validate', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ profile: j.profile, allow_raw_gcode: false })
         }).then(function(r2){ return r2.json(); }).then(function(vr){
@@ -1789,8 +1879,24 @@
       }).catch(function(err){ alert('Could not load printer: ' + err); closeModal(); });
     }
     if(editBtn) editBtn.addEventListener('click', function(){ openEditForKey(design.printer); });
+    // Fetched rather than navigated to: a location change cannot carry the
+    // session header, and the custom printer being exported only exists in
+    // this session. Downloading the blob keeps the session id out of URLs
+    // (and out of the browser history) as a side benefit.
     if(exportBtn) exportBtn.addEventListener('click', function(){
-      window.location.href = '/api/printer/export?key=' + encodeURIComponent(design.printer);
+      var key = design.printer;
+      apiFetch('/api/printer/export?key=' + encodeURIComponent(key)).then(function(r){
+        if(!r.ok) return r.json().then(function(j){ throw new Error(j.error || ('HTTP ' + r.status)); });
+        return r.blob();
+      }).then(function(blob){
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = key + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }).catch(function(err){ alert('Export failed: ' + err.message); });
     });
 
     function resetDeleteConfirm(){
@@ -1810,10 +1916,13 @@
         }
         var key = design.printer;
         resetDeleteConfirm();
-        fetch('/api/printer/delete', {
+        apiFetch('/api/printer/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: key })
         }).then(function(r){ return r.json(); }).then(function(j){
           if(!j.ok){ alert('Delete failed: ' + (j.error || 'unknown error')); return; }
+          // Drop the durable copy too, or the next page load would replay it
+          // straight back in.
+          removeStoredPrinter(key);
           // Falls back to the server default automatically -- loadPrinterOptions
           // drops any key that no longer exists in the refetched list.
           loadPrinterOptions(null);
@@ -1824,7 +1933,7 @@
 
   // ---- filament dropdown -------------------------------------------------
   var famSel = document.getElementById('d-filament');
-  fetch('/api/filaments').then(function(r){ return r.json(); }).then(function(j){
+  apiFetch('/api/filaments').then(function(r){ return r.json(); }).then(function(j){
     famSel.innerHTML = '';
     var opt = document.createElement('option'); opt.value=''; opt.textContent='(generic PLA)';
     famSel.appendChild(opt);
@@ -3515,7 +3624,7 @@
     }
     var reader = new FileReader();
     reader.onload = function(e){
-      fetch('/api/upload_mesh', {
+      apiFetch('/api/upload_mesh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
         body: e.target.result
@@ -3793,7 +3902,7 @@
     genBtn.disabled = true;
     statusEl.className = ''; statusEl.textContent = 'generating...';
     dlBtn.style.display = 'none';
-    fetch('/api/generate', {
+    apiFetch('/api/generate', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
     }).then(function(resp){
       return resp.json().then(function(j){ return {ok:resp.ok, j:j}; });
@@ -3849,7 +3958,7 @@
       var body = buildGenerateBody();
       exportStlBtn.disabled = true;
       statusEl.className = ''; statusEl.textContent = 'exporting STL...';
-      fetch('/api/export_stl', {
+      apiFetch('/api/export_stl', {
         method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
       }).then(function(resp){
         if(!resp.ok){

@@ -86,16 +86,50 @@ def _check_export_budget(n_layers, points_per_turn):
 
 
 def _get_profile(body):
+    """Resolve the request's printer KEY against this session's profiles.
+
+    ``body["_session"]`` is injected by the request handler and overwritten
+    unconditionally, so a client cannot pick its own session by putting the
+    field in the JSON it sends.
+
+    An unknown key is a hard error, never a fallback to DEFAULT_PRINTER_KEY.
+    Custom printers now live in a session store that empties when the server
+    restarts, so "key not found" is an ordinary, expected condition rather
+    than a rare one -- and falling back would mean generating with the
+    Trident's limits for someone who selected a 180x180 machine. That is
+    exactly the "never inherit another machine's limits" rule: the
+    conservative answer to an unresolvable printer is to refuse, because
+    there is no such thing as a conservative default bed size.
+    """
     from dataclasses import replace
-    key = str(body.get("printer") or DEFAULT_PRINTER_KEY)
-    profiles = printer_store.all_profiles()
-    profile = profiles.get(key, profiles[DEFAULT_PRINTER_KEY])
+    sid = body.get("_session")
+    requested = body.get("printer")
+    key = str(requested) if requested else DEFAULT_PRINTER_KEY
+    profiles = printer_store.session_all_profiles(sid)
+    profile = profiles.get(key)
+    if profile is None:
+        raise ValueError(
+            "unknown printer '%s'. Custom printers are held for the browser "
+            "session and are cleared when the server restarts; reload the "
+            "page to restore them, or re-import the printer config."
+            % key)
     nozzle = body.get("nozzle")
     if nozzle:
         nd = float(nozzle)
         if 0.1 <= nd <= 1.2:
             profile = replace(profile, nozzle_diameter=nd)
     return profile
+
+
+# The session id is opaque and carries no authority: it only selects which
+# bucket of replayed custom printers this request sees. It is read from a
+# header so the same helper serves GET and POST alike.
+_SESSION_HEADER = "X-Trident-Session"
+
+
+def _session_id(handler):
+    sid = handler.headers.get(_SESSION_HEADER) or ""
+    return sid if printer_store.is_valid_session(sid) else None
 
 PORT = 8777
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -1466,7 +1500,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/printers":
-            custom = printer_store.list_custom()
+            custom = printer_store.session_list(_session_id(self))
             printers = []
             for key, prof in PRINTER_PROFILES.items():
                 printers.append(_printer_entry_json(key, prof, custom=False))
@@ -1604,17 +1638,16 @@ class Handler(SimpleHTTPRequestHandler):
         if not key:
             self._send_json({"ok": False, "error": "key is required"}, status=400)
             return
-        profiles = printer_store.all_profiles()
-        profile = profiles.get(key)
-        if profile is None:
+        sid = _session_id(self)
+        custom_entries = printer_store.session_list(sid)
+        entry = custom_entries.get(key)
+        if entry is not None:
+            profile, meta, custom = entry["profile"], entry["meta"], True
+        elif key in PRINTER_PROFILES:
+            profile, meta, custom = PRINTER_PROFILES[key], {}, False
+        else:
             self._send_json({"ok": False, "error": "unknown printer key '%s'" % key}, status=404)
             return
-        custom = printer_store.is_custom(key)
-        meta = {}
-        if custom:
-            loaded = printer_store.load_custom(key)
-            if loaded is not None:
-                meta = loaded[1]
         self._send_json({
             "ok": True, "key": key, "profile": _profile_to_json(profile),
             "meta": meta, "custom": custom,
@@ -1625,12 +1658,9 @@ class Handler(SimpleHTTPRequestHandler):
         if not key:
             self._send_json({"ok": False, "error": "key is required"}, status=400)
             return
-        if printer_store.is_custom(key):
-            loaded = printer_store.load_custom(key)
-            if loaded is None:
-                self._send_json({"ok": False, "error": "unknown printer '%s'" % key}, status=404)
-                return
-            profile, meta = loaded
+        entry = printer_store.session_list(_session_id(self)).get(key)
+        if entry is not None:
+            profile, meta = entry["profile"], entry["meta"]
         elif key in PRINTER_PROFILES:
             profile, meta = PRINTER_PROFILES[key], {}
         else:
@@ -1697,7 +1727,8 @@ class Handler(SimpleHTTPRequestHandler):
             vr = validate_raw(raw, repair=True)
             stripped = _extract_stripped_gcode(raw, allow_raw_gcode=False)
             out = _validation_result_json(vr, detected_format=raw.fmt, stripped_gcode=stripped)
-            out["suggested_key"] = printer_store.make_key(vr.profile.name)
+            out["suggested_key"] = printer_store.session_make_key(
+                _session_id(self), vr.profile.name)
             out["notes"] = list(raw.notes)
         except Exception as e:
             self._send_json({"ok": False, "error": "validation failed: %s" % e,
@@ -1741,8 +1772,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "issues": _issues_json(vr.issues)}, status=400)
             return
 
+        sid = _session_id(self)
+        if sid is None:
+            self._send_json(
+                {"ok": False, "error": "missing or malformed browser session id; reload the page"},
+                status=400)
+            return
+
         requested_key = body.get("key")
-        if requested_key and printer_store.is_custom(str(requested_key)):
+        if requested_key and printer_store.session_is_custom(sid, str(requested_key)):
             key = str(requested_key)
         elif requested_key and str(requested_key) in PRINTER_PROFILES:
             self._send_json(
@@ -1750,7 +1788,7 @@ class Handler(SimpleHTTPRequestHandler):
                 status=400)
             return
         else:
-            key = printer_store.make_key(vr.profile.name)
+            key = printer_store.session_make_key(sid, vr.profile.name)
 
         meta_in = body.get("meta") if isinstance(body.get("meta"), dict) else {}
         import datetime as _dt
@@ -1787,30 +1825,89 @@ class Handler(SimpleHTTPRequestHandler):
         meta["warnings"] = merged[:50]
 
         try:
-            printer_store.save_custom(key, vr.profile, meta)
+            printer_store.session_save(sid, key, vr.profile, meta)
         except ValueError as e:
             self._send_json({"ok": False, "error": str(e)}, status=400)
-            return
-        except OSError as e:
-            self._send_json({"ok": False, "error": "could not save printer: %s" % e}, status=500)
             return
 
         self._send_json({
             "ok": True, "key": key,
             "printer": _printer_entry_json(key, vr.profile, custom=True, meta=meta),
+            "profile": _profile_to_json(vr.profile),
+            "meta": meta,
             "issues": _issues_json(vr.issues),
         })
+
+    def _handle_printer_session(self):
+        """Replay the browser's localStorage copy into this session's store.
+
+        This is the ONLY way a custom printer gets back into the server after
+        a restart, and it is fed straight from client storage -- so every
+        entry goes through the full validate_profile_dict pipeline here,
+        exactly as strictly as a fresh import would. A profile that no longer
+        passes (hand-edited localStorage, or a rule that got stricter since it
+        was saved) is reported as rejected and simply does not exist, rather
+        than being repaired into something the user did not check.
+        """
+        body = _read_json_body(self)
+        if body is None:
+            return
+        sid = _session_id(self)
+        if sid is None:
+            self._send_json(
+                {"ok": False, "error": "missing or malformed browser session id"}, status=400)
+            return
+
+        entries = body.get("printers")
+        if not isinstance(entries, list):
+            self._send_json({"ok": False, "error": "'printers' array is required"}, status=400)
+            return
+
+        restored, rejected = [], []
+        for item in entries[:printer_store.MAX_PRINTERS_PER_SESSION]:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "")
+            profile_dict = item.get("profile")
+            if not isinstance(profile_dict, dict):
+                rejected.append({"key": key, "reason": "no profile object"})
+                continue
+            try:
+                vr = validate_profile_dict(
+                    profile_dict, allow_raw_gcode=bool(item.get("allow_raw_gcode", False)))
+            except Exception as e:
+                rejected.append({"key": key, "reason": "validation failed: %s" % e})
+                continue
+            if not vr.ok:
+                reason = "; ".join(i.message for i in vr.issues if i.severity == "error")
+                rejected.append({"key": key, "reason": reason or "failed validation"})
+                continue
+            meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+            # The stored key is preserved so a saved design that references
+            # it still resolves; if it is unusable, mint a fresh one rather
+            # than dropping the printer.
+            if not (key and key not in PRINTER_PROFILES):
+                key = printer_store.session_make_key(sid, vr.profile.name)
+            try:
+                printer_store.session_save(sid, key, vr.profile, meta)
+            except ValueError as e:
+                rejected.append({"key": key, "reason": str(e)})
+                continue
+            restored.append(_printer_entry_json(key, vr.profile, custom=True, meta=meta))
+
+        self._send_json({"ok": True, "restored": restored, "rejected": rejected})
 
     def _handle_printer_delete(self):
         body = _read_json_body(self)
         if body is None:
             return
+        sid = _session_id(self)
         key = str(body.get("key") or "")
-        if not key or key in PRINTER_PROFILES or not printer_store.is_custom(key):
+        if not key or key in PRINTER_PROFILES or not printer_store.session_is_custom(sid, key):
             self._send_json({"ok": False, "error": "'%s' is not a deletable custom printer" % key},
                              status=400)
             return
-        if not printer_store.delete_custom(key):
+        if not printer_store.session_delete(sid, key):
             self._send_json({"ok": False, "error": "could not delete '%s'" % key}, status=400)
             return
         self._send_json({"ok": True})
@@ -1832,6 +1929,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/printer/save":
             self._handle_printer_save()
             return
+        if path == "/api/printer/session":
+            self._handle_printer_session()
+            return
         if path == "/api/printer/delete":
             self._handle_printer_delete()
             return
@@ -1848,6 +1948,12 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             self._send_json({"error": "Request body is not valid JSON."}, status=400)
             return
+
+        # Injected, never read from the client's JSON: _get_profile resolves
+        # the printer key against this session's store, and letting a request
+        # name its own session would defeat the isolation entirely.
+        if isinstance(body, dict):
+            body["_session"] = _session_id(self)
 
         mode = str(body.get("mode", "parametric"))
         try:
@@ -1919,7 +2025,11 @@ class _Server(ThreadingHTTPServer):
 
 def main():
     try:
-        httpd = _Server(("", PORT), Handler)
+        # 127.0.0.1, not "" -- an empty host binds every interface, which put
+        # the whole API (printer import, G-code generation) on the LAN for
+        # anyone who could reach the port. This is a single-user design tool;
+        # it has no authentication and is not built to be one.
+        httpd = _Server(("127.0.0.1", PORT), Handler)
     except OSError as e:
         sys.stderr.write(
             "ERROR: could not bind port %d - is another server already running? (%s)\n"
