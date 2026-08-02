@@ -1127,6 +1127,87 @@ def test_unknown_printer_key_is_refused():
         store_mod._reset_sessions()
 
 
+def test_bind_config_defaults_to_loopback():
+    """Exposure must be opt-in: the value you get by forgetting is private.
+
+    serve.py once bound the empty host, putting the whole API -- printer
+    import, mesh upload, G-code generation, none of it authenticated -- on
+    the LAN for anyone who could reach the port. The default is now loopback
+    and only an explicit TRIDENT_BIND widens it, so a hosted deployment is
+    always a deliberate act rather than a forgotten flag.
+    """
+    import serve
+
+    check(serve._bind_config({})[0] == "127.0.0.1",
+          "bind: an empty environment binds loopback", str(serve._bind_config({})))
+    check(serve._bind_config({"TRIDENT_BIND": ""})[0] == "127.0.0.1",
+          "bind: an empty TRIDENT_BIND binds loopback")
+    check(serve._bind_config({"TRIDENT_BIND": "   "})[0] == "127.0.0.1",
+          "bind: a whitespace-only TRIDENT_BIND binds loopback")
+    check(serve._bind_config({"TRIDENT_BIND": "0.0.0.0"})[0] == "0.0.0.0",
+          "bind: an explicit TRIDENT_BIND is honoured")
+    check("0.0.0.0" not in serve._LOOPBACK_HOSTS,
+          "bind: 0.0.0.0 is not treated as loopback (it triggers the warning)")
+
+    # PORT comes from the platform, so a junk value must not stop the server
+    # from starting -- it falls back rather than crashing on boot.
+    check(serve._bind_config({})[1] == serve.PORT,
+          "bind: no PORT keeps the built-in default")
+    check(serve._bind_config({"PORT": "10000"})[1] == 10000,
+          "bind: a valid PORT is honoured")
+    for bad in ("0", "-1", "70000", "abc", "80.5", " "):
+        got = serve._bind_config({"PORT": bad})[1]
+        check(got == serve.PORT, f"bind: unusable PORT {bad!r} falls back to the default", str(got))
+
+
+def test_hidden_paths_are_not_served(tmp_path: Path):
+    """The document root is the repo checkout, so /.git must 404.
+
+    Exposed via TRIDENT_BIND, a handler that serves hidden paths publishes
+    /.git/config, /.git/HEAD and the object store to anyone who asks. This
+    walks a real request through the live handler rather than asserting on
+    the source, so a future refactor of send_head/do_GET cannot quietly
+    reopen it.
+    """
+    import http.client
+    import threading
+    import serve as serve_mod
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+    (tmp_path / ".hidden").write_text("secret\n", encoding="utf-8")
+    (tmp_path / "viewer").mkdir()
+    (tmp_path / "viewer" / "index.html").write_text("<h1>ok</h1>", encoding="utf-8")
+
+    orig_root = serve_mod.REPO_ROOT
+    serve_mod.REPO_ROOT = str(tmp_path)
+    httpd = serve_mod._Server(("127.0.0.1", 0), serve_mod.Handler)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        def get(path):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                conn.request("GET", path)
+                return conn.getresponse().status
+            finally:
+                conn.close()
+
+        for blocked in ("/.git/config", "/.git/HEAD", "/.hidden", "/viewer/../.git/config"):
+            status = get(blocked)
+            check(status == 404, f"static: {blocked} is refused", str(status))
+
+        check(get("/viewer/index.html") == 200,
+              "static: a normal file is still served")
+        check(get("/") == 302, "static: / redirects to the viewer instead of a listing")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+        serve_mod.REPO_ROOT = orig_root
+
+
 def test_key_traversal_guard():
     """The _KEY_RE guard is the only thing standing between a stored key and
     a filesystem path; re-check it explicitly (independent of
@@ -1617,6 +1698,9 @@ def main() -> int:
     test_session_store_isolation()
     test_session_store_caps()
     test_unknown_printer_key_is_refused()
+    test_bind_config_defaults_to_loopback()
+    with tempfile.TemporaryDirectory() as tmp:
+        test_hidden_paths_are_not_served(Path(tmp))
     test_key_traversal_guard()
 
     test_regression()

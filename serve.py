@@ -20,6 +20,11 @@ Run:
     python serve.py
 
 then open http://localhost:8777/viewer/index.html
+
+The server binds loopback ONLY by default. Set TRIDENT_BIND=0.0.0.0 to expose
+it (a hosted deployment must); see _bind_config() for what that costs you.
+PORT overrides the listen port, which is what Render and similar platforms
+supply.
 """
 from __future__ import annotations
 
@@ -1497,8 +1502,34 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_head(self):
+        """Static-file hook shared by GET and HEAD. Hidden paths are refused.
+
+        The server's document root is the repo checkout, so without this
+        every dot-directory in it is downloadable: /.git/config, /.git/HEAD
+        and the whole object store. On loopback that is merely untidy, but
+        TRIDENT_BIND turns the same handler into a public one, and a deploy
+        that hands out its own git history to anyone who asks is not a
+        deploy anyone should make. Blocking the whole class of hidden names
+        (rather than /.git specifically) also covers .env and friends if they
+        ever land in the tree.
+        """
+        path = urlparse(self.path).path
+        if any(seg.startswith(".") for seg in path.split("/") if seg):
+            self.send_error(404, "Not Found")
+            return None
+        return super().send_head()
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        # A bare URL should open the app, not a directory listing of the
+        # source tree. Matters once this is hosted: "/" is what a visitor
+        # gets handed, and a file index is not an application.
+        if path == "/":
+            self.send_response(302)
+            self.send_header("Location", "/viewer/index.html")
+            self.end_headers()
+            return
         if path == "/api/printers":
             custom = printer_store.session_list(_session_id(self))
             printers = []
@@ -2023,21 +2054,67 @@ class _Server(ThreadingHTTPServer):
     allow_reuse_address = (os.name != "nt")
 
 
+# Loopback, deliberately. An empty host binds every interface, which put the
+# whole API (printer import, G-code generation, mesh upload) on the LAN for
+# anyone who could reach the port. This tool has no authentication.
+_DEFAULT_BIND = "127.0.0.1"
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _bind_config(env=None):
+    """Resolve (host, port) from the environment.
+
+    Exposing the server is opt-in and explicit: TRIDENT_BIND must be set to
+    widen it, because the safe value is the one you get by forgetting. A
+    hosted deployment needs 0.0.0.0, and that is a real change in what the
+    process is -- there is no login, so every visitor can import printer
+    configs and generate G-code. The session store keeps their printers
+    apart, but it is not an access control.
+
+    PORT is honoured because Render (and most PaaS) assign it at runtime; an
+    unusable value falls back to the default rather than crashing on boot,
+    since a design tool that will not start is worse than one on a surprising
+    port. Pure function of ``env`` so tests need no live socket.
+    """
+    env = os.environ if env is None else env
+    host = (env.get("TRIDENT_BIND") or "").strip() or _DEFAULT_BIND
+    raw_port = (env.get("PORT") or "").strip()
+    port = PORT
+    if raw_port:
+        try:
+            candidate = int(raw_port)
+        except ValueError:
+            candidate = -1
+        if 1 <= candidate <= 65535:
+            port = candidate
+        else:
+            sys.stderr.write(
+                "WARNING: PORT=%r is not a usable port; falling back to %d.\n"
+                % (raw_port, PORT))
+    return host, port
+
+
 def main():
+    host, port = _bind_config()
     try:
-        # 127.0.0.1, not "" -- an empty host binds every interface, which put
-        # the whole API (printer import, G-code generation) on the LAN for
-        # anyone who could reach the port. This is a single-user design tool;
-        # it has no authentication and is not built to be one.
-        httpd = _Server(("127.0.0.1", PORT), Handler)
+        httpd = _Server((host, port), Handler)
     except OSError as e:
         sys.stderr.write(
-            "ERROR: could not bind port %d - is another server already running? (%s)\n"
-            % (PORT, e))
+            "ERROR: could not bind %s:%d - is another server already running? (%s)\n"
+            % (host, port, e))
         return 1
+    if host not in _LOOPBACK_HOSTS:
+        # Loud, because this is the moment the tool stops being private. Said
+        # on every start, not once: an operator who scrolls past it is exactly
+        # the person who needs to see it again.
+        sys.stdout.write(
+            "WARNING: bound to %s - this server is reachable beyond this machine.\n"
+            "         It has NO authentication: anyone who can reach it can import\n"
+            "         printer configs and generate G-code. Do not point it at a\n"
+            "         printer you care about on an untrusted network.\n" % host)
     sys.stdout.write(
         "Trident design server on http://localhost:%d/viewer/index.html (Ctrl-C to stop)\n"
-        % PORT)
+        % port)
     sys.stdout.flush()
     try:
         httpd.serve_forever()
