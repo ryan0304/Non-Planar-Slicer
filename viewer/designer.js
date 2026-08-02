@@ -1082,6 +1082,10 @@
     var strippedToggle = document.getElementById('pm-stripped-toggle');
     var strippedList = document.getElementById('pm-stripped-list');
     var strippedCount = document.getElementById('pm-stripped-count');
+    var repairedBlock = document.getElementById('pm-repaired');
+    var repairedToggle = document.getElementById('pm-repaired-toggle');
+    var repairedList = document.getElementById('pm-repaired-list');
+    var repairedCount = document.getElementById('pm-repaired-count');
     var allowRawEl = document.getElementById('pm-allow-raw');
 
     var PARSE_MAX_MB = 2;
@@ -1605,6 +1609,38 @@
       strippedToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
     });
 
+    // Import-time auto-repair notice (see printer_validate._repair_missing_
+    // heating). No separate API field for this -- every line the repair adds
+    // carries a literal '[auto-added]' tag in its own comment, so it can be
+    // found straight in the start G-code text the user already sees and can
+    // edit. That also makes the notice self-clearing: once the user deletes
+    // an auto-added line (or its tag), it stops appearing here, matching
+    // repair being a one-time, editable suggestion rather than something
+    // that keeps coming back (re-validation never re-runs repair -- see
+    // sanitize_gcode's docstring).
+    var AUTO_ADDED_TAG = '[auto-added]';
+    function renderRepaired(){
+      var lines = (startGcodeEl.value || '').split('\n').filter(function(ln){
+        return ln.indexOf(AUTO_ADDED_TAG) !== -1;
+      });
+      if(!lines.length){ repairedBlock.style.display = 'none'; return; }
+      repairedBlock.style.display = '';
+      repairedCount.textContent = lines.length;
+      repairedList.innerHTML = '';
+      repairedList.style.display = 'none';
+      repairedToggle.setAttribute('aria-expanded', 'false');
+      lines.forEach(function(line){
+        var li = document.createElement('li');
+        li.textContent = line.trim();
+        repairedList.appendChild(li);
+      });
+    }
+    repairedToggle.addEventListener('click', function(){
+      var open = repairedList.style.display !== 'none';
+      repairedList.style.display = open ? 'none' : '';
+      repairedToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+
     function updateSaveButtonState(){
       var hasError = (pmState.issues || []).some(function(i){ return i.severity === 'error'; });
       saveBtn.disabled = hasError;
@@ -1615,6 +1651,7 @@
       syncFields(pmState.fields);
       renderReport();
       renderStripped();
+      renderRepaired();
       updateSaveButtonState();
     }
 
@@ -1829,7 +1866,7 @@
       ctx.setLineDash([4,3]);
       ctx.beginPath();
       ctx.moveTo(PADL, py(refVal)); ctx.lineTo(W-PADR, py(refVal));
-      ctx.strokeStyle = (refLabel.indexOf('probe')>=0) ? 'rgba(224,101,79,0.85)' : (css('--muted')||'#888888');
+      ctx.strokeStyle = (refLabel.indexOf('probe')>=0) ? 'rgba(224,101,79,0.85)' : (css('--muted')||'#9aa0a6');
       ctx.lineWidth = 1; ctx.stroke();
       ctx.setLineDash([]);
       // control points
@@ -1838,7 +1875,7 @@
         ctx.fillStyle = accent; ctx.fill();
       }
       // labels (ASCII)
-      ctx.fillStyle = css('--muted')||'#888888';
+      ctx.fillStyle = css('--muted')||'#9aa0a6';
       ctx.font = '9px sans-serif';
       ctx.fillText(refLabel, PADL+2, py(refVal)-2);
       ctx.fillText('bottom', PADL, H-2);
@@ -3002,6 +3039,16 @@
       if(ch[activeIdx]) ch[activeIdx].classList.remove('active');
       activeIdx = i; if(ch[i]) ch[i].classList.add('active'); }
 
+    // Shared by the outside-click handler and Escape: empties the query and
+    // drops the stale match list, not just the dropdown's open state. Does
+    // NOT run on choose() -- picking a result is expected to leave the
+    // chosen label sitting in the box, only leaving-without-picking clears it.
+    function clearSearch(){
+      input.value = '';
+      matches = []; activeIdx = -1;
+      resultsEl.classList.remove('open');
+    }
+
     function choose(m){
       if(window.setAppMode) window.setAppMode(m.mode);      // reuse existing path
       if(m.mode==='design' && m.step) activateStep(m.step); // reuse existing path
@@ -3025,14 +3072,166 @@
 
     input.addEventListener('input', function(){ search(input.value); });
     input.addEventListener('keydown', function(e){
+      // Escape must clear unconditionally -- checked before the matches-gate
+      // below, otherwise a query with zero results (matches.length === 0)
+      // would leave Escape silently doing nothing and the text stuck.
+      if(e.key==='Escape'){ clearSearch(); input.blur(); return; }
       if(!matches.length) return;
       if(e.key==='ArrowDown'){ e.preventDefault(); setActive(Math.min(activeIdx+1, matches.length-1)); }
       else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(Math.max(activeIdx-1, 0)); }
       else if(e.key==='Enter'){ e.preventDefault(); if(matches[activeIdx]) choose(matches[activeIdx]); }
-      else if(e.key==='Escape'){ resultsEl.classList.remove('open'); input.blur(); }
     });
     document.addEventListener('click', function(e){
-      if(!e.target.closest('#param-search')) resultsEl.classList.remove('open'); });
+      if(!e.target.closest('#param-search')) clearSearch(); });
+  })();
+
+  // ---- parameter help tooltips (Orca-style hover panel) --------------------
+  // Content lives in window.PARAM_HELP (viewer/param_help.js, loaded before
+  // this file) keyed by control DOM id. One reused floating panel; a handful
+  // of delegated listeners on the containers that hold every .drow/label.row
+  // in the app -- the sidebar scroll area and the Point Edit Modifiers modal
+  // (a separate overlay outside #panel-scroll) -- not one listener per row.
+  (function(){
+    var HELP = window.PARAM_HELP;
+    if(!HELP) return;
+
+    var tip = document.createElement('div');
+    tip.id = 'param-tooltip';
+    tip.className = 'param-tip';
+    tip.setAttribute('role', 'tooltip');
+    document.body.appendChild(tip);
+
+    var OPEN_DELAY = 400;
+    var showTimer = null;
+    var currentCtrl = null;   // control currently wearing aria-describedby
+    var currentRow = null;    // row the visible/pending tooltip belongs to
+
+    function findRow(el){
+      return (el && el.closest) ? el.closest('.drow, label.row') : null;
+    }
+    function labelSpan(row){
+      return row.querySelector(':scope > span');
+    }
+    // The id a row's tooltip is keyed on: prefer a real form control, fall
+    // back to a plain readout <span id> (the STL mesh-info rows have no
+    // input at all), and finally the row's own id (the Bottom radio row has
+    // no per-input id -- see id="d-bottom" on that .drow in index.html).
+    function helpIdFor(row){
+      var el = row.querySelector('input[id], select[id], textarea[id], span[id]');
+      if(el) return el.id;
+      return row.id || null;
+    }
+    function controlFor(row){
+      return row.querySelector('input, select, textarea') || row;
+    }
+
+    function hide(){
+      if(showTimer){ clearTimeout(showTimer); showTimer = null; }
+      tip.classList.remove('open');
+      if(currentCtrl){ currentCtrl.removeAttribute('aria-describedby'); currentCtrl = null; }
+      currentRow = null;
+    }
+
+    // Fixed-position, flipped to stay inside the viewport on both axes --
+    // the panel is docked at the right edge of the window (so opening
+    // rightward would usually overflow) and rows near the bottom of a tall
+    // sidebar must not push the tooltip below the fold. Measured, not assumed.
+    function position(anchorEl){
+      var ar = anchorEl.getBoundingClientRect();
+      var tw = tip.offsetWidth, th = tip.offsetHeight;
+      var gap = 8, margin = 8;
+      var vw = window.innerWidth, vh = window.innerHeight;
+
+      var x = ar.right + gap;
+      if(x + tw + margin > vw) x = ar.left - gap - tw;
+      x = Math.max(margin, Math.min(vw - tw - margin, x));
+
+      var y = ar.top;
+      if(y + th + margin > vh) y = vh - th - margin;
+      y = Math.max(margin, y);
+
+      tip.style.left = Math.round(x) + 'px';
+      tip.style.top = Math.round(y) + 'px';
+    }
+
+    function render(data){
+      tip.innerHTML = '';
+      var desc = document.createElement('div');
+      desc.className = 'param-tip-desc';
+      desc.textContent = data.desc;
+      tip.appendChild(desc);
+      var paramLine = document.createElement('div');
+      paramLine.className = 'param-tip-meta';
+      paramLine.textContent = 'parameter: ' + data.param;
+      tip.appendChild(paramLine);
+      var defLine = document.createElement('div');
+      defLine.className = 'param-tip-meta';
+      defLine.textContent = 'Default: ' + data.def;
+      tip.appendChild(defLine);
+    }
+
+    function showFor(row, anchorEl, immediate){
+      var id = helpIdFor(row);
+      var data = id ? HELP[id] : null;
+      if(!data) return;   // no entry for this id -- fail silent, never a broken empty box
+      function doShow(){
+        render(data);
+        currentRow = row;
+        currentCtrl = controlFor(row);
+        if(currentCtrl) currentCtrl.setAttribute('aria-describedby', tip.id);
+        position(anchorEl);   // tip is laid out (visibility:hidden) so this measures real content
+        tip.classList.add('open');
+      }
+      if(showTimer){ clearTimeout(showTimer); showTimer = null; }
+      if(immediate) doShow();
+      else showTimer = setTimeout(doShow, OPEN_DELAY);
+    }
+
+    function onMouseOver(e){
+      var row = findRow(e.target);
+      if(!row) return;
+      var span = labelSpan(row);
+      if(!span || (e.target !== span && !span.contains(e.target))) return;
+      if(currentRow === row && tip.classList.contains('open')) return;
+      showFor(row, span, false);
+    }
+    function onMouseOut(e){
+      var row = findRow(e.target);
+      if(!row) return;
+      var span = labelSpan(row);
+      if(!span) return;
+      var to = e.relatedTarget;
+      if(to && (to === span || span.contains(to))) return;   // still inside the label
+      if(currentRow === row || showTimer) hide();
+    }
+    function onFocusIn(e){
+      var ctrl = e.target;
+      if(!ctrl || !ctrl.matches || !ctrl.matches('input, select, textarea')) return;
+      var row = findRow(ctrl);
+      if(!row) return;
+      showFor(row, ctrl, true);   // no delay on keyboard focus
+    }
+    function onFocusOut(e){
+      var row = findRow(e.target);
+      if(row && row === currentRow) hide();
+    }
+
+    var hoverContainers = [document.getElementById('panel-scroll'),
+                            document.getElementById('point-edit-modal')];
+    hoverContainers.forEach(function(c){
+      if(!c) return;
+      c.addEventListener('mouseover', onMouseOver);
+      c.addEventListener('mouseout', onMouseOut);
+      c.addEventListener('focusin', onFocusIn);
+      c.addEventListener('focusout', onFocusOut);
+    });
+    // 'scroll' does not bubble, so it needs the actual scrolling elements --
+    // #panel-scroll for the sidebar, .pe-panels for the modal's own body.
+    var scrollContainers = [document.getElementById('panel-scroll'),
+                             document.querySelector('.pe-panels')];
+    scrollContainers.forEach(function(c){ if(c) c.addEventListener('scroll', hide, {passive:true}); });
+    document.addEventListener('keydown', function(e){ if(e.key === 'Escape') hide(); });
+    document.addEventListener('click', hide, true);
   })();
 
   updateSlope();

@@ -1,16 +1,17 @@
 /* =========================================================================
    Trident Non-Planar Viewer — design tokens
-   Precision-instrument / CNC-metrology aesthetic. Dark palette, systematic
+   Precision-instrument / CNC-metrology aesthetic. Cool-slate dark palette
+   (lifted off near-black so long sessions are easier on the eyes), systematic
    spacing, monospaced data. The --ok/--warn/--danger trio is reserved for
    safety states (probe limits, melt-ceiling, risk flags, clamp events) —
    nothing else may use them.
    ========================================================================= */
 :root {
-  --bg:#0a0a0a;
-  --surface:#141414;
-  --line:#232323;
-  --ink:#f5f5f0;
-  --ink-muted:#888888;
+  --bg:#17191b;
+  --surface:#1e2124;
+  --line:#31363b;
+  --ink:#e8eaed;
+  --ink-muted:#9aa0a6;
   --accent:#2f6bff;
 
   --ok:#3fdca0;
@@ -18,9 +19,14 @@
   --danger:#ff5d5d;
 
   /* derived surface/accent shades used for hover/active states */
-  --surface-raised:#1c1c1c;
+  --surface-raised:#262a2e;
   --accent-hover:#5a8aff;
   --ink-on-accent:#ffffff;
+
+  /* recessed-well surface for editable controls -- deliberately darker than
+     both --bg and --surface so inputs read as a well, not a flat swatch that
+     happens to share the page background. */
+  --input-bg:#121417;
 
   /* "Purple modifiers" accent -- reserved exclusively for the Point Edit
      Modifiers subsystem (entry button, modal chrome, per-modifier enabled
@@ -40,11 +46,12 @@
 
   /* legacy variable names — kept as aliases so designer.js/viewer.js, which
      read a handful of these via getComputedStyle(), keep resolving without
-     needing their own edits (out of scope per the redesign brief). */
+     needing their own edits (out of scope per the redesign brief). --input-bg
+     used to be one of these aliases (= var(--bg)); it is now a real token in
+     its own right (see above), declared once, not re-aliased here. */
   --txt: var(--ink);
   --muted: var(--ink-muted);
   --panel: var(--surface);
-  --input-bg: var(--bg);
   --input-border: var(--line);
 }
 
@@ -134,18 +141,20 @@ input[type=range]:disabled { opacity:.4; cursor:default; }
    an extra element. */
 select {
   appearance:none; -webkit-appearance:none; -moz-appearance:none;
-  background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+  background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; font-size:12px; padding:3px 24px 3px 5px;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23989898' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
   background-repeat:no-repeat; background-position:right 8px center;
   transition:border-color .15s;
 }
+/* Hover/focus chevron is plain %23e8eaed, the literal value of --ink: a
+   data-URI SVG's XML text can't reference a CSS custom property. */
 select:hover {
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23f5f5f0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23e8eaed' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
 }
 select:focus {
   border-color:var(--accent); outline:none;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23f5f5f0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 6l5 -5 5 5'/></svg>");
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23e8eaed' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 6l5 -5 5 5'/></svg>");
 }
 
 html,body {
@@ -231,7 +240,7 @@ label.radio-inline { cursor:pointer; }
 /* ---- overlay (drop-a-gcode card / canvas-centered messages) ---- */
 .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   pointer-events:none; }
-.overlay .card { pointer-events:auto; background:rgba(20,20,20,.92); border:1px solid var(--line);
+.overlay .card { pointer-events:auto; background:rgba(30,33,36,.92); border:1px solid var(--line);
   border-radius:var(--radius-lg); padding:28px 34px; text-align:center; }
 .card-title { font-size:14px; margin-bottom:6px; }
 
@@ -242,7 +251,7 @@ label.radio-inline { cursor:pointer; }
    interaction. Live telemetry lives in the floating card below instead.
    ========================================================================= */
 .machine-readout { position:absolute; left:var(--sp-4); right:var(--sp-4); bottom:var(--sp-3);
-  background:rgba(20,20,20,.94); border:1px solid var(--line); border-radius:var(--radius-lg);
+  background:rgba(30,33,36,.94); border:1px solid var(--line); border-radius:var(--radius-lg);
   overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.35); }
 
 .spark { display:block; width:100%; height:26px; background:transparent; cursor:pointer; }
@@ -255,7 +264,7 @@ label.radio-inline { cursor:pointer; }
 .timeline button:hover { transform:translateY(-1px); box-shadow:0 3px 8px rgba(47,107,255,.4); }
 .timeline button:active { transform:translateY(0); }
 .timeline input[type=range] { flex:1; cursor:pointer; }
-.timeline select { background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+.timeline select { background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; padding:3px 24px 3px 4px; font-size:12px; }
 .tl-read { font-size:12px; color:var(--ink-muted); min-width:150px; text-align:right; }
 .tl-read .turn-count { color:var(--ink); font-weight:700; font-size:13px; }
@@ -272,7 +281,7 @@ label.radio-inline { cursor:pointer; }
   color:var(--accent-hover); font-size:11px; font-family:var(--font-ui); pointer-events:none; }
 
 .telemetry-card { position:absolute; top:16px; right:16px; width:190px; z-index:5;
-  background:rgba(20,20,20,.92); border:1px solid var(--line); border-radius:var(--radius);
+  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius);
   overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.35); }
 .telemetry-header { display:flex; align-items:center; justify-content:space-between;
   padding:6px 8px; border-bottom:1px solid var(--line); }
@@ -297,9 +306,9 @@ label.radio-inline { cursor:pointer; }
   padding:4px 0; gap:8px; }
 .drow > span { color:var(--ink-muted); white-space:nowrap; transition:color .15s; }
 .drow:hover > span:first-child { color:var(--ink); }
-.drow input[type=number] { background:var(--bg); color:var(--ink);
+.drow input[type=number] { background-color:var(--input-bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
-.drow select { background-color:var(--bg); color:var(--ink);
+.drow select { background-color:var(--input-bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
 .drow select { width:116px; padding-right:24px; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
@@ -338,9 +347,19 @@ label.radio-inline { cursor:pointer; }
 
 /* ---- parameter search (jump-to-control) ---- */
 .param-search { position:relative; margin-bottom:var(--sp-3); }
-.param-search input { width:100%; background:var(--bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:var(--radius); padding:7px 10px;
-  font-size:12.5px; font-family:var(--font-ui); }
+/* Magnifying-glass icon lives in a background-image, so background-COLOR
+   (and the other longhands) are set explicitly here, never the `background`
+   shorthand -- the shorthand resets background-repeat/position to their
+   initials, which is exactly what tiled a chevron SVG across a control
+   elsewhere (see the .pm-field-input comment further down). The icon is
+   plain #9aa0a6, the literal value of --ink-muted: a data-URI SVG's XML
+   text can't reference a CSS custom property. Left padding on the input
+   keeps typed text clear of the icon. */
+.param-search input { width:100%; background-color:var(--input-bg); color:var(--ink);
+  border:1px solid var(--line); border-radius:var(--radius); padding:7px 10px 7px 30px;
+  font-size:12.5px; font-family:var(--font-ui);
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 16 16'><circle cx='7' cy='7' r='5' fill='none' stroke='%239aa0a6' stroke-width='1.6'/><line x1='11' y1='11' x2='15' y2='15' stroke='%239aa0a6' stroke-width='1.6' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat; background-position:10px center; background-size:13px 13px; }
 .param-search input:focus { border-color:var(--accent); outline:none; }
 .param-search input::placeholder { color:var(--ink-muted); }
 .param-search-results { position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:8;
@@ -376,7 +395,7 @@ label.radio-inline { cursor:pointer; }
 
 /* ---- preset bar ---- */
 .preset-bar { display:flex; gap:4px; align-items:center; margin-bottom:10px; }
-.preset-bar select { flex:1 1 0; min-width:0; background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+.preset-bar select { flex:1 1 0; min-width:0; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; padding:4px 24px 4px 4px; font-size:11.5px; }
 .preset-bar .btn { padding-left:8px; padding-right:8px; }
 .preset-bar .btn-icon { padding-left:6px; padding-right:6px; }
@@ -404,7 +423,7 @@ label.radio-inline { cursor:pointer; }
   border-radius:var(--radius-lg); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-3); }
 .mb-row1 { display:flex; align-items:center; gap:6px; }
 .mb-icon { flex:none; font-size:13px; color:var(--ink-muted); line-height:1; }
-.mb-select { flex:1 1 auto; min-width:0; background-color:var(--bg); color:var(--ink);
+.mb-select { flex:1 1 auto; min-width:0; background-color:var(--input-bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; font-size:12.5px; font-weight:600;
   padding-top:6px; padding-bottom:6px; padding-left:8px; }
 .mb-summary { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-muted);
@@ -423,7 +442,7 @@ label.radio-inline { cursor:pointer; }
    native -- only the printer list has the length problem. */
 .mb-combo { position:relative; flex:1 1 auto; min-width:0; }
 .mb-combo-btn { display:flex; align-items:center; justify-content:space-between; gap:6px;
-  width:100%; background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+  width:100%; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; font-size:12.5px; font-weight:600; font-family:var(--font-ui);
   padding:6px 8px; text-align:left; cursor:pointer; transition:border-color .15s; }
 .mb-combo-btn:hover { border-color:var(--ink-muted); }
@@ -565,7 +584,10 @@ label.radio-inline { cursor:pointer; }
 .pe-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
 .pe-modal-card { position:relative; width:min(640px, 92vw); max-height:86vh; display:flex; flex-direction:column;
   background:var(--surface); border:1px solid var(--accent-purple); border-radius:var(--radius-lg);
-  box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden; }
+  /* Softened from rgba(0,0,0,.5): a pure-black shadow this heavy read harsher
+     once --bg lifted off near-black -- .4 keeps the modal grounded without
+     the seam looking like a hole cut in the page. */
+  box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
 .pe-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4);
   border-bottom:1px solid var(--line); flex:none; }
 .pe-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
@@ -587,7 +609,7 @@ label.radio-inline { cursor:pointer; }
 .pe-modal-footer { display:flex; justify-content:space-between; gap:8px; padding:var(--sp-3) var(--sp-4);
   border-top:1px solid var(--line); flex:none; }
 .pe-grid { display:grid; gap:3px; margin-top:var(--sp-2); }
-.pe-grid input { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+.pe-grid input { width:100%; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:4px; padding:4px 2px; font-size:10.5px; text-align:center; font-family:var(--font-ui); }
 .pe-grid input:focus { border-color:var(--accent-purple); outline:none; }
 
@@ -613,7 +635,8 @@ label.radio-inline { cursor:pointer; }
 .pm-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
 .pm-modal-card { position:relative; width:min(760px, 94vw); max-height:88vh; display:flex; flex-direction:column;
   background:var(--surface); border:1px solid var(--accent); border-radius:var(--radius-lg);
-  box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden; }
+  /* Softened from rgba(0,0,0,.5) for the same reason as .pe-modal-card above. */
+  box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
 /* Horizontal padding is --sp-6 (24px), not --sp-4: this card is up to 760px
    wide and prose runs the full width, so 16px left the text visibly crowding
    the border. Header, body and footer share the inset so everything lines up
@@ -638,7 +661,7 @@ label.radio-inline { cursor:pointer; }
 .pm-error { margin-top:var(--sp-3); font-size:12px; color:var(--danger); }
 
 .pm-review-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:var(--sp-3); }
-.pm-name-input { flex:1 1 160px; min-width:0; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+.pm-name-input { flex:1 1 160px; min-width:0; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; padding:6px 8px; font-size:13px; }
 .pm-name-input:focus { border-color:var(--accent); outline:none; }
 .pm-badge { flex:0 0 auto; font-size:10.5px; font-family:var(--font-mono); text-transform:uppercase;
@@ -684,7 +707,7 @@ button.pm-issue-msg:hover { text-decoration:underline; }
    by <select> (see select.pm-field-input below), and the shorthand resets
    background-repeat/position to their initials -- which tiled the chevron SVG
    across the whole control as a sawtooth pattern behind the value. */
-.pm-field-input { background-color:var(--bg); color:var(--ink); border:1px solid var(--line);
+.pm-field-input { background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
 .pm-field-input:focus { border-color:var(--accent); outline:none; }
 select.pm-field-input { width:116px; padding-right:24px; }
@@ -699,10 +722,25 @@ select.pm-field-input { width:116px; padding-right:24px; }
 
 .pm-gcode-block { margin-top:var(--sp-3); }
 .pm-gcode-label { font-size:11px; color:var(--ink-muted); margin-bottom:4px; }
-.pm-gcode-textarea { width:100%; box-sizing:border-box; resize:vertical; background:var(--bg); color:var(--ink);
+.pm-gcode-textarea { width:100%; box-sizing:border-box; resize:vertical; background-color:var(--input-bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; padding:8px; font-family:var(--font-mono); font-size:11.5px;
   line-height:1.5; }
 .pm-gcode-textarea:focus { border-color:var(--accent); outline:none; }
+
+/* "We changed your G-code so it can actually print" is a safety-state notice
+   (a start block with no heating at all is a guaranteed abort on the first
+   extrusion move, not a stylistic nit), so --warn is the right token under
+   the reserved-token rule -- same amber as .pm-stripped-* just below, for
+   the same reason: something the user did not type is now in their G-code
+   and they should look at it before printing. */
+.pm-repaired { margin-top:var(--sp-3); }
+.pm-repaired-toggle { width:100%; text-align:left; background:var(--surface-raised); border:1px solid var(--line);
+  color:var(--ink); border-radius:6px; padding:6px 10px; font-size:11.5px; font-weight:600; cursor:pointer;
+  font-family:var(--font-ui); }
+.pm-repaired-toggle:hover { border-color:var(--warn); }
+.pm-repaired-list { list-style:none; margin:6px 0 0; padding:0 0 0 10px; border-left:2px solid var(--warn);
+  font-family:var(--font-mono); font-size:11px; color:var(--ink-muted); }
+.pm-repaired-list li { padding:2px 0; }
 
 .pm-stripped { margin-top:var(--sp-3); }
 .pm-stripped-toggle { width:100%; text-align:left; background:var(--surface-raised); border:1px solid var(--line);
@@ -725,6 +763,46 @@ select.pm-field-input { width:116px; padding-right:24px; }
 .pmc-label { font-family:var(--font-ui); font-size:8px; }
 .pmc-label-accent { fill:var(--accent-hover); font-weight:600; }
 .pmc-caption { margin-bottom:var(--sp-2); }
+
+/* =========================================================================
+   Printer-import modal -- prose hierarchy (all three pm-stage screens).
+   Every .hint inside this modal used to render at the sitewide 11px whether
+   it was a one-line field caption or a multi-line explanation running the
+   full 760px card width, so a lede question, a diagram caption and a safety
+   note all looked identical -- no reading hierarchy at all. Scoped to
+   ".pm-stage .hint" rather than editing the bare .hint rule above, so
+   field-level one-line hints elsewhere in the app (drow hints, mesh-info,
+   etc.) are untouched. This one rule is what keeps stage-drop's "Supported
+   formats..." line and stage-clearance's prose on the same scale -- there
+   is nothing left to fix on stage-review, which carries no loose .hint
+   prose of its own (its report/field rows already use the severity system
+   below, on purpose).
+   ========================================================================= */
+.pm-stage .hint { font-size:13px; line-height:1.6; }
+
+/* The sentence that opens a stage -- Stage C's "How far can the nozzle
+   dip..." -- is promoted above the generic .hint treatment: larger,
+   full-ink, so it reads as the question the rest of the stage answers,
+   not just another line of muted caption text. */
+.pm-lede { font-size:15px; line-height:1.6; color:var(--ink); margin:0 0 var(--sp-2); }
+
+/* Diagram caption stays visibly secondary to the lede above it: smaller
+   than even the raised .pm-stage .hint baseline. Specificity (3 classes)
+   deliberately beats ".pm-stage .hint" (2 classes) so this wins regardless
+   of source order in the file. */
+.pm-stage .hint.pmc-caption { font-size:12px; line-height:1.5; }
+
+/* The closing clearance note is a real hardware-collision risk flag, not
+   body copy: it says the amplitude ceiling above is an unverified guess,
+   and an over-large guess is exactly what lets the nozzle strike the fan
+   shroud or probe body it was measured against. That makes it one of the
+   legitimate --warn uses under the reserved-token rule (see :root comment
+   -- --warn is for probe limits, melt ceiling, risk flags, clamp events).
+   Boxed like the app's other warn idioms (.mesh-check.warn, .mb-notice-warn)
+   so it reads as a flag to stop on, not another paragraph to skim past. */
+.pm-caution { margin-top:var(--sp-3); padding:var(--sp-2) var(--sp-3);
+  border-radius:6px; background:rgba(255,180,84,.10); border:1px solid var(--warn);
+  color:var(--warn); font-size:12.5px; line-height:1.5; }
 
 /* =========================================================================
    Collapsible sections — every h3.section-heading and .group h2 that owns
@@ -779,3 +857,28 @@ body.hints-hidden .hint { display:none; }
   .telemetry-card { top:8px; right:8px; width:150px; max-width:calc(100% - 16px); }
   .draft-preview-label { top:8px; left:8px; }
 }
+
+/* =========================================================================
+   Parameter help tooltips (Orca-style hover panel) -- one reused floating
+   panel, positioned/flipped in JS (see designer.js). Plain --surface/--line
+   chrome, matching .hint / .pm-report rather than a new visual language.
+   Deliberately uses neither --accent-purple (Point Edit only) nor the
+   --ok/--warn/--danger trio (safety states only).
+   ========================================================================= */
+.param-tip {
+  position:fixed; z-index:60; max-width:300px;
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  padding:var(--sp-2) var(--sp-3);
+  box-shadow:0 8px 24px rgba(0,0,0,.45);
+  pointer-events:none;
+  opacity:0; visibility:hidden; transition:opacity .12s ease;
+}
+.param-tip.open { opacity:1; visibility:visible; }
+.param-tip-desc {
+  font-family:var(--font-ui); font-size:12px; line-height:1.5; color:var(--ink);
+}
+.param-tip-meta {
+  font-family:var(--font-mono); font-size:10.5px; line-height:1.5; color:var(--ink-muted);
+  margin-top:6px; word-break:break-word;
+}
+.param-tip-meta:first-of-type { margin-top:8px; }

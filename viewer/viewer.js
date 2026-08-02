@@ -40,7 +40,10 @@ renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x101010);
+// Kept slightly lighter than --bg (#17191b), same relationship the old
+// 0x101010-vs-#0a0a0a pairing had, so the canvas doesn't read as a darker
+// seam against the surrounding chrome.
+scene.background = new THREE.Color(0x1c1f22);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
 camera.position.set(BED_X*0.9, BED_Z*1.1, BED_Y*1.3);
@@ -58,7 +61,10 @@ dir.position.set(1,2,1); scene.add(dir);
 // Origin shifted so bed centre sits at world origin.
 const bedGroup = new THREE.Group(); scene.add(bedGroup);
 {
-  const grid = new THREE.GridHelper(BED_X, 23, 0x2e2e2e, 0x1f1f1f);
+  // Both lifted off the old 0x2e2e2e/0x1f1f1f pair to stay legible against the
+  // lighter 0x1c1f22 canvas background; the ~1.6x gap between them (kept from
+  // the original) is what preserves the major/minor line distinction.
+  const grid = new THREE.GridHelper(BED_X, 23, 0x454b52, 0x2a2e33);
   bedGroup.add(grid);
   // Safe-print-area outline (30-208 x 30-185 from printer.cfg).
   const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
@@ -575,7 +581,9 @@ function buildGeometry(d){
 
   const tg=new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.Float32BufferAttribute(d.trv,3));
-  travelObj=new THREE.LineSegments(tg, new THREE.LineBasicMaterial({color:0x4a4a4a,transparent:true,opacity:0.45}));
+  // Lifted from 0x4a4a4a: at the same opacity the old value blended nearly
+  // invisibly into the new, lighter 0x1c1f22 canvas background.
+  travelObj=new THREE.LineSegments(tg, new THREE.LineBasicMaterial({color:0x5a5a5a,transparent:true,opacity:0.45}));
   travelObj.visible=document.getElementById('t-travel').checked;
   scene.add(travelObj);
 
@@ -625,10 +633,13 @@ function showGcodeTitle(name){
   if(!gcodeTitleEl){
     gcodeTitleEl = document.createElement('div');
     gcodeTitleEl.id = 'gcode-title';
+    // Surface/ink stand-ins tracking the palette (--surface rgb(30,33,36) and
+    // --ink #e8eaed) -- this label is a plain DOM element positioned over the
+    // canvas, not a CSS-var-aware node, so the values are inlined here.
     gcodeTitleEl.style.cssText =
       'position:absolute;top:8px;left:50%;transform:translateX(-50%);' +
-      'padding:3px 12px;border-radius:6px;background:rgba(14,17,22,0.82);' +
-      'color:#f5f5f0;font-size:12px;font-weight:600;pointer-events:none;' +
+      'padding:3px 12px;border-radius:6px;background:rgba(30,33,36,0.86);' +
+      'color:#e8eaed;font-size:12px;font-weight:600;pointer-events:none;' +
       'z-index:5;font-family:sans-serif;max-width:60%;overflow:hidden;' +
       'text-overflow:ellipsis;white-space:nowrap;border:1px solid rgba(255,255,255,0.08)';
     wrap.appendChild(gcodeTitleEl);
@@ -666,7 +677,7 @@ let sparkOffscreen = null;
 
 const SPARK_FLOW_MAX_REF = 17;    // melt-ceiling reference line at 17 mm^3/s
 const SPARK_BUCKETS = 600;
-const SPARK_BG = 'rgba(20,20,20,0.85)';
+const SPARK_BG = 'rgba(30,33,36,0.85)';  // tracks --surface (#1e2124)
 const SPARK_LINE_COL = '#5a8aff';
 const SPARK_FILL_COL = 'rgba(47,107,255,0.18)';
 const SPARK_REF_COL = '#ffb454';  // mirrors --warn in style.css (safety-state color, not decoration)
