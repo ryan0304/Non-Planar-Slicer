@@ -540,7 +540,14 @@ function buildGeometry(d){
   // Per-vertex colours (one per segment endpoint), then fat-line geometry.
   const cols=new Float32Array(d.ext.length);
   const span=Math.max(1e-6, d.maxz-d.minz);
-  const PLAIN_RGB = [0x9f/255, 0xd8/255, 0xff/255];   // uniform light blue (0x9fd8ff)
+  // Plain mode carries no data, so it is free to just look like filament:
+  // a natural / beige PLA (0xe6d5b0). LineMaterial is UNLIT -- there is no
+  // light term applied to vertex colours -- so this value is exactly what
+  // renders, and it is chosen to sit clear of both the 0x1c1f22 canvas and
+  // the saturated amber used for interactive handles. Banding multiplies
+  // alternate turns by 0.55, which lands on a muted 0x7e7560 -- still clearly
+  // the same material in shadow rather than a different colour.
+  const PLAIN_RGB = [0xe6/255, 0xd5/255, 0xb0/255];   // beige filament (0xe6d5b0)
   for(let i=0;i<d.extCol.length;i++){
     const segIdx = i >> 1;  // two vertices per segment
     const zc=d.extCol[i];
@@ -554,7 +561,7 @@ function buildGeometry(d){
       } else if(colorMode==='plain'){
         rgb = PLAIN_RGB.slice();
       } else {
-        rgb = ramp((zc-d.minz)/span);       // height (viridis) -- default
+        rgb = ramp((zc-d.minz)/span);       // height (viridis)
       }
       if(banding){                          // darken every other turn -> visible ribs
         const b = (segTurn[segIdx] % 2 === 0) ? 1.0 : 0.55;
@@ -1097,10 +1104,14 @@ window.__colorStats = function(){
   const a = pathObj.geometry.getAttribute('instanceColorStart');
   if(!a) return null;
   const n = a.count;
-  let green=0, yellow=0, red=0, blue=0, other=0;
+  let green=0, yellow=0, red=0, plain=0, other=0;
   for(let i=0;i<n;i++){
     const r=a.getX(i), g=a.getY(i), b=a.getZ(i);
-    if(b>0.6 && r>0.5 && g>0.7) blue++;              // plain light blue
+    // Plain mode's beige filament. Warm (b below r) and light on all three
+    // channels, which no viridis height stop and no overhang colour reaches:
+    // viridis peaks yellow (b ~= 0.14) and the overhang ramp is green/yellow/
+    // red, all far below b>0.6.
+    if(r>0.8 && g>0.75 && b>0.6 && b<r) plain++;
     else if(r<0.4 && g>0.55 && b<0.35) green++;      // safe overhang
     else if(r>0.7 && g>0.6 && b<0.35) yellow++;      // caution
     else if(r>0.7 && g<0.45 && b<0.3) red++;         // steep/air
@@ -1109,7 +1120,7 @@ window.__colorStats = function(){
   return { mode: document.getElementById('t-colormode').value,
            xray: !!(lineMat && lineMat.transparent),
            opacity: lineMat ? +lineMat.opacity.toFixed(2) : null,
-           n, green, yellow, red, blue, other };
+           n, green, yellow, red, plain, other };
 };
 
 // ---- draft preview layer ----------------------------------------------------
