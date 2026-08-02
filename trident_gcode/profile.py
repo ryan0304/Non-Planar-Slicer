@@ -202,6 +202,42 @@ BAMBU_P1S = PrinterProfile(
     max_nozzle_temp=300.0, max_bed_temp=110.0,
 )
 
+# Bambu markets the P2S at 600 mm/s and 20,000 mm/s^2. Those are PEAK toolhead
+# figures, and this profile deliberately does not adopt them: max_velocity and
+# max_accel here are ceilings used to clamp emitted feedrates, so taking the
+# marketing peak would widen a limit rather than describe a sustained one. The
+# shipped P1S profile already de-rates Bambu's own 20,000 to 10,000 for the
+# same reason, and the P2S shares that chassis, bed and 256^3 volume -- so it
+# gets the same numbers rather than a new convention.
+#
+# Verified against Bambu's published specs: 256 x 256 x 256 mm volume, 300 C
+# hot end, 110 C bed, 1.75 mm filament, 0.4 mm stock nozzle, CoreXY, direct
+# drive, no physical probe (bed levelling is nozzle-based, so nothing trails
+# the hotend).
+#
+# NOT published by Bambu for any of their machines, and therefore inherited
+# from the rest of this family rather than measured:
+#   * max_z_velocity (30 mm/s) -- the single most important number in a
+#     non-planar app, since it is what clamps every Z-modulated feedrate.
+#   * max_z_accel (1000 mm/s^2).
+#   * z_amp_max (4.0 mm) -- not a vendor spec at all. It is this app's max Z
+#     excursion below already-printed material. 4.0 assumes the probe-less
+#     geometry the other Bambu profiles assume; it has NOT been print-tested
+#     on a P2S by anyone. Treat it as a starting point, not a measurement.
+BAMBU_P2S = PrinterProfile(
+    name="Bambu Lab P2S",
+    firmware="bambu_marlin",
+    bed_size_x=256.0, bed_size_y=256.0, z_max=256.0, z_min=0.0,
+    print_min_x=5.0, print_min_y=5.0, print_max_x=251.0, print_max_y=251.0,
+    max_velocity=500.0, max_z_velocity=30.0, max_accel=10000.0, max_z_accel=1000.0,
+    has_probe=False, probe_dx=0.0, probe_dy=0.0, probe_clearance=0.0, probe_radius=0.0,
+    z_amp_max=4.0,
+    start_gcode=_BAMBU_START,
+    end_gcode=_BAMBU_END,
+    pa_gcode_style="marlin",
+    max_nozzle_temp=300.0, max_bed_temp=110.0,
+)
+
 BAMBU_X1C = PrinterProfile(
     name="Bambu Lab X1C",
     firmware="bambu_marlin",
@@ -401,6 +437,7 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
     "bambu_a1": BAMBU_A1,
     "bambu_a1_mini": BAMBU_A1_MINI,
     "bambu_p1s": BAMBU_P1S,
+    "bambu_p2s": BAMBU_P2S,
     "bambu_x1c": BAMBU_X1C,
     "creality_ender3": CREALITY_ENDER3,
     "creality_ender3_v2": CREALITY_ENDER3_V2,

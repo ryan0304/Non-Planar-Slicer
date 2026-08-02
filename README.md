@@ -365,7 +365,8 @@ prototyping settings for a second machine. Each profile carries its own
 safety limits (footprint, Z-rate, probe keep-out where applicable), enforced
 the same way regardless of which one is selected.
 
-Besides the Voron Trident and four Bambu Lab machines, nine stock Creality
+Besides the Voron Trident and five Bambu Lab machines (A1, A1 Mini, P1S, P2S,
+X1C), nine stock Creality
 printers are built in: Ender 3 / Pro, Ender 3 V2, Ender 3 S1 / S1 Pro, Ender 3
 V3 SE, Ender 3 V3 KE, Ender 5 Plus, CR-10, K1 / K1C, and K1 Max. **Read this
 before picking one for a non-planar print**: stock Marlin Creality firmware
@@ -381,6 +382,18 @@ for it in the review dialog after importing your own `printer.cfg`. The three
 Klipper-firmware models (Ender 3 V3 KE, K1 / K1C, K1 Max) call the stock
 `START_PRINT` / `END_PRINT` macros the way the Trident profile calls
 `PRINT_START` / `PRINT_END`.
+
+**On the Bambu profiles specifically**: build volume, temperatures and nozzle
+come from Bambu's published specs, but **Bambu does not publish a Z-axis
+feedrate or Z acceleration for any of their machines**, and those are exactly
+the numbers this app leans on hardest. `max_z_velocity` (30 mm/s) and
+`max_z_accel` are shared conservative values across the whole family rather
+than per-model measurements. `z_amp_max` (4.0 mm) is not a vendor figure at
+all — it is this app's own maximum Z excursion below already-printed
+material, assuming the probe-less toolhead geometry these machines have. It
+has not been print-tested on a Bambu by anyone. Start well under it and work
+up, or import your own machine profile from Bambu Studio and adjust in the
+review dialog.
 
 ## Adding your own printer
 
