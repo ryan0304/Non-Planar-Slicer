@@ -2059,6 +2059,30 @@ class _Server(ThreadingHTTPServer):
 # anyone who could reach the port. This tool has no authentication.
 _DEFAULT_BIND = "127.0.0.1"
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# Wildcard binds accept on every interface, so they are not themselves an
+# address you can open -- printing "http://0.0.0.0:10000" hands the reader a
+# URL that does not work anywhere.
+_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
+
+
+def _startup_line(host, port):
+    """The one line telling the operator where the server actually is.
+
+    It used to say "localhost" regardless of the bind, which is right for the
+    default and wrong the moment TRIDENT_BIND is set: on a hosted instance it
+    named an address that resolves to the container itself. Pure function of
+    (host, port) so the wording is testable without a socket.
+    """
+    path = "/viewer/index.html"
+    if host in _LOOPBACK_HOSTS:
+        return ("Trident design server on http://localhost:%d%s (Ctrl-C to stop)\n"
+                % (port, path))
+    if host in _WILDCARD_HOSTS:
+        return ("Trident design server listening on %s:%d (all interfaces).\n"
+                "Open it at this host's own address, or the URL your platform\n"
+                "assigns, path %s. (Ctrl-C to stop)\n" % (host, port, path))
+    return ("Trident design server on http://%s:%d%s (Ctrl-C to stop)\n"
+            % (host, port, path))
 
 
 def _bind_config(env=None):
@@ -2112,9 +2136,7 @@ def main():
             "         It has NO authentication: anyone who can reach it can import\n"
             "         printer configs and generate G-code. Do not point it at a\n"
             "         printer you care about on an untrusted network.\n" % host)
-    sys.stdout.write(
-        "Trident design server on http://localhost:%d/viewer/index.html (Ctrl-C to stop)\n"
-        % port)
+    sys.stdout.write(_startup_line(host, port))
     sys.stdout.flush()
     try:
         httpd.serve_forever()

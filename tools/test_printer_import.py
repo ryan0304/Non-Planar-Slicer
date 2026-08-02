@@ -1160,6 +1160,29 @@ def test_bind_config_defaults_to_loopback():
         check(got == serve.PORT, f"bind: unusable PORT {bad!r} falls back to the default", str(got))
 
 
+def test_startup_line_names_the_real_host():
+    """The banner must not claim localhost when bound somewhere else."""
+    import serve
+
+    local = serve._startup_line("127.0.0.1", 8777)
+    check("http://localhost:8777/viewer/index.html" in local,
+          "startup: a loopback bind still prints a clickable localhost URL", local.strip())
+
+    for wildcard in ("0.0.0.0", "::", ""):
+        line = serve._startup_line(wildcard, 10000)
+        check("localhost" not in line,
+              f"startup: a {wildcard!r} bind does not claim localhost", line.strip())
+        check("10000" in line, f"startup: a {wildcard!r} bind still reports the port")
+    # 0.0.0.0 is not an address anyone can open, so it must not be dressed up
+    # as a URL the reader might try to click.
+    check("http://0.0.0.0" not in serve._startup_line("0.0.0.0", 10000),
+          "startup: a wildcard bind is not presented as an openable URL")
+
+    specific = serve._startup_line("192.168.1.50", 8777)
+    check("http://192.168.1.50:8777/viewer/index.html" in specific,
+          "startup: a specific non-loopback bind prints that address", specific.strip())
+
+
 def test_hidden_paths_are_not_served(tmp_path: Path):
     """The document root is the repo checkout, so /.git must 404.
 
@@ -1699,6 +1722,7 @@ def main() -> int:
     test_session_store_caps()
     test_unknown_printer_key_is_refused()
     test_bind_config_defaults_to_loopback()
+    test_startup_line_names_the_real_host()
     with tempfile.TemporaryDirectory() as tmp:
         test_hidden_paths_are_not_served(Path(tmp))
     test_key_traversal_guard()
