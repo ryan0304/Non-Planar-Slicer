@@ -1,4 +1,4 @@
-# Trident Custom Non-Planar G-code Generator
+# Trident Non-Planar G-code Generator & Viewer
 
 A standalone G-code generator + 3D viewer for exploring **continuous, non-planar
 "thick" prints** on a Voron Trident — the kind of seamless, wavy, single-bead
