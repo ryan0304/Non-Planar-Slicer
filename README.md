@@ -315,6 +315,21 @@ each plotting a value from the bottom of the print (left) to the top (right):
   bulges and tapers. `1.0` (the dashed reference) is the plain outline; push a
   point above 1.0 to bulge, below to pinch.
 
+**Bottom: Solid or Open.** Solid caps the part with the base disks described
+under [Solid base and brim](#solid-base-and-brim); Open leaves it hollow the way
+vase mode usually prints. Open sends `base_layers = 0` *for that print only* —
+your Base layers number is left alone and comes straight back when you pick Solid
+again, so toggling between them is lossless. The rows that only apply to a solid
+bottom (Base layers, Base style, First layer height, base line spacing) hide
+themselves while Open is selected.
+
+**The live draft shows the base.** The blue preview draws the base disks — an
+Archimedean spiral or concentric rings, matching your Base style — at their real
+loop count and real Z, and lifts the wall onto them exactly as the G-code does.
+Switching Bottom changes the draft immediately, so what you see before pressing
+Generate is what the machine will lay down. The brim and skirt are the one
+omission: they are not drawn.
+
 Click **Generate & preview**: the design is generated through the same
 machine-safe pipeline as the CLI (`GcodeWriter` + `analyze_gcode`), loaded
 straight into the 3D viewer with full playback and telemetry, and the Trident
@@ -366,6 +381,16 @@ Two more wall textures, alongside the seven radius-displacement patterns
   through `build_loop_fabric` instead of `build_continuous_spiral`), so it
   doesn't combine with the Z-wave/silhouette-cage controls the way the other
   patterns do.
+
+  **Loop fabric anchors itself** with its own solid cuff (a flat priming ring
+  plus `cuff_turns` normal vase-mode turns), so it prints **no base disks, no
+  brim and no skirt** — those go through `build_continuous_spiral`, which loop
+  fabric bypasses. The app hides those controls while loop fabric is selected
+  and points at the cuff setting instead; a request that asks for them anyway
+  (a script, or `curl`) gets told in the safety report rather than having them
+  silently dropped. Note this applies to the parametric fabric only: the same
+  Loops setting on an **uploaded mesh** is a different feature — hanging loop
+  sites on an ordinary solid wall — and that one does print a base.
 
 Both are configured and previewed in the app (`serve.py` + the designer's
 Texture step); like the cage, they don't yet have `generate.py` CLI flags.
@@ -748,9 +773,26 @@ python generate.py --base-layers 2 --brim 3 --first-layer-squish 0.75 --out pot.
   fills inward and back out, which hands off to the wall. Brim -> base -> wall is a
   single unbroken path. The footprint check accounts for the brim's extra width.
 
+**The base is built from the wall's own bottom cross-section**, not from the
+nominal outline: the radius envelope (silhouette), the control cage, ovality and
+the spine offset are all sampled at `t=0` and applied to the base, brim and skirt.
+That is what makes the hand-off above actually travel-free. It did not used to be:
+a vase whose silhouette starts at half radius printed its base out to the *full*
+radius, and the base -> wall junction became one extruding move dragging ~19x a
+normal move's plastic 15 mm straight across the finished disk. The radial surface
+texture is deliberately *not* followed — the disk paver needs a star-convex
+outline — so a design with `pattern_fade_in = 0` keeps a small residual mismatch
+at the seam.
+
 Both work for the parametric shapes and for STL-wrapped meshes (the mesh's bottom
 contour is treated as the outline). Preset `01_gentle_wave_vase` now ships with a
 2-layer solid base for a rock-solid first print.
+
+> **Not print-tested.** The base geometry, the byte-identical output for
+> unshaped designs and the bed-fit rejection of an oversized base are all
+> machine-checked by the test suite; how the (now smaller) base adheres on a
+> real plate is not. Worth a short test print on a narrowing silhouette before
+> committing to a long job.
 
 > ⚠️ **Always preview in the viewer first**, and for the first real print keep the
 > amplitude modest and watch the first few layers. These are unusual toolpaths.
@@ -773,6 +815,31 @@ python calibrate.py     # writes into examples/cal/
 Each file is checked by `analyze.py` (exit 0) and takes under 20 minutes.  A
 `; CAL BAND flow=X.XX` or `; CAL BAND z_amp=X.Xmm` comment is written at the
 start of each band so you can visually match the print to the G-code.
+
+## Tests
+
+No test runner and no config — run the scripts directly:
+
+```bash
+python tools/check_regression.py      # byte-compares output against regression_ref/
+python tools/test_printer_import.py   # printer parser/validator + generator behaviour
+```
+
+`check_regression.py` must stay **byte-identical**. Every reference file is real
+Trident output, so a diff means a change altered what the machine does — that is
+a bug to explain, not a baseline to regenerate.
+
+The viewer has its own browser-run suite. It covers the measure tool, the
+machine-limit fallbacks, the printer/world coordinate mirror, the Bottom and
+loop-fabric panel rules, and the draft preview's base geometry:
+
+```bash
+python serve.py
+# then open http://localhost:8777/viewer/dev_smoke.html?selftest=1
+```
+
+Results are written both to the page and to the console, so a headless run can
+read either one.
 
 ## Project layout
 
@@ -809,6 +876,9 @@ trident_gcode/
 viewer/index.html               3D viewer + browser design app shell
 viewer/viewer.js                Three.js scene, playback, telemetry
 viewer/designer.js              design wizard, curve editors, cage editor, undo/redo/persistence
+viewer/preview_math.js          live draft geometry (wall + base disks), mirrors the Python generators
+viewer/param_help.js            per-control help text shown in the design panel
+viewer/dev_smoke.html           dev-only viewer self-test harness (see Tests)
 examples/cal/                   calibration G-code files (generated by calibrate.py)
 regression_ref/                 reference G-code checked by tools/check_regression.py
 ```
