@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Calibration print suite for the Voron Trident.
 
-Generates three small, machine-safe G-code files into examples/cal/:
+Generates small, machine-safe G-code files into examples/cal/ (the count has
+grown over time -- main() is the authority on what actually gets written):
 
   cal_first_layer.gcode
       Single-layer spiral disk, 40 mm diameter, squish 0.75.
       Print at 205 C / 60 C bed; scrub the live-Z while it runs.
+
+  cal_spacing_ladder.gcode
+      Three single-layer disks at first-layer spacing factors 1.15/1.25/1.35.
+      Pick the leftmost disk whose fill lines lie side by side without ridging.
 
   cal_flow_ladder.gcode
       Single-wall cylinder r=25 mm, 30 mm tall.  Flow multiplier steps
@@ -16,6 +21,14 @@ Generates three small, machine-safe G-code files into examples/cal/:
       Cylinder r=25 mm, 36 mm tall. Non-planar z_amp steps 0/0.3/0.6/0.95 mm
       in 9 mm Z bands (z_waves 5).  Spot where the surface quality degrades.
 
+  cal_base_adhesion.gcode
+      Circle, base radius 25 mm, height 15 mm, flaring from 0.5x to 1.0x
+      radius (top-heavy on purpose).  2-layer solid base + 3-loop brim sized
+      to the WALL's t=0 footprint (r=12.5, not the raw r=25 outline) --
+      commit 6332a6a made that correct but cut bed contact 75% (491 vs
+      1963 mm^2) on exactly this kind of narrowing silhouette.  Watch
+      whether the smaller base still holds the part down.
+
 IMPORTANT: calibrate with the filament you will actually print with::
 
     python calibrate.py --filament "R3D PETG"   # temps/flow/limits from OrcaSlicer
@@ -23,6 +36,7 @@ IMPORTANT: calibrate with the filament you will actually print with::
     python analyze.py examples/cal/cal_first_layer.gcode
     python analyze.py examples/cal/cal_flow_ladder.gcode
     python analyze.py examples/cal/cal_zamp_ladder.gcode
+    python analyze.py examples/cal/cal_base_adhesion.gcode
 """
 from __future__ import annotations
 
@@ -297,6 +311,86 @@ def cal_zamp_ladder() -> str:
 
 
 # ---------------------------------------------------------------------------
+# (d) Base adhesion (narrowing-silhouette base + brim, print-test)
+# ---------------------------------------------------------------------------
+
+_ADHESION_BASE_RADIUS = 25.0    # mm, the WALL's outline radius (top, t=1)
+_ADHESION_HEIGHT = 15.0         # mm
+
+
+def _adhesion_radius_envelope(t: float) -> float:
+    """0.5x at the base rising linearly to 1.0x at the top.
+
+    The wall starts at half radius and flares to full -- 2x wider at the top
+    than at its base -- so the part is deliberately top-heavy: the stress
+    case for whether a smaller base can hold it down.
+    """
+    return 0.5 + 0.5 * t
+
+
+def cal_base_adhesion() -> str:
+    """Flaring circle, 2-layer base + 3-loop brim sized to the wall's own
+    t=0 footprint (r=12.5), not the raw r=25 outline.
+
+    Commit 6332a6a fixed the base/brim/skirt to follow the WALL's own t=0
+    cross-section instead of the raw ``shape`` outline -- correct, because
+    the old behaviour joined a full-radius base to a half-radius wall start
+    with a single EXTRUDING move dragging ~19x a normal move's plastic 15 mm
+    across the finished disk. But on a narrowing silhouette like this one,
+    the fix also shrinks bed contact a lot: measured 491 mm^2 (r=12.5 base)
+    versus 1963 mm^2 (old r=25 base) -- 75% less plastic on the plate. The
+    3-loop brim claws some of it back (first-layer reach 12.50 -> 14.75 mm,
+    contact 491 -> 683 mm^2), but nobody has print-tested whether that is
+    enough to keep a top-heavy, flaring part stuck down. z_amp is 0 -- this
+    is an adhesion test, not a non-planar one.
+    """
+    layer_height = 0.30
+    line_width = 0.45
+
+    writer = _new_writer(layer_height=layer_height, line_width=line_width)
+    spec = SpiralSpec(
+        base_radius=_ADHESION_BASE_RADIUS,
+        height=_ADHESION_HEIGHT,
+        layer_height=layer_height,
+        points_per_turn=240,
+        z_amp=0.0,
+        z_waves=0,
+        radius_envelope=_adhesion_radius_envelope,
+    )
+    shape = circle(_ADHESION_BASE_RADIUS)
+
+    # One-shot banner, emitted via the flow_callback hook (same technique the
+    # ladder cases use for their per-band comments) so it lands right where
+    # the wall spiral starts -- after the base/brim, before the first
+    # extrude. Returns 1.0 (no flow change): this case has no flow ladder.
+    banner_done = [False]
+
+    def banner_callback(t: float) -> float:
+        if not banner_done[0]:
+            banner_done[0] = True
+            writer.comment(
+                "CAL BASE ADHESION: base r=12.5mm vs old r=25.0mm "
+                "(pre-6332a6a) -- 75% less bed contact, 491mm^2 vs 1963mm^2 "
+                "(683mm^2 with the 3-loop brim). Watch the first 2-3mm for "
+                "lift, and the point where the wall starts leaning outward."
+            )
+        return 1.0
+
+    build_continuous_spiral(
+        writer, spec, shape=shape,
+        first_layer_squish=0.75,
+        first_layer_spacing_factor=1.25,
+        first_layer_flow=1.0,
+        base_layers=2,
+        brim_loops=3,
+        flow_callback=banner_callback,
+    )
+    out = os.path.join(_CAL_DIR, "cal_base_adhesion.gcode")
+    writer.save(out)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -333,6 +427,7 @@ def main() -> int:
         ("cal_spacing_ladder", cal_spacing_ladder),
         ("cal_flow_ladder", cal_flow_ladder),
         ("cal_zamp_ladder", cal_zamp_ladder),
+        ("cal_base_adhesion", cal_base_adhesion),
     ]
 
     results = []
