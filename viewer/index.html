@@ -214,13 +214,16 @@
           </span>
         </div>
         <div class="drow" id="row-base"><span>Base layers</span><input type="number" id="d-base" min="0" max="3" step="1"></div>
-        <div class="drow"><span>Brim loops</span><input type="number" id="d-brim" min="0" max="5" step="1"></div>
+        <div class="drow" id="row-brim"><span>Brim loops</span><input type="number" id="d-brim" min="0" max="5" step="1"></div>
         <div class="drow" id="row-basestyle"><span>Base style</span>
           <select id="d-basestyle" class="mid-select">
             <option value="spiral">Spiral disk</option>
             <option value="concentric">Concentric rings</option>
           </select></div>
-        <div class="drow"><span>Skirt loops</span><input type="number" id="d-skirt" min="0" max="3" step="1"></div>
+        <div class="drow" id="row-skirt"><span>Skirt loops</span><input type="number" id="d-skirt" min="0" max="3" step="1"></div>
+        <div class="hint tight-top" id="loop-base-hint" style="display:none">Loop fabric anchors
+          itself with its own solid cuff (see "Solid cuff turns" in the loop settings below) -
+          base disks, brim and skirt do not apply here and are not printed.</div>
         <div class="drow" id="row-squish"><span>First layer height (mm)</span><input type="number" id="d-flh" min="0.1" max="0.6" step="0.05" placeholder="auto"></div>
         <div class="hint" id="flh-hint" style="margin-top:-4px;margin-bottom:2px">Lower = bead pressed
           harder into the plate = firmer grip. Auto = 75% of layer height.</div>

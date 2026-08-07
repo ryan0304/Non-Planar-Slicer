@@ -63,8 +63,8 @@ window.PARAM_HELP = {
     param: "star_depth", def: "0.35"
   },
   "d-bottom": {
-    desc: "Whether the base is closed off with solid layers (Solid) or left open the way vase mode usually prints (Open). Open forces Base layers to 0.",
-    param: "bottom (client-side only -- sets base_layers to 0 when Open)", def: "solid"
+    desc: "Whether the base is closed off with solid layers (Solid) or left open the way vase mode usually prints (Open). Open sends Base layers as 0 for this print; your Base layers setting itself is unchanged and returns when you pick Solid again.",
+    param: "bottom (client-side only -- sends base_layers 0 with the request when Open)", def: "solid"
   },
   "d-base": {
     desc: "Number of stacked solid disks printed at the bottom before the spiral wall begins, for a build-plate-adhering, watertight base.",

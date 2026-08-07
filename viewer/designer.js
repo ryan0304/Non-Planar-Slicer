@@ -3231,22 +3231,47 @@
   })();
 
   // ---- show/hide dependent rows -------------------------------------------
+  // True only for parametric loop fabric (a solid-cuff-anchored knitted wall
+  // that prints no base/brim/skirt). Mesh-mode loops are a different feature
+  // (hanging loop sites on a normal wall via build_profile_spiral) that DOES
+  // print a base, so this is deliberately false when a mesh is loaded. Reads
+  // the DOM select directly (like refreshPatternRows) so it does not depend
+  // on listener order relative to whatever updates `design.pattern`.
+  function loopFabricActive(){
+    var noMesh = !(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+    return document.getElementById('d-pattern').value === 'loops' && noMesh;
+  }
+
   function refreshShapeRows(){
     var isStar = document.getElementById('d-shape').value === 'star';
     var starRows = document.getElementById('star-rows');
     if(starRows) starRows.style.display = isStar ? '' : 'none';
 
     var isOpen = design.bottom === 'open';
+    var isLoopFabric = loopFabricActive();
     var baseRow = document.getElementById('row-base');
+    // First layer height / squish is governed by Open alone: the loop-fabric
+    // cuff genuinely uses first_layer_squish (loop_fabric.py:113), so it
+    // still applies to loop fabric even though base/brim/skirt do not. Do
+    // not fold this into the loop-fabric condition below.
     var squishRow = document.getElementById('row-squish');
     var spacingRow = document.getElementById('row-spacing');
-    if(baseRow) baseRow.style.display = isOpen ? 'none' : '';
+    if(baseRow) baseRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
     var baseStyleRow = document.getElementById('row-basestyle');
-    if(baseStyleRow) baseStyleRow.style.display = isOpen ? 'none' : '';
+    if(baseStyleRow) baseStyleRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
     if(squishRow) squishRow.style.display = isOpen ? 'none' : '';
     var flhHint = document.getElementById('flh-hint');
     if(flhHint) flhHint.style.display = isOpen ? 'none' : '';
-    if(spacingRow) spacingRow.style.display = isOpen ? 'none' : '';
+    if(spacingRow) spacingRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
+
+    var bottomRow = document.getElementById('d-bottom');
+    if(bottomRow) bottomRow.style.display = isLoopFabric ? 'none' : '';
+    var brimRow = document.getElementById('row-brim');
+    if(brimRow) brimRow.style.display = isLoopFabric ? 'none' : '';
+    var skirtRow = document.getElementById('row-skirt');
+    if(skirtRow) skirtRow.style.display = isLoopFabric ? 'none' : '';
+    var loopBaseHint = document.getElementById('loop-base-hint');
+    if(loopBaseHint) loopBaseHint.style.display = isLoopFabric ? '' : 'none';
   }
   document.getElementById('d-shape').addEventListener('change', refreshShapeRows);
 
@@ -3257,7 +3282,12 @@
     r.addEventListener('change', function(){
       if(!r.checked) return;
       design.bottom = r.value;
-      if(design.bottom === 'open') design.base_layers = 0;
+      // Leave the stored Base layers value alone. buildGenerateBody() is the
+      // single place that maps Bottom -> base_layers, and it already sends 0
+      // for Open. Zeroing it here instead clobbered the user's setting
+      // permanently: picking Solid again could not bring it back, while the
+      // Base layers input still displayed the old number, so the panel
+      // promised a solid base and the G-code had none.
       persistDesign();
       refreshShapeRows();
       schedulePreview();
@@ -3275,7 +3305,10 @@
     if(blobRows) blobRows.style.display = (val === 'blobs') ? 'block' : 'none';
     if(loopRows) loopRows.style.display = (val === 'loops') ? 'block' : 'none';
   }
-  document.getElementById('d-pattern').addEventListener('change', refreshPatternRows);
+  document.getElementById('d-pattern').addEventListener('change', function(){
+    refreshPatternRows();
+    refreshShapeRows();
+  });
 
   refreshShapeRows();
   refreshPatternRows();
@@ -3816,6 +3849,10 @@
         meshState.filename = file.name;
         meshState.info = data;
         showMeshInfo(data, file.name);
+        // Mesh-mode loops print a base again once a mesh is loaded (loops
+        // become hanging loop sites on a normal wall, not fabric) - bring
+        // the base/brim/skirt rows back.
+        refreshShapeRows();
       })
       .catch(function(err){ alert('Upload failed: ' + err); });
     };
@@ -3903,6 +3940,9 @@
     showMeshCheck(null);
     stlFile.value = '';
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
+    // Clearing the mesh can turn loops back into fabric (loop-fabric hides
+    // base/brim/skirt) - re-evaluate those rows.
+    refreshShapeRows();
   });
 
   // ---- generate ----------------------------------------------------------
@@ -4049,6 +4089,19 @@
       body.loop_speed = design.loop_speed;
       body.loop_fade_in = design.loop_fade_in;
       body.loop_fade_out = design.loop_fade_out;
+      if(!meshState.mesh_id){
+        // Loop fabric (as opposed to mesh-mode loops, handled below) anchors
+        // itself with its own solid cuff and prints no base/brim/skirt no
+        // matter what is asked for. The stored design values are deliberately
+        // NOT mutated here (same principle as the Bottom radio above): the
+        // request is where this decision belongs, so the settings return
+        // when the user leaves loops. Sending the truth here also stops
+        // every default loop design from tripping the server's new
+        // loop-fabric-base warning for no reason.
+        body.base_layers = 0;
+        body.brim = 0;
+        body.skirt = 0;
+      }
     } else if(patternVal){
       body.pattern = patternVal;
       body.pattern_amp = design.pattern_amp;
@@ -4076,6 +4129,9 @@
 
     return body;
   }
+  // Dev/self-test hook: lets dev_smoke.html inspect the exact request body a
+  // Generate click would send, without actually POSTing it.
+  window.__designSnapshot = buildGenerateBody;
 
   genBtn.addEventListener('click', function(){
     var body = buildGenerateBody();
@@ -4203,7 +4259,7 @@
       if(+pick('z_waves')) bits.push(pick('z_waves') + ' Z waves');
       if(+pick('xy_twist')) bits.push(pick('xy_twist') + ' deg twist');
       if(d.pattern) bits.push('texture: ' + d.pattern);
-      if(+pick('base_layers')) bits.push(pick('base_layers') + ' base layers');
+      if(pick('bottom') !== 'open' && +pick('base_layers')) bits.push(pick('base_layers') + ' base layers');
       bits.forEach(function(t){
         var el = document.createElement('span');
         el.className = 'chip';

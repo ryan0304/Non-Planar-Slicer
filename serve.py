@@ -800,6 +800,7 @@ def generate_design(body):
 
     point_edit_issue = None
     fan_overhang_issue = None
+    loop_base_issue = None
     if loop_spec is not None:
         # Loop fabric replaces the wall entirely (knitted rows of vertical
         # loop stitches) — z-waves/patterns don't apply; the silhouette does.
@@ -812,6 +813,17 @@ def generate_design(body):
                 "fan min/max only ramp on the parametric wall (loop fabric has "
                 "no wall lean to select a speed from) - a flat "
                 f"{round(fan_overhang_min * 100)}% fan (your Fan min) was used.")
+        if base_layers > 0 or brim > 0 or skirt_loops > 0:
+            requested = []
+            if base_layers > 0:
+                requested.append("base layers")
+            if brim > 0:
+                requested.append("brim")
+            if skirt_loops > 0:
+                requested.append("skirt")
+            loop_base_issue = (
+                "loop fabric anchors itself with its own solid cuff, so the "
+                "requested " + ", ".join(requested) + " were not printed.")
         report = build_loop_fabric(
             writer, shape=shape, height=height, spec=loop_spec,
             radius_envelope=radius_fn,
@@ -875,6 +887,8 @@ def generate_design(body):
         issues_extra.append(point_edit_issue)
     if fan_overhang_issue:
         issues_extra.append(fan_overhang_issue)
+    if loop_base_issue:
+        issues_extra.append(loop_base_issue)
     stats = {
         "wave_slope": round(peak_slope, 3),
         "moves": analysis.moves,

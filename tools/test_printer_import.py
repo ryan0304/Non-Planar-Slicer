@@ -1683,6 +1683,70 @@ def test_z_amp_max_default_is_not_another_machines_number():
           str(_T.z_amp_max))
 
 
+# ---------------------------------------------------------------------------
+# 8. Loop fabric anchors itself with its own solid cuff and prints no base
+# disks, brim or skirt -- serve.py used to call build_loop_fabric() without
+# forwarding base_layers/brim_loops/skirt_loops/base_style at all, so those
+# panel settings were silently dropped for parametric loop fabric even though
+# the panel kept showing them as live controls. The fix does not make the
+# fabric print those features (untested on real hardware); it makes the
+# report say so. Mesh-mode loops are a different feature entirely (hanging
+# loop sites on a normal wall via build_profile_spiral) and DOES honour base
+# layers -- that is the counter-case below, guarding against "fixing" this by
+# zeroing base/brim/skirt everywhere.
+# ---------------------------------------------------------------------------
+def test_loop_fabric_base_is_reported():
+    import serve
+
+    requested = {
+        "loop_per_turn": 12, "base_layers": 2, "brim": 1, "skirt": 1,
+        "radius": 20.0, "height": 20.0, "printer": "trident",
+    }
+    zeroed = dict(requested, base_layers=0, brim=0, skirt=0)
+
+    r_requested = serve.generate_design(dict(requested))
+    r_zeroed = serve.generate_design(dict(zeroed))
+
+    # 1. The generator really does ignore base_layers/brim/skirt for loop
+    # fabric -- byte-identical output is the proof the warning has to exist.
+    check(r_requested["gcode"] == r_zeroed["gcode"],
+          "loop_fabric_base: base_layers=2/brim=1/skirt=1 is byte-identical "
+          "to 0/0/0 (the fabric never prints them)",
+          f"{len(r_requested['gcode'])} bytes vs {len(r_zeroed['gcode'])} bytes")
+
+    # 2. The non-zero request must be told its adhesion features were dropped.
+    check(any("solid cuff" in m and "were not printed" in m for m in r_requested["issues"]),
+          "loop_fabric_base: requesting base/brim/skirt on loop fabric warns",
+          str(r_requested["issues"]))
+
+    # 3. The 0/0/0 request asked for nothing extra -- no crying wolf.
+    check(not any("solid cuff" in m and "were not printed" in m for m in r_zeroed["issues"]),
+          "loop_fabric_base: requesting none of the three raises no warning",
+          str(r_zeroed["issues"]))
+
+    # 4. Counter-case: MESH mode + loops is a different feature and DOES
+    # honour base layers -- nobody should "fix" #1 by zeroing base/brim/skirt
+    # unconditionally in the generator.
+    from trident_gcode.mesh import load_stl
+    tris = load_stl(str(ROOT / "examples" / "cylinder.stl"))
+    mesh_id = "test_loop_fabric_base_mesh"
+    serve._mesh_cache_put(mesh_id, tris)
+
+    mesh_body_base = {
+        "mode": "mesh_texture", "mesh_id": mesh_id, "layer_height": 0.3,
+        "scale": 1.0, "loop_per_turn": 12, "printer": "trident", "base_layers": 2,
+    }
+    mesh_body_nobase = dict(mesh_body_base, base_layers=0)
+    r_mesh_base = serve.generate_mesh_texture_design(mesh_body_base)
+    r_mesh_nobase = serve.generate_mesh_texture_design(mesh_body_nobase)
+
+    check(r_mesh_base["gcode"] != r_mesh_nobase["gcode"],
+          "loop_fabric_base: mesh-mode loops with base_layers=2 differs from base_layers=0 "
+          "(unlike parametric loop fabric)")
+    check("; solid base" in r_mesh_base["gcode"],
+          "loop_fabric_base: mesh-mode loops with base_layers=2 actually prints a solid base")
+
+
 def main() -> int:
     test_klipper_trident()
     test_orca_machine()
@@ -1706,6 +1770,7 @@ def main() -> int:
     test_nozzle_temp_ceiling_comes_from_the_profile()
     test_bed_temp_ceiling_comes_from_the_profile()
     test_z_amp_max_default_is_not_another_machines_number()
+    test_loop_fabric_base_is_reported()
 
     with tempfile.TemporaryDirectory() as tmp:
         test_smoke(Path(tmp))

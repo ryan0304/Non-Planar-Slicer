@@ -181,6 +181,108 @@
           'got ' + w.cageScale(bump, Math.PI/2, 1));
     w.hideShapeCage();
 
+    // ---- Bottom (Open/Solid) must not clobber Base layers --------------------
+    // The Bottom radio handler used to do
+    // `if (design.bottom === 'open') design.base_layers = 0;`, permanently
+    // zeroing the stored Base layers value. Picking Solid again could not
+    // bring it back, and the (hidden while Open) #d-base input still showed
+    // the old number the whole time -- so the panel promised a solid base
+    // while the generate request carried base_layers 0. buildGenerateBody()
+    // is the only place Bottom should map to base_layers.
+    const baseInput = w.document.getElementById('d-base');
+    const bottomRadios = w.document.querySelectorAll('input[name="d-bottom"]');
+    const openRadio = w.document.querySelector('input[name="d-bottom"][value="open"]');
+    const solidRadio = w.document.querySelector('input[name="d-bottom"][value="solid"]');
+    const prevBaseValue = baseInput.value;
+    const prevChecked = Array.from(bottomRadios).find(r => r.checked);
+
+    baseInput.value = '2';
+    baseInput.dispatchEvent(new w.Event('input'));
+
+    openRadio.checked = true;
+    openRadio.dispatchEvent(new w.Event('change'));
+    check('Open sends no base layers',
+          w.__designSnapshot().base_layers === 0,
+          'got ' + w.__designSnapshot().base_layers);
+
+    solidRadio.checked = true;
+    solidRadio.dispatchEvent(new w.Event('change'));
+    check('switching back to Solid restores the base layers the panel shows',
+          w.__designSnapshot().base_layers === 2 && baseInput.value === '2',
+          'got base_layers ' + w.__designSnapshot().base_layers + ', #d-base ' + baseInput.value);
+
+    // Leave the page as we found it.
+    baseInput.value = prevBaseValue;
+    baseInput.dispatchEvent(new w.Event('input'));
+    if (prevChecked) {
+      prevChecked.checked = true;
+      prevChecked.dispatchEvent(new w.Event('change'));
+    }
+
+    // ---- Loop fabric hides base/brim/skirt instead of silently dropping them --
+    // serve.py's build_loop_fabric() call never forwarded base_layers/
+    // brim_loops/skirt_loops/base_style, so the panel kept showing those rows
+    // as live controls for a feature (loop fabric anchors itself with its own
+    // solid cuff) that never printed any of them. loopFabricActive() now hides
+    // the rows and buildGenerateBody() sends 0 for all three -- without ever
+    // touching the stored design, so leaving loops brings the user's numbers
+    // straight back (same principle as the Bottom radio tested above).
+    const patternSelect = w.document.getElementById('d-pattern');
+    const prevPattern = patternSelect.value;
+    const brimInput = w.document.getElementById('d-brim');
+    const skirtInput = w.document.getElementById('d-skirt');
+    const prevBrimValue = brimInput.value;
+    const prevSkirtValue = skirtInput.value;
+
+    brimInput.value = '1';
+    brimInput.dispatchEvent(new w.Event('input'));
+    skirtInput.value = '1';
+    skirtInput.dispatchEvent(new w.Event('input'));
+
+    patternSelect.value = 'loops';
+    patternSelect.dispatchEvent(new w.Event('change'));
+
+    const rowBase = w.document.getElementById('row-base');
+    const rowBrim = w.document.getElementById('row-brim');
+    const rowSkirt = w.document.getElementById('row-skirt');
+    const bottomRow = w.document.getElementById('d-bottom');
+    const loopBaseHint = w.document.getElementById('loop-base-hint');
+    check('loops hides the Base layers row',
+          rowBase.style.display === 'none', 'got ' + rowBase.style.display);
+    check('loops hides the Brim loops row',
+          rowBrim.style.display === 'none', 'got ' + rowBrim.style.display);
+    check('loops hides the Skirt loops row',
+          rowSkirt.style.display === 'none', 'got ' + rowSkirt.style.display);
+    check('loops hides the Bottom (Open/Solid) row',
+          bottomRow.style.display === 'none', 'got ' + bottomRow.style.display);
+    check('loops shows the loop-fabric solid-cuff hint',
+          loopBaseHint.style.display !== 'none', 'got ' + loopBaseHint.style.display);
+
+    const loopSnap = w.__designSnapshot();
+    check('loops sends base_layers/brim/skirt all 0 in the request',
+          loopSnap.base_layers === 0 && loopSnap.brim === 0 && loopSnap.skirt === 0,
+          'got base_layers ' + loopSnap.base_layers + ', brim ' + loopSnap.brim
+            + ', skirt ' + loopSnap.skirt);
+
+    // Leave loops: rows come back, and so does the STORED (non-zero) design --
+    // the request-time zeroing above must never have touched it.
+    patternSelect.value = prevPattern;
+    patternSelect.dispatchEvent(new w.Event('change'));
+    check('leaving loops brings the Base layers row back',
+          rowBase.style.display !== 'none', 'got ' + rowBase.style.display);
+    check('leaving loops brings the Brim loops row back',
+          rowBrim.style.display !== 'none', 'got ' + rowBrim.style.display);
+    check('leaving loops brings the Skirt loops row back',
+          rowSkirt.style.display !== 'none', 'got ' + rowSkirt.style.display);
+    const afterSnap = w.__designSnapshot();
+    check('leaving loops restores the stored (non-zero) base_layers in the request',
+          afterSnap.base_layers !== 0, 'got ' + afterSnap.base_layers);
+
+    brimInput.value = prevBrimValue;
+    brimInput.dispatchEvent(new w.Event('input'));
+    skirtInput.value = prevSkirtValue;
+    skirtInput.dispatchEvent(new w.Event('input'));
+
     return results;
   }
 
