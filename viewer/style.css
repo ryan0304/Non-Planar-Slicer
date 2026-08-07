@@ -1058,6 +1058,40 @@ body.hints-hidden .hint { display:none; }
 }
 
 /* =========================================================================
+   How-to-use guide -- six-slide onboarding modal. Auto-opens on a true first
+   visit (see guide.js for the exact conditions), reachable afterwards via
+   the "?" button beside #toggle-hints or the "?" key. Same neutral --accent
+   chrome as .sr-modal / .pm-modal -- neither --accent-purple (Point Edit
+   only) nor the --ok/--warn/--danger trio (safety states only) belongs here.
+   Height is capped and the body scrolls internally so this stays usable at
+   the ~640px-tall window this app is normally run in.
+   ========================================================================= */
+.guide-modal { position:fixed; inset:0; z-index:65; display:flex; align-items:center; justify-content:center; }
+.guide-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.62); }
+.guide-modal-card { position:relative; width:min(480px, 92vw); max-height:min(560px, 90vh);
+  display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--radius-lg); box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
+.guide-modal-header { display:flex; align-items:center; justify-content:space-between;
+  padding:var(--sp-3) var(--sp-4); border-bottom:1px solid var(--line); flex:none; }
+.guide-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+.guide-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4); }
+.guide-slide h3 { font-size:15px; margin:0 0 var(--sp-2); color:var(--ink); font-weight:600; }
+.guide-slide ul { margin:0; padding-left:18px; }
+.guide-slide li { font-size:12.5px; line-height:1.6; color:var(--ink); margin:0 0 6px; }
+.guide-slide li:last-child { margin-bottom:0; }
+.guide-slide b { color:var(--ink); }
+.guide-slide code { font-family:var(--font-mono); font-size:11.5px; background:var(--surface-raised);
+  border-radius:4px; padding:1px 4px; }
+.guide-modal-footer { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:var(--sp-3) var(--sp-4); border-top:1px solid var(--line); flex:none; }
+/* Dots are purely decorative progress -- aria-hidden on the wrapper in
+   index.html, real slide position is announced via the dialog content and
+   the Back/Next button labels (Skip/Done at the ends), not this. */
+.guide-dots { display:flex; gap:6px; align-items:center; }
+.guide-dot { width:6px; height:6px; border-radius:50%; background:var(--line); transition:background .15s; }
+.guide-dot.active { background:var(--accent); }
+
+/* =========================================================================
    Parameter help tooltips (Orca-style hover panel) -- one reused floating
    panel, positioned/flipped in JS (see designer.js). Plain --surface/--line
    chrome, matching .hint / .pm-report rather than a new visual language.

@@ -124,6 +124,8 @@
       <div id="active-summary" class="active-summary" aria-label="Active design settings"></div>
       <button id="toggle-hints" class="hint-toggle" type="button" aria-pressed="true"
         title="Show/hide help text under controls">Hints</button>
+      <button id="guide-btn" class="hint-toggle" type="button"
+        title="How to use" aria-label="How to use">?</button>
     </div>
     <div class="group" id="design-group">
       <h2>Design a vase</h2>
@@ -822,6 +824,105 @@
   </div>
 </div>
 
+<!-- ================================================================= -->
+<!-- How-to-use guide -- six-slide onboarding modal. Auto-opens on a    -->
+<!-- true first visit (see guide.js for the exact conditions -- it must -->
+<!-- NEVER auto-open inside dev_smoke.html's iframe harness, which      -->
+<!-- clicks real controls for its assertions). Reachable afterwards via -->
+<!-- the "?" button beside #toggle-hints, or the "?" key. Ordinary      -->
+<!-- --accent chrome, matching .sr-modal / .pm-modal.                   -->
+<!-- ================================================================= -->
+<div id="guide-modal" class="guide-modal" style="display:none">
+  <div class="guide-modal-backdrop"></div>
+  <div class="guide-modal-card" role="dialog" aria-modal="true" aria-labelledby="guide-modal-title">
+    <div class="guide-modal-header">
+      <h2 id="guide-modal-title">How to use Trident</h2>
+      <button id="guide-modal-close" class="btn btn-icon" type="button" title="Close" aria-label="Close guide">&times;</button>
+    </div>
+    <div class="guide-modal-body">
+
+      <div class="guide-slide" data-slide="0">
+        <h3>Read this first</h3>
+        <ul>
+          <li>This tool generates non-planar toolpaths directly &#8212; it is not a slicer
+            post-processor.</li>
+          <li>It drives a real printer. Dry-run first: cold extruder, Z offset raised, watch the
+            whole path before committing to a real print.</li>
+          <li>Import your OWN <code>printer.cfg</code> rather than trusting a bundled profile
+            &#8212; machine limits belong to your machine.</li>
+          <li>Example: the built-in Trident profile caps wave height at 0.95 mm &#8212; a number
+            set after a probe strike, not a published spec.</li>
+        </ul>
+      </div>
+
+      <div class="guide-slide" data-slide="1">
+        <h3>Fastest start</h3>
+        <ul>
+          <li>Pick a preset from the preset bar at the top of Design.</li>
+          <li>Press <b>Generate &amp; preview</b>.</li>
+          <li>Read the safety report that appears under the button before printing.</li>
+          <li>Presets are pre-tuned and already sized to fit the selected machine's limits.</li>
+        </ul>
+      </div>
+
+      <div class="guide-slide" data-slide="2">
+        <h3>The four steps</h3>
+        <ul>
+          <li><b>1. Model</b> &#8212; pick a shape and its size, or import your own STL.</li>
+          <li><b>2. Texture</b> &#8212; shape the Z-wave and silhouette curves, add a surface
+            pattern.</li>
+          <li><b>3. Print</b> &#8212; nozzle, speed, filament and temperatures.</li>
+          <li><b>4. Generate</b> &#8212; run it, read the safety report, download.</li>
+        </ul>
+      </div>
+
+      <div class="guide-slide" data-slide="3">
+        <h3>Shaping</h3>
+        <ul>
+          <li>Two curve editors: <b>Wave amplitude over height</b> and <b>Silhouette</b> (radius
+            scale). In both, the left edge is the bottom of the print, the right edge the top.</li>
+          <li><b>Bottom:</b> Solid caps the part with base disks; Open leaves it hollow.</li>
+          <li>Open only applies to that one print &#8212; it does not discard your Base layers
+            setting, which comes straight back if you switch to Solid again.</li>
+          <li>The base itself always follows the wall's own bottom cross-section, not a fixed
+            disk.</li>
+        </ul>
+      </div>
+
+      <div class="guide-slide" data-slide="4">
+        <h3>Textures</h3>
+        <ul>
+          <li>Seven radial wave patterns (v-wave, h-wave, ripple, diamond, bubbles, pleats,
+            hammered), plus blobs, plus loop fabric.</li>
+          <li>Loop fabric REPLACES the wall &#8212; it knits the whole surface into stitched
+            rows instead of a solid wall.</li>
+          <li>It anchors itself on its own solid cuff, so it prints no base, brim or skirt
+            &#8212; the panel hides those controls while it is selected.</li>
+        </ul>
+      </div>
+
+      <div class="guide-slide" data-slide="5">
+        <h3>After generating</h3>
+        <ul>
+          <li>The viewer: a playback timeline, colour modes (plain / height / overhang), the
+            measure tool, and the orientation cube.</li>
+          <li>Download <b>.gcode</b> to print it, or <b>Export STL</b> to slice it solid in
+            another slicer.</li>
+          <li>Finding things: the control search box at the top of the panel, the Hints toggle,
+            and <b>Ctrl+Z</b> / <b>Ctrl+Shift+Z</b> to undo/redo.</li>
+          <li>Your design autosaves to this browser as you go.</li>
+        </ul>
+      </div>
+
+    </div>
+    <div class="guide-modal-footer">
+      <button id="guide-back" class="btn" type="button">Skip</button>
+      <div id="guide-dots" class="guide-dots" aria-hidden="true"></div>
+      <button id="guide-next" class="btn btn-primary" type="button">Next</button>
+    </div>
+  </div>
+</div>
+
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -838,5 +939,14 @@
 <script src="preview_math.js"></script>
 <script src="param_help.js"></script>
 <script src="designer.js"></script>
+
+<!-- ============================================================= -->
+<!-- How-to-use guide: trigger button + auto-open logic + the modal -->
+<!-- itself (#guide-modal above). Independent of designer.js -- the  -->
+<!-- two only interact through the 'design-state' localStorage key,  -->
+<!-- which is what keeps this from ever racing the session-restore   -->
+<!-- modal (see the comment at the top of guide.js).                 -->
+<!-- ============================================================= -->
+<script src="guide.js"></script>
 </body>
 </html>
