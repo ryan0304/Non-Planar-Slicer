@@ -8,7 +8,8 @@ from ..blobs import (BlobSpec, LoopSpec, blob_volume_at, compute_blob_sites,
                      compute_loop_sites)
 from ..extrusion import blob_e_for_volume
 from ..gcode import GcodeWriter
-from ..paths import SpiralSpec, PathPoint, spiral_path, bounding_radius, circle
+from ..paths import (SpiralSpec, PathPoint, spiral_path, bounding_radius, circle,
+                    cage_scale)
 from ..point_edit import (MaskSpec, ProtectionSpec, FFDSpec, SmoothSpec,
                           RadialPushSpec, apply_point_edits)
 from .base_fill import (layered_base_and_brim, brim_outer_radius, blend_layer_z,
@@ -108,6 +109,121 @@ def emit_loop(writer: GcodeWriter,
     writer.comment("loop")
 
 
+def _base_t0_footprint(spec: SpiralSpec, shape: Callable[[float], float]):
+    """Radius function + point transform matching the WALL's OWN t=0 (bottom)
+    cross-section, for building the base/brim/skirt.
+
+    ``spiral_path`` (paths.py) builds each wall point from ``shape(theta)``
+    scaled by the radius envelope and the cage -- both pure radial terms --
+    and only THEN squashes the produced x/y into an ellipse (ovality) and
+    finally translates the whole cross-section by the spine offset. Ovality
+    and spine are affine operations on the already-computed point, not radius
+    terms: folding them into a theta->radius function would change the
+    projected angle, not just the length. base_fill.py's disk/brim/skirt
+    builders assume exactly x=r*cos(theta), y=r*sin(theta) (see its
+    ``_outline_xy``), so only the envelope+cage part can go into
+    ``radius_fn``; ovality/spine have to be applied to the (x, y) points
+    those builders return, in the same order spiral_path applies them.
+
+    Before this, the base/brim/skirt were built from the raw ``shape``
+    callable alone -- ignoring radius_envelope, cage, ovality and the spine
+    entirely, while the wall (built via ``spiral_path(spec, shape)``) honours
+    all of them. On a narrowing radius_profile ([[0, 0.5], [1, 1.0]], i.e. the
+    wall starts at half radius and flares to full), that put the base disks
+    at the FULL un-enveloped radius while the wall's first point sat at half
+    of it: measured on real output (base_radius=30), base disks printed out
+    to r=30.00 while the wall's t=0 point sat at r=15.09. The two were then
+    joined by a single EXTRUDING travel move dragging E0.84190 (~19x a normal
+    move's E) across that 15mm gap, straight over the top of the already-
+    finished disk.
+
+    Returns (radius_fn, transform, identity):
+      radius_fn(theta) -> envelope/cage-scaled radius, suitable for
+        layered_base_and_brim / skirt_points / brim_outer_radius /
+        skirt_outer_radius (all of which assume a plain theta->radius
+        callable).
+      transform(x, y) -> (x, y) with ovality and the t=0 spine offset
+        applied, for POST-processing points already produced by those
+        functions from ``radius_fn``.
+      identity -- True iff ``radius_fn`` IS ``shape`` itself (not a wrapper)
+        and ``transform`` is None, so a caller can skip the point-transform
+        step entirely -- guaranteeing byte-identical output (by construction,
+        not by hoping the float math agrees) whenever nothing here is
+        actually active. A LEANING design (spine_mm > 0) still lands on this
+        fast path: the lean is a function of height fraction t, and at t=0 it
+        is always (0, 0) -- so a purely leaning wall's base was already
+        correct before this change and needs no adjustment now.
+
+    Deliberately excludes the radial surface texture (``r_pattern``): the
+    disk paver requires a star-convex outline (see base_fill.py's module
+    docstring), and a textured radius function is not guaranteed to stay
+    star-convex. Residual: with the default ``pattern_fade_in`` > 0 this is
+    invisible (the texture has no effect yet at t=0), but a design that sets
+    ``pattern_fade_in = 0`` has the wall's very first point already displaced
+    by up to ``r_amp`` (renamed ``pattern_amp`` in the UI) of radial texture
+    that the base does not, and cannot cleanly, follow.
+    """
+    env0 = spec.radius_envelope(0.0) if spec.radius_envelope is not None else 1.0
+    ov = max(-0.4, min(0.4, spec.ovality))
+    dx0, dy0 = (spec.spine_offset(0.0) if spec.spine_offset is not None
+                else (0.0, 0.0))
+
+    if env0 == 1.0 and spec.cage is None and ov == 0.0 and dx0 == 0.0 and dy0 == 0.0:
+        return shape, None, True
+
+    cage = spec.cage
+    if cage is not None:
+        def radius_fn(theta: float) -> float:
+            return shape(theta) * env0 * cage_scale(cage, theta, 0.0)
+    else:
+        def radius_fn(theta: float) -> float:
+            return shape(theta) * env0
+
+    def transform(x: float, y: float) -> tuple[float, float]:
+        if ov != 0.0:
+            x *= (1.0 + ov)
+            y *= (1.0 - ov)
+        return (x + dx0, y + dy0)
+
+    return radius_fn, transform, False
+
+
+def _base_footprint_bound(spec: SpiralSpec, r: float) -> float:
+    """Conservative upper bound on a base/brim/skirt scalar radius `r` (itself
+    already computed from ``_base_t0_footprint``'s envelope/cage-scaled
+    ``radius_fn``) once ovality and the t=0 spine offset are accounted for.
+
+    The actual PATHS use the exact ``transform`` from ``_base_t0_footprint``;
+    this is only for the scalar footprint checks that feed ``_ensure_fits``
+    (bed-fit), where an outline that ovality turns into an ellipse or the
+    spine shifts off-centre needs a radius no smaller than its true reach in
+    any direction. Ovality is bounded by scaling up by ``1 + abs(ov)`` (the
+    longer of the two elliptical axes) rather than the exact anisotropic
+    scale, and the spine shift is added as its full magnitude regardless of
+    direction -- both deliberately over-, never under-, estimate. A bed-fit
+    check that under-estimates is a crash; one that over-estimates just
+    rejects a design that might, by exact math, have technically fit.
+    """
+    ov = max(-0.4, min(0.4, spec.ovality))
+    dx0, dy0 = (spec.spine_offset(0.0) if spec.spine_offset is not None
+                else (0.0, 0.0))
+    return r * (1.0 + abs(ov)) + math.hypot(dx0, dy0)
+
+
+def _xform_xy_seq(seq, xform):
+    """Apply an (x, y) -> (x, y) point transform to the leading x, y of every
+    tuple in ``seq``, preserving any trailing fields (``layered_base_and_brim``
+    returns (x, y, layer) triples; ``skirt_points`` returns (x, y) pairs).
+
+    ``xform is None`` returns ``seq`` UNCHANGED (same list object, not even a
+    rebuild) -- the no-op path ``_base_t0_footprint`` hands back for the
+    byte-identical case.
+    """
+    if xform is None:
+        return seq
+    return [xform(x, y) + tuple(rest) for (x, y, *rest) in seq]
+
+
 def build_continuous_spiral(
     writer: GcodeWriter,
     spec: SpiralSpec,
@@ -185,6 +301,13 @@ def build_continuous_spiral(
     pts = spiral_path(spec, shape)
     ppt = spec.points_per_turn
 
+    # The base/brim/skirt must be built from the WALL's own t=0 footprint
+    # (envelope + cage + ovality + spine), not the raw ``shape`` -- see
+    # _base_t0_footprint's docstring for the E0.84190 scar this fixes.
+    # (the third element, `identity`, is informational -- callers here decide
+    # off `base_xform is None`, which _xform_xy_seq already handles)
+    base_radius_fn, base_xform, _ = _base_t0_footprint(spec, shape)
+
     # Point Edit Modifiers: post-slice deformation of the already-generated
     # wall polyline (Point Mask / Protection / FFD / Smooth / Radial Push).
     # No-op (same list, byte-identical output) when none are active.
@@ -221,11 +344,17 @@ def build_continuous_spiral(
     # the outline); each further ring steps out by the first-layer spacing.
     SKIRT_GAP = 3.0
     skirt_base_beyond = brim_loops * s0 + SKIRT_GAP
-    skirt_r = skirt_outer_radius(shape, s0, skirt_loops, skirt_base_beyond)
+    # skirt_r/brim_r must be computed from the SAME t=0 footprint the base is
+    # built from (a flared silhouette grows the base, and the bed-fit check
+    # below has to see the grown figure) -- then conservatively widened for
+    # ovality/spine, since those are points-level ops _base_footprint_bound
+    # cannot apply exactly to a single scalar radius (see its docstring).
+    skirt_r = _base_footprint_bound(
+        spec, skirt_outer_radius(base_radius_fn, s0, skirt_loops, skirt_base_beyond))
 
     # ---- footprint (account for the brim reaching beyond the outline) --------
     radius = bounding_radius(pts)
-    brim_r = brim_outer_radius(shape, s0, brim_loops)
+    brim_r = _base_footprint_bound(spec, brim_outer_radius(base_radius_fn, s0, brim_loops))
     fit_radius = max(radius, brim_r, skirt_r)
     if loop_spec is not None:
         # Loop excursions reach out_mm beyond the wall.
@@ -244,19 +373,21 @@ def build_continuous_spiral(
     writer.header()
 
     # Build the brim+base path (empty unless requested). Entries are
-    # (x, y, layer): layer k prints at base_z + k*lh.
-    base_seq = layered_base_and_brim(
-        shape, writer.line_width,
+    # (x, y, layer): layer k prints at base_z + k*lh. Built from base_radius_fn
+    # (the wall's t=0 footprint), then ovality/spine applied to the produced
+    # points via base_xform -- a no-op (same list) in the byte-identical case.
+    base_seq = _xform_xy_seq(layered_base_and_brim(
+        base_radius_fn, writer.line_width,
         first_layer_spacing=s0,
         base_layers=base_layers, brim_loops=brim_loops,
         points_per_turn=ppt, start_theta=0.0,
         base_style=base_style,
-    ) if adhesion else []
+    ), base_xform) if adhesion else []
 
     # -------- skirt: shield/purge loops printed FIRST, then retract+travel -----
     if skirt_loops > 0:
-        skirt = skirt_points(shape, s0, skirt_loops, skirt_base_beyond,
-                             points_per_turn=ppt, start_theta=0.0)
+        skirt = _xform_xy_seq(skirt_points(base_radius_fn, s0, skirt_loops, skirt_base_beyond,
+                             points_per_turn=ppt, start_theta=0.0), base_xform)
         if skirt:
             k0x, k0y = cx + skirt[0][0], cy + skirt[0][1]
             k_lift = base_z + travel_z_clearance

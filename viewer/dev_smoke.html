@@ -361,6 +361,20 @@
           minWallZ >= expectedBaseZ - 1e-3,
           'got min wall-region Z ' + minWallZ + ', want >= ' + expectedBaseZ);
 
+    // ---- base follows the wall's t=0 footprint (radius envelope) ------------
+    // Mirrors continuous_spiral.py's _base_t0_footprint(): the base disks must
+    // be built from the wall's OWN starting radius, not the raw, un-enveloped
+    // outline. A radius_profile of [[0,0.5],[1,1.0]] (wall starts at half
+    // radius, flares to full) on radius=20 must base at ~10, not the nominal
+    // 20 the flat-silhouette case above uses.
+    const narrowingDesign = Object.assign({}, previewDesign, {
+      radius_profile: [[0, 0.5], [1, 1.0]]
+    });
+    const narrowingBase = w.generatePreview(narrowingDesign, { base_layers: 2, brim: 0 });
+    check('narrowing radius_profile: base disk max radius follows the wall\'s t=0 radius (~10, not 20)',
+          near(maxRadiusAtZ(narrowingBase, expectedBaseZ, 0.01), 10.0, 0.3),
+          'got ' + maxRadiusAtZ(narrowingBase, expectedBaseZ, 0.01));
+
     return results;
   }
 

@@ -1747,6 +1747,180 @@ def test_loop_fabric_base_is_reported():
           "loop_fabric_base: mesh-mode loops with base_layers=2 actually prints a solid base")
 
 
+# ---------------------------------------------------------------------------
+# The solid base/brim/skirt must follow the WALL's own t=0 footprint (radius
+# envelope + cage + ovality + spine), not the raw, un-enveloped shape --
+# regression guard for continuous_spiral.py's _base_t0_footprint(). Before
+# that fix, a narrowing radius_profile left the base disks printing to the
+# FULL un-enveloped outline while the wall's first point sat far inside it,
+# and the hand-off between the two was a single extruding travel move
+# dragging E0.84190 (~19x a normal move's E) across the gap, straight over
+# the top of the finished disk.
+# ---------------------------------------------------------------------------
+def _base_wall_split(gcode: str) -> tuple[int, int, list[str]]:
+    """Return (solid_base_line_idx, wall_spiral_line_idx, all_lines)."""
+    lines = gcode.splitlines()
+    base_idx = next(i for i, l in enumerate(lines) if l.startswith("; solid base"))
+    wall_idx = next(i for i, l in enumerate(lines) if l.startswith("; wall spiral"))
+    return base_idx, wall_idx, lines
+
+
+def _max_radius_in_range(lines: list[str], start: int, end: int,
+                         cx: float, cy: float) -> float:
+    import math, re
+    x = y = 0.0
+    max_r = 0.0
+    for line in lines[start:end]:
+        code = line.split(";", 1)[0].strip()
+        if not code.startswith("G1"):
+            continue
+        mx = re.search(r'X(-?[\d.]+)', code)
+        my = re.search(r'Y(-?[\d.]+)', code)
+        if mx:
+            x = float(mx.group(1))
+        if my:
+            y = float(my.group(1))
+        max_r = max(max_r, math.hypot(x - cx, y - cy))
+    return max_r
+
+
+def _xy_at_line(lines: list[str], upto: int) -> tuple[float, float] | None:
+    """Last commanded (x, y) at or before line index ``upto`` (exclusive)."""
+    import re
+    x = y = 0.0
+    seen = False
+    for line in lines[:upto]:
+        code = line.split(";", 1)[0].strip()
+        if not code.startswith("G1"):
+            continue
+        mx = re.search(r'X(-?[\d.]+)', code)
+        my = re.search(r'Y(-?[\d.]+)', code)
+        if mx:
+            x = float(mx.group(1))
+            seen = True
+        if my:
+            y = float(my.group(1))
+            seen = True
+    return (x, y) if seen else None
+
+
+def _first_xy_after_line(lines: list[str], after: int) -> tuple[float, float] | None:
+    """First commanded (x, y) strictly after line index ``after``."""
+    import re
+    x = y = 0.0
+    for i, line in enumerate(lines):
+        if i <= after:
+            code = line.split(";", 1)[0].strip()
+            if code.startswith("G1"):
+                mx = re.search(r'X(-?[\d.]+)', code)
+                my = re.search(r'Y(-?[\d.]+)', code)
+                if mx:
+                    x = float(mx.group(1))
+                if my:
+                    y = float(my.group(1))
+            continue
+        code = line.split(";", 1)[0].strip()
+        if not code.startswith("G1"):
+            continue
+        mx = re.search(r'X(-?[\d.]+)', code)
+        my = re.search(r'Y(-?[\d.]+)', code)
+        if mx:
+            x = float(mx.group(1))
+        if my:
+            y = float(my.group(1))
+        return (x, y)
+    return None
+
+
+def test_base_follows_the_silhouette():
+    import math as _math
+    import serve
+
+    cx, cy = 117.5, 117.5   # Trident bed centre
+
+    # 1+2: narrowing silhouette (wall starts at half radius, flares to full).
+    body = {
+        "radius": 30.0, "height": 20.0, "printer": "trident",
+        "radius_profile": [[0, 0.5], [1, 1.0]],
+        "base_layers": 2, "bottom": "solid",
+    }
+    r = serve.generate_design(dict(body))
+    base_idx, wall_idx, lines = _base_wall_split(r["gcode"])
+
+    max_r = _max_radius_in_range(lines, base_idx, wall_idx, cx, cy)
+    check(abs(max_r - 15.0) < 0.3,
+          "base_follows_silhouette: narrowing design bases at the wall's "
+          "t=0 radius (~15), not the raw un-enveloped 30",
+          f"max base radius = {max_r:.3f}")
+
+    prev_xy = _xy_at_line(lines, wall_idx)
+    junction_xy = _first_xy_after_line(lines, wall_idx)
+    d = (_math.hypot(junction_xy[0] - prev_xy[0], junction_xy[1] - prev_xy[1])
+         if prev_xy and junction_xy else float("inf"))
+    # This move used to travel ~15mm at E0.84190 (~19x a normal move's E),
+    # dragged straight across the finished disk -- see the module docstring.
+    check(d < 1.0,
+          "base_follows_silhouette: base->wall hand-off is travel-free "
+          "(was a 15mm scar dragging E0.84190 across the disk)",
+          f"junction XY travel = {d:.3f} mm")
+
+    # 3: no over-correction -- a FLAT silhouette still bases at the nominal
+    # radius, exactly as before this fix.
+    flat_body = {
+        "radius": 30.0, "height": 20.0, "printer": "trident",
+        "base_layers": 2, "bottom": "solid",
+    }
+    r_flat = serve.generate_design(dict(flat_body))
+    fb_idx, fw_idx, f_lines = _base_wall_split(r_flat["gcode"])
+    max_r_flat = _max_radius_in_range(f_lines, fb_idx, fw_idx, cx, cy)
+    check(abs(max_r_flat - 30.0) < 0.3,
+          "base_follows_silhouette: flat silhouette still bases at the "
+          "nominal radius (~30), no over-correction",
+          f"max base radius = {max_r_flat:.3f}")
+
+    # 4: ovality -- the base outline itself must squash into the same
+    # ellipse as the wall's t=0 cross-section, and the junction must still
+    # be travel-free.
+    ov_body = {
+        "radius": 30.0, "height": 20.0, "printer": "trident",
+        "base_layers": 2, "bottom": "solid", "ovality": 0.3,
+    }
+    r_ov = serve.generate_design(dict(ov_body))
+    ob_idx, ow_idx, o_lines = _base_wall_split(r_ov["gcode"])
+
+    import re
+    x = y = 0.0
+    max_dx = max_dy = 0.0
+    for line in o_lines[ob_idx:ow_idx]:
+        code = line.split(";", 1)[0].strip()
+        if not code.startswith("G1"):
+            continue
+        mx = re.search(r'X(-?[\d.]+)', code)
+        my = re.search(r'Y(-?[\d.]+)', code)
+        if mx:
+            x = float(mx.group(1))
+        if my:
+            y = float(my.group(1))
+        max_dx = max(max_dx, abs(x - cx))
+        max_dy = max(max_dy, abs(y - cy))
+    check(abs(max_dx - 30.0 * 1.3) < 0.5,
+          "base_follows_silhouette: ovality=0.3 stretches the base's X "
+          "extent to ~radius*1.3",
+          f"max |x-cx| = {max_dx:.3f}")
+    check(abs(max_dy - 30.0 * 0.7) < 0.5,
+          "base_follows_silhouette: ovality=0.3 squashes the base's Y "
+          "extent to ~radius*0.7",
+          f"max |y-cy| = {max_dy:.3f}")
+
+    ov_prev_xy = _xy_at_line(o_lines, ow_idx)
+    ov_junction_xy = _first_xy_after_line(o_lines, ow_idx)
+    ov_d = (_math.hypot(ov_junction_xy[0] - ov_prev_xy[0], ov_junction_xy[1] - ov_prev_xy[1])
+            if ov_prev_xy and ov_junction_xy else float("inf"))
+    check(ov_d < 1.0,
+          "base_follows_silhouette: ovality base->wall hand-off is also travel-free",
+          f"junction XY travel = {ov_d:.3f} mm")
+
+
 def main() -> int:
     test_klipper_trident()
     test_orca_machine()
@@ -1771,6 +1945,7 @@ def main() -> int:
     test_bed_temp_ceiling_comes_from_the_profile()
     test_z_amp_max_default_is_not_another_machines_number()
     test_loop_fabric_base_is_reported()
+    test_base_follows_the_silhouette()
 
     with tempfile.TemporaryDirectory() as tmp:
         test_smoke(Path(tmp))

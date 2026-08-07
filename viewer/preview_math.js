@@ -474,16 +474,21 @@
 
   // ---- base disk builders (mirror trident_gcode/generators/base_fill.py's
   // base_disk_points/base_disk_concentric EXACTLY) --------------------------
-  // The base disk's radius function is the RAW shape outline -- NOT the
-  // wall's envelope-wrapped radius. Confirmed against real Trident output:
-  // radius=30 with radius_profile [[0,0.5],[1,1.0]] (a silhouette that pulls
-  // the wall down to half radius at its base) still prints its base disks at
-  // max radius 30.00mm while the wall itself starts at 15.09mm --
-  // layered_base_and_brim() in base_fill.py is handed the bare `shape`
-  // callable, never the envelope, cage, radial pattern, ovality or spine that
-  // warp the wall. Reproducing that here is the whole point of this preview:
-  // it must show what the machine actually extrudes, wide pancake and all --
-  // not a shape someone "fixed" to agree with the (narrower) wall.
+  // The base disk's radius function follows the WALL's OWN t=0 (bottom)
+  // cross-section -- shapeFn(theta) scaled by the radius envelope and cage AT
+  // t=0 -- not the raw, un-enveloped shape outline. It has to: the base's
+  // last printed pass ends exactly where the wall spiral begins, so the two
+  // must agree on where "the outline" is. Mirrors
+  // continuous_spiral.py's _base_t0_footprint(): before that fix, a
+  // radius_profile of [[0,0.5],[1,1.0]] (wall starts at half radius, flares
+  // to full) left the base disks printing to the FULL un-enveloped outline
+  // (measured max radius 30.00mm on a radius=30 design) while the wall's own
+  // first point sat at 15.09mm -- joined by a single extruding move dragging
+  // ~19x normal E straight across the gap, over the top of the finished
+  // disk. Ovality (an affine squash of the produced x/y, not a radial
+  // scale -- see appendSpiralDisk/appendConcentricDisk's `ov` parameter) is
+  // applied the same way here as it is on the wall below; the spine offset
+  // is not, because it is always (0, 0) at t=0.
   function meanRadius(radiusFn, samples){
     samples = samples || 180;
     var sum = 0;
@@ -499,7 +504,11 @@
   // after it in `segs` -- disks sit at different Z, and a straight line
   // between the last point of one disk and the first of the next would draw
   // a bogus diagonal cutting through the part.
-  function appendSpiralDisk(segs, radiusFn, nLoops, worldY, pptDisk){
+  // `ov` is the same clamped [-0.4, 0.4] ovality factor the wall loop below
+  // applies: printer x *= (1+ov), printer y *= (1-ov). Since world z = -(printer
+  // y), squashing printer y by (1-ov) is exactly squashing world z by (1-ov)
+  // too -- no sign correction needed.
+  function appendSpiralDisk(segs, radiusFn, nLoops, worldY, pptDisk, ov){
     var total = nLoops * pptDisk;
     var prevX, prevZ;
     for(var i = 0; i <= total; i++){
@@ -508,6 +517,7 @@
       var r = radiusFn(theta) * f;
       var x = r * Math.cos(theta);
       var z = -(r * Math.sin(theta));   // printer Y -> world Z, negated
+      if(ov){ x *= (1 + ov); z *= (1 - ov); }
       if(i > 0) segs.push(prevX, worldY, prevZ, x, worldY, z);
       prevX = x; prevZ = z;
     }
@@ -518,7 +528,7 @@
   // each ring's point count proportional to its radius (matches the
   // reference's rationale: a fixed count would put ~0.02mm steps on the tiny
   // near-centre rings).
-  function appendConcentricDisk(segs, radiusFn, nLoops, step, worldY, pptDisk){
+  function appendConcentricDisk(segs, radiusFn, nLoops, step, worldY, pptDisk, ov){
     for(var ring = 0; ring < nLoops; ring++){
       var scale = 1.0 - (nLoops - 1 - ring) * step;
       if(scale <= 1e-6) continue;
@@ -529,6 +539,7 @@
         var r = radiusFn(theta) * scale;
         var x = r * Math.cos(theta);
         var z = -(r * Math.sin(theta));
+        if(ov){ x *= (1 + ov); z *= (1 - ov); }
         if(j > 0) segs.push(prevX, worldY, prevZ, x, worldY, z);
         prevX = x; prevZ = z;
       }
@@ -627,9 +638,25 @@
     // only the adhesion/s0 math (matching the server); spec.skirt is not
     // consulted at all.
     var baseSegs = [];
-    // Mean radius of the RAW outline is the same for every disk (shapeFn
-    // never changes between them) -- compute it once, not once per disk.
-    var rMeanBase = baseLayers > 0 ? Math.max(meanRadius(shapeFn), 1e-6) : 0;
+    // Ovality is computed here (once) because the base disks need it too --
+    // the wall loop below reuses this same `ov`, not a second clamp.
+    var ov = Math.min(Math.max(design.ovality || 0, -0.4), 0.4);
+    // The base's radius function is the wall's own t=0 footprint: shapeFn
+    // scaled by the radius envelope and cage AT t=0 (see the comment above
+    // appendSpiralDisk/appendConcentricDisk for why ovality is applied to the
+    // produced points instead of folded in here, and why the spine offset
+    // needs no term -- it is always zero at t=0).
+    var baseRadiusFn = function(theta){
+      var rb = shapeFn(theta) * radFn(0);
+      if(design.cage && design.cage.length >= 2){
+        rb *= cageScale(design.cage, theta, 0);
+      }
+      return rb;
+    };
+    // Mean radius of the t=0 footprint is the same for every disk (neither
+    // shapeFn nor radFn(0)/cage change between them) -- compute it once, not
+    // once per disk.
+    var rMeanBase = baseLayers > 0 ? Math.max(meanRadius(baseRadiusFn), 1e-6) : 0;
     for(var bk = 0; bk < baseLayers; bk++){
       var spacingK = (bk === 0) ? s0 : lw;
       var worldYk = baseZ + bk * layerHeight;   // printer Z -> world Y (up)
@@ -641,9 +668,9 @@
       // 24-point floor so even a single-loop disk still reads as round.
       var pptDisk = Math.max(24, Math.min(120, Math.round(6000 / nLoopsK)));
       if(design.base_style === 'concentric'){
-        appendConcentricDisk(baseSegs, shapeFn, nLoopsK, spacingK / rMeanBase, worldYk, pptDisk);
+        appendConcentricDisk(baseSegs, baseRadiusFn, nLoopsK, spacingK / rMeanBase, worldYk, pptDisk, ov);
       } else {
-        appendSpiralDisk(baseSegs, shapeFn, nLoopsK, worldYk, pptDisk);
+        appendSpiralDisk(baseSegs, baseRadiusFn, nLoopsK, worldYk, pptDisk, ov);
       }
     }
 
@@ -715,9 +742,9 @@
       var px = r * Math.cos(theta);
       var py = r * Math.sin(theta);
 
-      // Asymmetry (mirrors Python paths.py): ovality squashes the section,
-      // the spine offset leans the vase (linear ramp over height).
-      var ov = Math.min(Math.max(design.ovality || 0, -0.4), 0.4);
+      // Asymmetry (mirrors Python paths.py): ovality squashes the section
+      // (same `ov` computed once above, ahead of the base disks), the spine
+      // offset leans the vase (linear ramp over height).
       if(ov !== 0){ px *= (1 + ov); py *= (1 - ov); }
       var spineMm = design.spine_mm || 0;
       if(spineMm > 0){
