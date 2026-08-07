@@ -19,6 +19,14 @@
     </div></div>
     <div id="stale-badge" class="stale-badge">G-code is outdated &#8212; design changed
       since last generate</div>
+    <!-- ================================================================ -->
+    <!-- Orientation cube. Its own canvas + renderer (see viewer.js) so its -->
+    <!-- hover/click handling can never fight OrbitControls on the main    -->
+    <!-- canvas underneath. Always visible (not gated on a loaded G-code)  -->
+    <!-- since orienting the empty bed/printer scene is useful too.        -->
+    <!-- ================================================================ -->
+    <canvas id="navcube" title="Click a face to snap the view"
+      aria-label="Orientation cube: click a face to snap the camera to that view"></canvas>
     <!-- Floating Orca-style telemetry card, anchored top-left of the canvas. -->
     <div id="telemetry-card" class="telemetry-card" style="display:none">
       <div class="telemetry-header">
@@ -38,6 +46,41 @@
         <div class="stat"><span>Nozzle temp</span><span id="tm-temp" class="tm">&#8211;</span></div>
       </div>
     </div>
+    <!-- ================================================================ -->
+    <!-- Tool rail. Instruments that only READ the model in the viewport   -->
+    <!-- dock here, against the panel edge: the panel owns parameters      -->
+    <!-- (things that change what gets printed), the rail owns tools       -->
+    <!-- (things that just look at it). Hidden until G-code is loaded --   -->
+    <!-- there is nothing to measure before that.                          -->
+    <!-- ================================================================ -->
+    <div id="tool-rail" class="tool-rail" style="display:none">
+      <button id="tool-measure" class="tool-btn" type="button" aria-pressed="false"
+        aria-controls="measure-card" title="Measure the model (M)">
+        <span class="tool-glyph" aria-hidden="true">&#8596;</span>
+        <span class="tool-name">Measure</span>
+      </button>
+    </div>
+
+    <div id="measure-card" class="measure-card" style="display:none"
+         role="region" aria-label="Measure">
+      <div class="measure-head">
+        <span class="measure-title">Measure</span>
+        <button id="measure-close" class="measure-close" type="button"
+          title="Close (Esc)" aria-label="Close measure tool">&#10005;</button>
+      </div>
+      <div class="measure-modes" role="radiogroup" aria-label="Measurement mode">
+        <button class="measure-mode is-on" type="button" role="radio"
+          aria-checked="true" data-mmode="span">Distance</button>
+        <button class="measure-mode" type="button" role="radio"
+          aria-checked="false" data-mmode="ring">Diameter</button>
+      </div>
+      <div id="measure-read" class="measure-read"></div>
+      <div class="measure-foot">
+        <span id="measure-hint" class="measure-hint">&#8211;</span>
+        <button id="measure-clear" class="btn btn-sm" type="button">Clear</button>
+      </div>
+    </div>
+
     <!-- Machine readout strip: sparkline + scrub bar only, slim -->
     <div id="tl-wrap" class="machine-readout" style="display:none">
       <canvas id="spark" class="spark"></canvas>
@@ -318,7 +361,9 @@
             <select id="d-loop-align">
               <option value="stagger">Stagger (brick)</option>
               <option value="column">Column</option>
+              <option value="jitter">Jitter</option>
             </select></div>
+          <div class="drow" id="row-loop-jitter"><span>Jitter</span><input type="number" id="d-loop-jitter" min="0" max="1" step="0.1"></div>
           <div class="drow"><span>Stitch motion</span>
             <select id="d-loop-mode">
               <option value="dip">Dip (hook below)</option>
@@ -382,7 +427,7 @@
           <div class="cv-head"><b>Silhouette</b><span class="cv-reset" id="sil-reset">reset</span></div>
           <div id="sil-mode-bar" class="sil-mode-bar">
             <button class="sil-mode-btn" data-silmode="sym">Symmetrical</button>
-            <button class="sil-mode-btn" data-silmode="asym">Unsymmetrical (3D)</button>
+            <button class="sil-mode-btn" data-silmode="asym">Freeform (3D)</button>
           </div>
           <div id="sil-sym-panel">
             <canvas id="sil-curve" width="360" height="100"></canvas>
@@ -390,10 +435,21 @@
               Double-click to add a point, right-click to remove, drag to shape. Shift = fine.</div>
           </div>
           <div id="sil-asym-panel" style="display:none">
-            <div class="hint" style="margin-top:2px">Drag the orange points ON THE MODEL (left) to bulge
-              or dent local regions — each point affects only its side. Points appear when this mode is
-              active and a draft preview is visible.</div>
-            <button id="cage-reset" class="btn btn-block mt-2">Reset unsymmetrical changes</button>
+            <div class="hint" style="margin-top:2px">Points appear ON THE MODEL (left) when this mode is
+              active and a draft preview is visible. Hover a point to highlight it (orange), then drag to
+              bulge or dent that local region. A point you have moved turns red.</div>
+            <div class="hint" style="margin-top:4px"><b>Shift+click</b> (or Ctrl+click) each point to
+              select several - selected points get a white ring. Drag any one of them to move the whole
+              selection together, rigidly. A plain click with no modifier selects just that one point.
+              Esc cancels a drag in progress, or clears the selection.</div>
+            <!-- NOT a .hint: the hint-density toggle hides those, and the
+                 selection count is live state, not explanatory text. -->
+            <div id="cage-selcount" class="sel-count">No points selected</div>
+            <div class="btn-row mt-2">
+              <button id="cage-clear-sel" class="btn" disabled>Clear selection</button>
+              <button id="cage-reset-sel" class="btn" disabled>Reset selected</button>
+            </div>
+            <button id="cage-reset" class="btn btn-block mt-2">Reset all points</button>
             <div class="hint" id="cage-note" style="margin-top:4px">Applies to parametric designs
               (not loop fabric or STL mode).</div>
           </div>
@@ -728,6 +784,37 @@
       <button id="pm-cancel-btn" class="btn" type="button">Cancel</button>
       <button id="pm-back-btn" class="btn" type="button" style="display:none">Back</button>
       <button id="pm-save-btn" class="btn btn-primary" type="button" disabled>Next</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================= -->
+<!-- Session restore. Shown on load when this browser is holding a      -->
+<!-- design from a previous session that differs from a fresh one. The  -->
+<!-- design has already been restored by the time this appears, so the  -->
+<!-- app is never left half-initialised waiting on an answer; "Start    -->
+<!-- new" resets it through the normal edit path. See the block at the  -->
+<!-- end of designer.js.                                               -->
+<!-- ================================================================= -->
+<div id="session-modal" class="sr-modal" style="display:none">
+  <div class="sr-modal-backdrop"></div>
+  <div class="sr-modal-card" role="dialog" aria-modal="true"
+       aria-labelledby="sr-title" aria-describedby="sr-desc">
+    <div class="sr-modal-header">
+      <h2 id="sr-title">Continue where you left off?</h2>
+    </div>
+    <div class="sr-modal-body">
+      <p id="sr-desc" class="sr-lead">This browser still has the design you were
+        working on last time.</p>
+      <div id="sr-summary" class="sr-summary"></div>
+      <p class="sr-note">Starting new resets the design to its defaults. Your
+        imported printers, the printer you have selected, and panel preferences
+        are all kept &#8212; and the reset goes on the undo stack, so
+        <b>Ctrl+Z</b> brings the old design straight back.</p>
+    </div>
+    <div class="sr-modal-footer">
+      <button id="sr-new" class="btn" type="button">Start new design</button>
+      <button id="sr-continue" class="btn btn-primary" type="button">Continue previous session</button>
     </div>
   </div>
 </div>

@@ -9,9 +9,13 @@
   or headless-Chrome visual verification. Query param:
 
     ?file=<path relative to viewer/dev_smoke.html>   default: ../examples/01b_probe_safe_vase.gcode
+    ?selftest=1   run the viewer assertions instead (see below): measure tool,
+                  machine-limit fallbacks, and the printer/world coordinate
+                  mirror (measure readout, nav cube, shape cage)
 
   Usage:  python serve.py   then open
           http://localhost:8777/viewer/dev_smoke.html
+          http://localhost:8777/viewer/dev_smoke.html?selftest=1
 -->
 <html lang="en">
 <head>
@@ -33,17 +37,183 @@
   const status = document.getElementById('smoke-status');
   const frame = document.getElementById('viewer-frame');
 
+  // ---- measure-tool assertions ---------------------------------------------
+  // Checked against a model whose real dimensions are known from its own
+  // G-code: 01_gentle_wave_vase.gcode starts extruding at X149.5 Y117.5 on a
+  // 235 mm bed, so its centreline radius at the base is exactly 32.0 mm and
+  // its diameter 64.0 mm -- which is also what the viewer reports as the
+  // footprint.
+  //
+  // The infill case is here because it is the one that was actually wrong. The
+  // first cut of the diameter search took the point nearest the direction
+  // opposite the pick, and the vase's solid base has toolpath at every radius
+  // from the centre out, so it returned an infill line near the middle and
+  // reported 36.0 mm across a part that is 64.0 mm across. Anything that goes
+  // back to a nearest-point search will fail assertion 3 or 4.
+  function runSelfTest(w) {
+    const results = [];
+    const check = (name, ok, detail) => results.push({ name, ok, detail });
+    const near = (a, b, tol) => Math.abs(a - b) <= tol;
+
+    w.document.querySelector('.measure-mode[data-mmode="ring"]').click();
+
+    const base = w.__measureAt(149.5, 117.5, 0.35).ring;
+    check('base radius is 32.0 mm', near(base.radius, 32.0, 0.05), 'got ' + base.radius);
+    check('base diameter spans the part, not its infill',
+          base.diameter > 60, 'got ' + base.diameter);
+
+    const wall = w.__measureAt(149.5, 117.5, 20).ring;
+    check('hollow-wall diameter is 64.0 mm', near(wall.diameter, 64.0, 0.1),
+          'got ' + wall.diameter);
+
+    // A pick 10 mm from the axis, sitting in the solid base's infill. Its
+    // radius is its own, but the diameter beside it is still the full part.
+    const infill = w.__measureAt(127.5, 117.5, 0.35).ring;
+    check('pick inside the infill still reports the full width',
+          infill.diameter > 60 && near(infill.radius, 9.85, 0.6),
+          'd ' + infill.diameter + ' r ' + infill.radius);
+
+    // Far-side angle wrapped past 2*PI once and came back negative, which slid
+    // under every "is this section closed" threshold unchallenged.
+    const gaps = [0.35, 10, 20, 30, 45].map(z => w.__measureAt(149.5, 117.5, z).ring.gapDeg);
+    check('angular gaps are never negative', gaps.every(g => g >= 0), 'got ' + gaps.join(', '));
+
+    w.document.querySelector('.measure-mode[data-mmode="span"]').click();
+    w.__measureAt(149.5, 117.5, 0.3);
+    const pts = w.__measureAt(149.5, 117.5, 40.3).points;
+    const dz = pts[1][2] - pts[0][2];
+    check('vertical span reads its true height', near(dz, 39.9, 0.05), 'got ' + dz);
+
+    // ---- machine-limit fallback -------------------------------------------
+    // A printer declaring z_amp_max = 0 has ZERO non-planar tolerance. The
+    // old `p.z_amp_max || 0.95` handed it the Trident's own measured 0.95mm
+    // instead, because 0 is falsy -- so the amp curve editor advertised
+    // 0.95mm of headroom on a machine with none, which on real hardware is a
+    // probe strike. Anything that reintroduces a falsy-check here, or a
+    // fallback naming another printer's number, fails these two.
+    const zc = w.__zAmpCapFor;
+    check('z_amp_max of 0 stays 0 (not another printer\'s ceiling)',
+          typeof zc === 'function' && zc(0) === 0, 'got ' + (zc && zc(0)));
+    check('absent z_amp_max falls back to the conservative 0.4, never 0.95',
+          typeof zc === 'function' && zc(undefined) === 0.4 && zc(NaN) === 0.4 &&
+          zc(Infinity) === 0.4 && zc(null) === 0.4,
+          'got ' + (zc && [zc(undefined), zc(NaN), zc(Infinity), zc(null)].join('/')));
+
+    // ---- coordinate mirror ---------------------------------------------------
+    // The scene is Y-up, the machine Z-up. Swapping two axes without negating
+    // one is a REFLECTION (determinant -1), which shows chiral geometry -- an
+    // xy_twist, a cage bump -- as its own mirror image. parseGcode therefore
+    // maps printer Y to world Z as `cy - y`, and every consumer has to invert
+    // it the same way; see the coordinate-mapping note at the top of viewer.js.
+    //
+    // NOTHING above can see a mirror. Every pick is at Y=117.5 -- dead centre
+    // of a 235 mm bed AND the axis of a rotationally symmetric vase -- where a
+    // sign flip maps every point onto an identical one. That blind spot is why
+    // the mirror survived, so these assertions use asymmetric geometry.
+
+    // A single spur from the bed centre toward the BACK (printer +Y). Nothing
+    // exists at the mirror position Y=75, so an un-negated forward transform
+    // snaps to the wrong end of the spur and reports back ~117.5.
+    const spur = ['M83',
+                  'G1 Z0.3 F600',
+                  'G1 X117.5 Y117.5 F3000',
+                  'G1 X117.5 Y160.0 E1.0 F1200',
+                  ''].join('\n');
+    w.loadGcode('mirror_spur.gcode', spur);
+    w.document.querySelector('.measure-mode[data-mmode="span"]').click();
+    const tip = w.__measureAt(117.5, 160.0, 0.3).points[0];
+    check('measure reports printer Y on the side the toolpath is really on',
+          near(tip[1], 160.0, 0.6), 'got Y ' + tip[1]);
+    check('...without disturbing printer X or Z',
+          near(tip[0], 117.5, 0.6) && near(tip[2], 0.3, 0.05), 'got ' + tip.join(', '));
+
+    // Ties world Z to the MACHINE, not merely to itself: a transform flipped
+    // consistently in both directions would satisfy the round-trip above but
+    // still preview the print mirrored. The front of the bed is printer Y=0,
+    // which under `cy - y` is world +Z; the nav cube's Front face pointed at
+    // world -Z while the mapping was un-negated, walking the camera round to
+    // the back of the machine.
+    w.__navCubeClick('front');
+    const camY = 235/2 - w.__camera.position.z;      // camera, in printer Y
+    const tgtY = 235/2 - w.__controls.target.z;
+    check('Front view stands at the low printer-Y edge of the bed',
+          camY < tgtY, 'camera Y ' + camY.toFixed(1) + ', target Y ' + tgtY.toFixed(1));
+
+    // Top view has to read the way a slicer draws a bed: the BACK of the
+    // machine (printer +Y, i.e. world -Z) at the top of the screen. Which way
+    // that lands is set purely by the sign of NAV_EPS in NAV_FACES, and the
+    // negation flipped which sign delivers it -- so the un-updated sign showed
+    // the bed upside down. Screen-up is derived from the camera rather than
+    // read off a pixel: up = (right x forward), right = (forward x camera.up).
+    w.__navCubeClick('top');
+    const cam = w.__camera, tgt = w.__controls.target;
+    const sub = (a, b) => [a.x-b.x, a.y-b.y, a.z-b.z];
+    const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    const fwd = sub(tgt, cam.position);
+    const up = [cam.up.x, cam.up.y, cam.up.z];
+    const screenUp = cross(cross(fwd, up), fwd);   // (f x up) = right, right x f = up
+    check('Top view puts the bed back (printer +Y) at the top of the screen',
+          screenUp[2] < 0, 'screen-up world Z ' + screenUp[2].toFixed(3) + ' (want < 0)');
+
+    // Cage handle j must be DRAWN at the bed angle it actually steers.
+    // cageScale() puts column j at bed angle 2*pi*j/M, so with M=4 column 1 is
+    // theta=90deg -- printer +Y, the back of the bed, hence NEGATIVE world Z.
+    // Drawn at +r*sin(theta) the cage is the mirror image of the model it
+    // deforms, and dragging the front-left handle bulges the front-right.
+    const R = 20, M = 4;
+    w.showShapeCage({ rows:2, cols:M, height:10,
+                      base:[[R,R,R,R],[R,R,R,R]],
+                      scales:[[1,1,1,1],[1,1,1,1]] }, function(){});
+    const hs = w.__cageDebug().handles;
+    const at = (j) => hs.find(h => h.i === 0 && h.j === j).pos;
+    check('cage column 1 (90deg = printer +Y, bed back) sits at negative world Z',
+          near(at(1)[0], 0, 0.01) && near(at(1)[2], -R, 0.01), 'got ' + at(1).join(', '));
+    check('cage column 3 (270deg = printer -Y, bed front) sits at positive world Z',
+          near(at(3)[2], R, 0.01), 'got ' + at(3).join(', '));
+    check('cage column 0 (0deg = printer +X) is untouched by the negation',
+          near(at(0)[0], R, 0.01) && near(at(0)[2], 0, 0.01), 'got ' + at(0).join(', '));
+    // cageScale() is the authority on which column owns which bed angle. If it
+    // ever stops agreeing with the placement asserted above, the drawn cage and
+    // the deformation it applies have drifted apart.
+    const bump = [[1,1,1,1],[1,1.4,1,1]];
+    check('cageScale agrees column 1 owns bed angle 90deg',
+          near(w.cageScale(bump, Math.PI/2, 1), 1.4, 1e-9),
+          'got ' + w.cageScale(bump, Math.PI/2, 1));
+    w.hideShapeCage();
+
+    return results;
+  }
+
   frame.addEventListener('load', () => {
-    status.textContent = 'iframe loaded, fetching ' + file + ' ...';
-    fetch(file)
+    const selftest = params.get('selftest') === '1';
+    const src = selftest ? '../examples/01_gentle_wave_vase.gcode' : file;
+    status.textContent = 'iframe loaded, fetching ' + src + ' ...';
+    fetch(src)
       .then(r => {
         if (!r.ok) throw new Error('fetch failed: ' + r.status + ' ' + r.statusText);
         return r.text();
       })
       .then(text => {
-        const name = file.split('/').pop();
-        frame.contentWindow.loadGcode(name, text);
-        status.textContent = 'loaded ' + name + ' (' + text.length + ' bytes)';
+        const name = src.split('/').pop();
+        const w = frame.contentWindow;
+        w.loadGcode(name, text);
+        if (!selftest) {
+          status.textContent = 'loaded ' + name + ' (' + text.length + ' bytes)';
+          return;
+        }
+        const results = runSelfTest(w);
+        const failed = results.filter(r => !r.ok);
+        // Reported on the page and to the console, so a headless run can read
+        // either one.
+        results.forEach(r => console.log((r.ok ? 'PASS  ' : 'FAIL  ') + r.name +
+                                         (r.ok ? '' : '  (' + r.detail + ')')));
+        console.log(failed.length ? 'MEASURE SELFTEST FAILED' : 'MEASURE SELFTEST ALL PASS');
+        status.style.color = failed.length ? '#ff5d5d' : '#3fdca0';
+        status.style.whiteSpace = 'pre';
+        status.textContent = results.map(r => (r.ok ? 'PASS  ' : 'FAIL  ') + r.name +
+                                              (r.ok ? '' : '  (' + r.detail + ')')).join('\n') +
+                             '\n' + (failed.length ? failed.length + ' FAILED' : 'ALL PASS');
+        window.__measureSelfTest = { results, failed: failed.length };
       })
       .catch(err => {
         status.textContent = 'ERROR: ' + err.message;

@@ -36,6 +36,17 @@
   --accent-purple-hover:#c4b5fd;
   --ink-on-purple:#1b1030;
 
+  /* Instrument cyan -- reserved for the measure tool (rail button active
+     state, card chrome, and the 3-D overlay drawn on the model; the JS mirror
+     of this value is MEASURE_COL in viewer.js, keep the two in step). It gets
+     its own token because every existing candidate is already spoken for:
+     --accent is the draft-preview path the overlay is drawn ON TOP of, --ok
+     is a safety state, and --accent-purple belongs to Point Edit Modifiers.
+     Do not reuse elsewhere. */
+  --measure:#22d3ee;
+  --measure-hover:#67e8f9;
+  --measure-dim:rgba(34,211,238,.14);
+
   --font-ui: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 
@@ -217,6 +228,11 @@ label.radio-inline { cursor:pointer; }
   background:linear-gradient(90deg,#2b3a8f,#1f9e89,#cfe11f,#fca50a,#e0402f); }
 .legend-labels { display:flex; justify-content:space-between; font-size:11px; margin-top:3px; }
 .hint { font-size:11px; color:var(--ink-muted); margin-top:var(--sp-3); line-height:1.5; }
+/* Live selection count for the 3D shape cage. Deliberately NOT a .hint: the
+   hint-density toggle hides those, and this is state the user is acting on,
+   not explanation. Goes bright once something is actually selected. */
+.sel-count { font-size:11px; color:var(--ink-muted); margin-top:var(--sp-2); line-height:1.5; }
+.sel-count.has-sel { color:var(--ink); font-weight:600; }
 .hint.tight-top { margin-top:-2px; margin-bottom:2px; }
 
 /* Section sub-heading (was inline-styled <h3> repeated throughout the panel). */
@@ -231,8 +247,14 @@ label.radio-inline { cursor:pointer; }
 .btn:disabled { opacity:.35; cursor:default; box-shadow:none; }
 .btn:disabled:hover { border-color:var(--line); color:var(--ink); }
 .btn-block { width:100%; display:block; }
+/* Two equal-width buttons side by side. Buttons default to white-space:nowrap,
+   so min-width:0 is what lets them shrink into a narrow sidebar instead of
+   overflowing it. */
+.btn-row { display:flex; gap:var(--sp-2); }
+.btn-row > .btn { flex:1 1 0; min-width:0; }
 .btn-sm { padding:4px 10px; font-size:11px; }
-.btn-icon { padding:4px 7px; font-size:13px; line-height:1; }
+/* Undo/redo carry no text label, so they answer to the icon-only standard. */
+.btn-icon { padding:4px 7px; font-size:15px; line-height:1; min-width:26px; }
 .btn-primary { background:var(--accent); color:var(--ink-on-accent); border-color:var(--accent); font-weight:700; box-shadow:0 2px 8px rgba(47,107,255,.35); }
 .btn-primary:hover:not(:disabled) { color:var(--ink-on-accent); opacity:.9; border-color:var(--accent); background:var(--accent-hover); box-shadow:0 4px 14px rgba(47,107,255,.45); }
 .btn-primary:disabled { background:var(--surface-raised); color:var(--ink); border-color:var(--line); box-shadow:none; }
@@ -259,7 +281,7 @@ label.radio-inline { cursor:pointer; }
 .timeline { height:42px; display:flex; align-items:center; gap:var(--sp-2); padding:0 var(--sp-3);
   border-top:1px solid var(--line); }
 .timeline button { width:30px; height:26px; border:none; border-radius:6px; cursor:pointer;
-  background:var(--accent); color:var(--ink-on-accent); font-size:12px; font-weight:700;
+  background:var(--accent); color:var(--ink-on-accent); font-size:14px; font-weight:700;
   transition:background .15s, transform .1s, box-shadow .15s; box-shadow:0 1px 2px rgba(0,0,0,.3); }
 .timeline button:hover { transform:translateY(-1px); box-shadow:0 3px 8px rgba(47,107,255,.4); }
 .timeline button:active { transform:translateY(0); }
@@ -286,9 +308,11 @@ label.radio-inline { cursor:pointer; }
 .telemetry-header { display:flex; align-items:center; justify-content:space-between;
   padding:6px 8px; border-bottom:1px solid var(--line); }
 .telemetry-title { font-size:9.5px; margin:0; }
-.telemetry-toggle { background:none; border:none; color:var(--ink-muted); cursor:pointer;
-  font-size:11px; padding:2px 5px; line-height:1; border-radius:4px; font-family:var(--font-ui);
-  transition:color .15s, background-color .15s, transform .15s; }
+.telemetry-toggle { background:none; border:none; color:var(--ink); cursor:pointer;
+  font-size:14px; min-width:22px; min-height:22px; padding:2px 5px; line-height:1;
+  border-radius:4px; font-family:var(--font-ui); opacity:.75;
+  transition:color .15s, background-color .15s, transform .15s, opacity .15s; }
+.telemetry-toggle:hover { opacity:1; }
 .telemetry-toggle:hover { color:var(--ink); background:var(--surface-raised); }
 .telemetry-toggle:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
 .telemetry-card.collapsed .telemetry-toggle { transform:rotate(-90deg); }
@@ -300,6 +324,145 @@ label.radio-inline { cursor:pointer; }
   gap:var(--sp-2); padding:4px 0; border-bottom:none; }
 .readout-telemetry .stat span:first-child { font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; }
 .readout-telemetry .stat .tm { font-size:12.5px; }
+
+/* =========================================================================
+   Tool rail + measure card -- canvas-side instruments.
+
+   Placement is the point: the rail is docked to the right edge of the canvas,
+   immediately beside the panel. The panel is where you change what gets
+   printed; the rail is where you inspect what is already there. Keeping the
+   two apart means nothing in the rail can be mistaken for a print parameter.
+
+   The rail is vertically centred; the card opens to its LEFT (never over the
+   panel, so the rail stays the visible anchor for "a tool is active") and is
+   anchored UP from just above the machine-readout strip. Centring the card on
+   the rail was the obvious thing and it was wrong: at full height it reached
+   up into the telemetry card and covered the nozzle rows. Bottom-anchoring
+   pins it between the two overlays that already own top-right and bottom, and
+   max-height keeps that true on a short viewport instead of trading the
+   collision for a taller card.
+
+   Colour is --measure (see the token comment for why it is not --accent).
+   ========================================================================= */
+/* Right-hand overlay stack. The telemetry card owns the top-right corner
+   (16px inset, ~266px tall expanded) and the machine-readout strip owns the
+   bottom, so everything else on that side has to begin below the one and end
+   above the other. Declared once, here, because the rail and the measure card
+   were each calibrated by eye against whatever window happened to be open at
+   the time -- and both silently slid over the telemetry card's lower rows as
+   soon as the window got shorter. One shared free zone cannot drift apart. */
+/* --overlay-bottom defaults to 16px (nothing to clear yet) and only widens to
+   92px once .has-timeline is set -- i.e. once #tl-wrap (the machine-readout
+   strip) is actually on screen. Without this, the nav cube reserved 92px of
+   clearance for a strip that does not exist until a file is loaded, leaving
+   it floating over empty canvas. See load() in viewer.js for where the class
+   is added. */
+.canvas-wrap { --overlay-top:290px; --overlay-bottom:16px; }
+.canvas-wrap.has-timeline { --overlay-bottom:92px; }
+/* Collapsed telemetry frees the whole corner; reclaim it. Progressive
+   enhancement -- without :has() support the zone just stays at its expanded
+   value, which is correct, only less generous. */
+.canvas-wrap:has(#telemetry-card.collapsed) { --overlay-top:60px; }
+
+.tool-rail { position:absolute; right:12px; z-index:6;
+  /* Centred when there is room, pushed clear of the telemetry card when there
+     is not, and never allowed to reach the readout strip. */
+  top:min(max(50%, var(--overlay-top)), calc(100% - var(--overlay-bottom) - 64px));
+  display:flex; flex-direction:column; gap:6px; padding:6px;
+  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:0 8px 24px rgba(0,0,0,.35); }
+
+.tool-btn { display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:2px; width:44px; padding:6px 2px; cursor:pointer;
+  background:transparent; border:1px solid transparent; border-radius:6px;
+  color:var(--ink-muted); font-family:var(--font-ui);
+  transition:color .15s, background-color .15s, border-color .15s; }
+.tool-btn:hover { color:var(--ink); background:var(--surface-raised); }
+.tool-btn:focus-visible { outline:2px solid var(--measure); outline-offset:2px; }
+.tool-glyph { font-size:15px; line-height:1; }
+.tool-name { font-size:8.5px; text-transform:uppercase; letter-spacing:.05em; }
+.tool-btn[aria-pressed="true"] { color:var(--measure); background:var(--measure-dim);
+  border-color:var(--measure); }
+
+/* right: clears the rail, which occupies 68px (12 offset + 6 padding + 44 button
+   + 6 padding), leaving an 8px gap so the card never clips the button. */
+.measure-card { position:absolute; right:76px; width:246px; z-index:6;
+  bottom:var(--overlay-bottom);
+  max-height:calc(100% - var(--overlay-top) - var(--overlay-bottom)); overflow-y:auto;
+  background:rgba(30,33,36,.94); border:1px solid var(--measure); border-radius:var(--radius);
+  box-shadow:0 8px 24px rgba(0,0,0,.45); }
+.measure-head { display:flex; align-items:center; justify-content:space-between;
+  padding:6px 8px; border-bottom:1px solid var(--line); }
+.measure-title { font-size:9.5px; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--measure); font-weight:600; }
+.measure-close { background:none; border:none; color:var(--ink); cursor:pointer;
+  font-size:14px; min-width:22px; min-height:22px; padding:2px 5px; line-height:1;
+  border-radius:4px; font-family:var(--font-ui); opacity:.75;
+  transition:color .15s, background-color .15s, opacity .15s; }
+.measure-close:hover { opacity:1; }
+.measure-close:hover { color:var(--ink); background:var(--surface-raised); }
+
+/* =========================================================================
+   Orientation cube -- floating gizmo, bottom-left of the canvas. It is a
+   SEPARATE canvas element from the main renderer (see the comment above its
+   setup in viewer.js), so it sits on top of the main canvas in z-order and
+   simply intercepts every pointer event inside its own 132x132 box -- nothing
+   here can be mistaken for an OrbitControls drag on the model underneath,
+   even though dragging the cube itself now also orbits that same camera
+   (see the pointerdown/pointermove handlers in viewer.js).
+
+   left:16px keeps it clear of the panel/splitter on the left edge.
+   bottom:var(--overlay-bottom) sits flush at 16px with no file loaded, and
+   lifts to clear .machine-readout (bottom:12px, ~70px tall) once .has-timeline
+   is set on .canvas-wrap -- same anchor .measure-card uses. It never collides
+   with .measure-card (right:76px) or .tool-rail (right edge) because it lives
+   on the opposite side of the canvas, nor with .telemetry-card / #gcode-title
+   which own the top of the canvas.
+   ========================================================================= */
+/* 132px, not 112: adding the axis triad (viewer.js) pushed the camera back
+   (NAV_CAM_DIST 5.8 -> 6.9) to keep it framed, which shrank the projected
+   face and its baked label. 132px + the larger distance puts the label back
+   at ~13.4 CSS px, close to the ~13.5 CSS px floor the original 112px/5.8
+   pairing was calibrated to -- see the NAV_CAM_DIST comment in viewer.js for
+   the full derivation. Keep this in step with navRenderer.setSize() and the
+   label font in viewer.js; the three together decide legibility.
+   cursor:grab is the default affordance -- viewer.js's pointer handlers
+   override it to 'pointer' over a face and 'grabbing' mid-drag. */
+#navcube { position:absolute; left:16px; bottom:var(--overlay-bottom); width:132px; height:132px;
+  z-index:6; touch-action:none; cursor:grab; }
+
+.measure-modes { display:flex; gap:4px; padding:6px 8px 0; }
+.measure-mode { flex:1 1 0; padding:4px 0; cursor:pointer; font-size:11px;
+  font-family:var(--font-ui); color:var(--ink-muted);
+  background:var(--input-bg); border:1px solid var(--line); border-radius:6px;
+  transition:color .15s, background-color .15s, border-color .15s; }
+.measure-mode:hover { color:var(--ink); border-color:var(--measure); }
+.measure-mode.is-on { color:var(--measure); background:var(--measure-dim);
+  border-color:var(--measure); font-weight:600; }
+
+.measure-read { padding:6px 8px 2px; min-height:64px; }
+/* Label left, value right -- same rhythm as .readout-telemetry, so the card
+   reads as a sibling of the telemetry card rather than a new dialect. */
+.mrow { display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-2);
+  padding:3px 0; font-size:11px; color:var(--ink-muted); }
+.mrow b { font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--ink); }
+.mrow.is-primary { border-top:1px solid var(--line); margin-top:3px; padding-top:5px; }
+.mrow.is-primary b { font-size:15px; color:var(--measure); }
+.measure-note { font-size:10px; line-height:1.45; color:var(--ink-muted);
+  padding:4px 0 0; border-top:1px solid var(--line); margin-top:5px; }
+.measure-empty { font-size:11px; line-height:1.5; color:var(--ink-muted); padding:4px 0; }
+
+.measure-foot { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-2);
+  padding:6px 8px; border-top:1px solid var(--line); }
+.measure-hint { font-size:10px; line-height:1.35; color:var(--ink-muted); }
+
+/* Floating value tag pinned to the measured span in the viewport. Positioned
+   from render() by projecting the span midpoint, so it tracks the orbit. */
+.measure-tag { position:absolute; z-index:6; pointer-events:none;
+  transform:translate(-50%,-50%); padding:2px 7px; border-radius:5px;
+  background:rgba(30,33,36,.92); border:1px solid var(--measure);
+  color:var(--measure); font-family:var(--font-mono); font-size:11.5px; font-weight:600;
+  white-space:nowrap; }
 
 /* ---- Design a vase panel ---- */
 .drow { display:flex; align-items:center; justify-content:space-between; font-size:12px;
@@ -422,7 +585,7 @@ label.radio-inline { cursor:pointer; }
 .mb-bar { background:var(--surface-raised); border:1px solid var(--line);
   border-radius:var(--radius-lg); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-3); }
 .mb-row1 { display:flex; align-items:center; gap:6px; }
-.mb-icon { flex:none; font-size:13px; color:var(--ink-muted); line-height:1; }
+.mb-icon { flex:none; font-size:15px; color:var(--ink-muted); line-height:1; }
 .mb-select { flex:1 1 auto; min-width:0; background-color:var(--input-bg); color:var(--ink);
   border:1px solid var(--line); border-radius:6px; font-size:12.5px; font-weight:600;
   padding-top:6px; padding-bottom:6px; padding-left:8px; }
@@ -455,7 +618,11 @@ label.radio-inline { cursor:pointer; }
 /* The chevron is the affordance the user reported as "too small to be seen,
    neither has it been dropped down or not". It carries two jobs at rest --
    say "this opens", and say "it is currently closed" -- so it is sized and
-   coloured to be legible without hovering, not just on hover. */
+   coloured to be legible without hovering, not just on hover.
+   THIS IS THE REFERENCE for every icon that is the whole content of its
+   control (no text label beside it): >= 14px, --ink rather than --ink-muted,
+   and a tap target of at least 22x22. .sec-chevron, .telemetry-toggle and
+   .measure-close were all found sitting well under it and were brought up. */
 .mb-combo-chevron { flex:none; font-size:14px; line-height:1; color:var(--ink);
   opacity:.75; transition:transform .15s, opacity .15s; }
 .mb-combo-btn:hover .mb-combo-chevron, .mb-combo-btn[aria-expanded="true"] .mb-combo-chevron { opacity:1; }
@@ -471,7 +638,7 @@ label.radio-inline { cursor:pointer; }
   padding:6px 8px; border-radius:6px; cursor:pointer; font-size:12px; color:var(--ink); }
 .mb-combo-option:hover, .mb-combo-option.active { background:var(--accent); color:var(--ink-on-accent); }
 .mb-combo-option[aria-selected="true"] { font-weight:600; }
-.mb-combo-option[aria-selected="true"]::after { content:'\2713'; flex:none; font-size:11px; }
+.mb-combo-option[aria-selected="true"]::after { content:'\2713'; flex:none; font-size:13px; }
 
 /* Switch-printer notice -- warn (values clamped) or ok (headroom grew).
    Dismissable (close button) and self-clears after a few seconds; never a
@@ -482,7 +649,31 @@ label.radio-inline { cursor:pointer; }
 .mb-notice-ok { background:rgba(63,220,160,.08); border:1px solid var(--ok); color:var(--ok); }
 .mb-notice-msg { flex:1 1 auto; }
 .mb-notice-close { flex:none; background:none; border:none; color:inherit; cursor:pointer;
-  font-size:13px; line-height:1; padding:0 2px; font-family:var(--font-ui); }
+  font-size:14px; line-height:1; min-width:22px; min-height:22px; padding:0 2px;
+  font-family:var(--font-ui); }
+
+/* =========================================================================
+   Session-restore dialog. Same chrome as .pm-modal (neutral --accent, not
+   the purple reserved for Point Edit Modifiers), sized down for a two-choice
+   question. z-index sits above both other modals: it asks its question before
+   anything else can be opened.
+   ========================================================================= */
+.sr-modal { position:fixed; inset:0; z-index:60; display:flex; align-items:center;
+  justify-content:center; }
+.sr-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.62); }
+.sr-modal-card { position:relative; width:min(440px, 92vw); max-height:88vh;
+  display:flex; flex-direction:column; background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--radius-lg);
+  box-shadow:0 18px 48px rgba(0,0,0,.5); overflow:hidden; }
+.sr-modal-header { padding:var(--sp-4) var(--sp-4) 0; }
+.sr-modal-header h2 { font-size:15px; margin:0; color:var(--ink); font-weight:600; }
+.sr-modal-body { padding:var(--sp-3) var(--sp-4); overflow-y:auto; }
+.sr-lead { font-size:12.5px; color:var(--ink); margin:0 0 var(--sp-3); line-height:1.5; }
+.sr-summary { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:var(--sp-3); }
+.sr-summary:empty { display:none; }
+.sr-note { font-size:11px; color:var(--ink-muted); margin:0; line-height:1.55; }
+.sr-modal-footer { display:flex; justify-content:flex-end; gap:8px;
+  padding:var(--sp-3) var(--sp-4) var(--sp-4); }
 
 /* ---- design wizard step bar ---- */
 .step-bar { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:10px; }
@@ -814,7 +1005,15 @@ select.pm-field-input { width:116px; padding-right:24px; }
   justify-content:space-between; gap:var(--sp-2); border-radius:6px; margin-left:-4px;
   margin-right:-4px; padding:2px 4px; transition:background-color .15s; }
 .sec-toggle:hover { background:var(--surface-raised); }
-.sec-chevron { flex:none; font-size:8px; color:var(--ink-muted); transition:transform .15s; }
+/* Sized to the icon-only standard set by .mb-combo-chevron -- see the note
+   there. This one was 8px in --ink-muted, which painted a 6x10 glyph: under
+   half the area of that reference chevron, in the dimmest ink on the palette,
+   while carrying the same two jobs (say "this opens", say "it is closed"). It
+   has to be readable at rest, because the state it reports is only useful
+   before you interact with it. */
+.sec-chevron { flex:none; font-size:14px; line-height:1; color:var(--ink); opacity:.75;
+  transition:transform .15s, opacity .15s; }
+.sec-toggle:hover .sec-chevron { opacity:1; }
 .sec-toggle.sec-closed .sec-chevron { transform:rotate(-90deg); }
 
 /* ---- design panel header: active-summary chips + hint-density toggle ---- */

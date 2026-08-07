@@ -214,6 +214,26 @@
   }
 
   // Load persisted state, if any (merge over defaults so new fields survive).
+  //
+  // `cachedDesign` records what was found so the session-restore prompt at the
+  // bottom of this file can offer it back explicitly.
+  //
+  // The comparison against DEFAULT_DESIGN ignores keys the app derives for
+  // itself, because those differ on a first run where the user has touched
+  // nothing -- prompting then would be a dialog offering to restore a design
+  // the user never made. Measured on a wiped profile, init writes back:
+  //   printer / bed_center  the machine, which "Start new" keeps regardless,
+  //                         so both buttons would do the same thing
+  //   filament              auto-picked from the server's filament list
+  //   loop_row / loop_up    clamped down to the printer's z_amp_max (0.65 and
+  //                         0.95 on a Trident, against 2.5/3.5 shipped)
+  //   point_ffd_grid        structural: null becomes a zeroed grid
+  // Trade-off worth knowing: a session whose ONLY change was one of these
+  // won't prompt. That errs toward not nagging, and costs nothing -- the
+  // design is still restored exactly as it was before this dialog existed.
+  var RESTORE_IGNORED_KEYS = { printer:1, bed_center:1, filament:1,
+                               loop_row:1, loop_up:1, point_ffd_grid:1 };
+  var cachedDesign = null;
   try {
     var saved = JSON.parse(localStorage.getItem('design-state') || 'null');
     if(saved && typeof saved === 'object'){
@@ -224,6 +244,13 @@
       // Only fires for old saves that predate sil_mode -- once it's saved with
       // a sil_mode value, this branch never re-triggers.
       if(saved.sil3d === true && !saved.sil_mode) design.sil_mode = 'asym';
+      for(var ck in saved){
+        if(!saved.hasOwnProperty(ck) || RESTORE_IGNORED_KEYS[ck]) continue;
+        if(JSON.stringify(saved[ck]) !== JSON.stringify(DEFAULT_DESIGN[ck])){
+          cachedDesign = saved;
+          break;
+        }
+      }
     }
   } catch(e){ /* ignore corrupt state */ }
 
@@ -435,6 +462,9 @@
       }
       if(stepNavEl) stepNavEl.classList.toggle('active', name === 'design');
       try { localStorage.setItem('app-mode', name); } catch(e){}
+      // The measure tool's rail lives on the canvas, which is visible in both
+      // modes, so it cannot hide itself off the panel's .active class.
+      if(window.__measureAppMode) window.__measureAppMode();
       if(name === 'viewer'){
         // Viewing the generated G-code: drop the live blue draft so the
         // rainbow toolpath is unobstructed.
@@ -696,6 +726,29 @@
   var PRINTER_ZCAP = {};   // key -> max Z excursion below printed material (mm)
   var PRINTER_META = {};   // key -> full /api/printers entry (custom, source_format, warnings)
 
+  // The amp ceiling a printer entry is allowed to contribute to the UI.
+  //
+  // This was `p.z_amp_max || 0.95`, which treats a printer declaring ZERO
+  // non-planar tolerance as if it had declared nothing, and hands it the
+  // Trident's own measured 0.95mm constant. That is the precise mistake
+  // CLAUDE.md names twice -- "no machine limit may be a module constant" and
+  // "missing config values become conservative defaults, never another
+  // machine's" -- and it was reproduced live: a custom printer saved with
+  // z_amp_max=0 still showed "max 0.95 mm" in the amp curve editor and let
+  // control points sit at 0.8mm. On a machine that declares no clearance,
+  // that is a probe strike.
+  //
+  // Absent or non-finite falls back to 0.4, matching
+  // _Z_AMP_MAX_UNKNOWN_DEFAULT in trident_gcode/printer_validate.py. Keep the
+  // two in step; never reintroduce a fallback that names another printer's
+  // number. Pinned by window.__zAmpCapFor below.
+  function zAmpCapFor(v){
+    return (typeof v === 'number' && isFinite(v)) ? v : 0.4;
+  }
+  // Exposed so the invariant is testable without standing up the whole
+  // custom-printer flow -- see the assertions in viewer/dev_smoke.html.
+  window.__zAmpCapFor = zAmpCapFor;
+
   // Prefers the server-computed loop_row_max/loop_up_max (see /api/printers)
   // so the client never re-derives the formula and the two can never drift.
   // Falls back to deriving from z_amp_max with the same formula the server
@@ -715,7 +768,12 @@
   // the number of values actually changed, so the caller can tell the user.
   function applyPrinterCaps(){
     var cap = PRINTER_ZCAP[design.printer];
-    if(!cap) return 0;
+    // cap can legitimately BE 0 (a printer with zero non-planar tolerance);
+    // `if(!cap)` would skip applying it and leave the previous printer's
+    // stale, looser amp/loop limits in the UI. Only bail when there is
+    // genuinely no entry yet (printer list not loaded) or the value is
+    // non-finite.
+    if(cap == null || typeof cap !== 'number' || !isFinite(cap)) return 0;
     var meta = PRINTER_META[design.printer];
     var caps = loopCapsFor(meta, cap);
     var changed = 0;
@@ -1051,7 +1109,7 @@
       PRINTER_BEDS = {}; PRINTER_ZCAP = {}; PRINTER_META = {};
       (j.printers||[]).forEach(function(p){
         PRINTER_BEDS[p.key] = p.bed;
-        PRINTER_ZCAP[p.key] = p.z_amp_max || 0.95;
+        PRINTER_ZCAP[p.key] = zAmpCapFor(p.z_amp_max);
         PRINTER_META[p.key] = p;
         var gname = groupFor(p);
         if(!byGroup[gname]){ byGroup[gname] = []; groupOrder.push(gname); }
@@ -2234,19 +2292,48 @@
     window.showShapeCage({
       rows: rows, cols: cols, height: design.height,
       base: base, scales: cage
-    }, function(i, j, s){
+    }, function(changes){
       // A cage-handle drag happens on the 3D viewport canvas, outside the
-      // side-panel arming listeners — so arm the live preview here or the
+      // side-panel arming listeners -- so arm the live preview here or the
       // blue draft would never draw for a user who only touched the model.
+      // `changes` covers the whole dragged selection at once (viewer.js
+      // fires this once per move event, not once per handle) -- write every
+      // entry, then persist/schedule exactly once.
       previewArmed = true;
-      design.cage[i][j] = s;
+      for(var k = 0; k < changes.length; k++){
+        design.cage[changes[k].i][changes[k].j] = changes[k].scale;
+      }
       persistDesign();
       schedulePreview();
+      updateCageResetState();
     });
     updateCageNote();
+    updateCageResetState();
   }
 
-  // Warns (in the warning color) when unsymmetrical mode is active over the
+  // True when any cage handle is off the neutral 1.0, i.e. there is actually
+  // something for "Reset all points" to undo.
+  function cageHasEdits(){
+    if(!Array.isArray(design.cage)) return false;
+    for(var i = 0; i < design.cage.length; i++){
+      var row = design.cage[i];
+      if(!Array.isArray(row)) continue;
+      for(var j = 0; j < row.length; j++){
+        if(Math.abs(row[j] - 1.0) > 1e-6) return true;
+      }
+    }
+    return false;
+  }
+
+  // Enables "Reset all points" only when edits exist. Runs on load too, so a
+  // design restored from localStorage with deformation already in it shows an
+  // enabled button before the user has touched anything.
+  function updateCageResetState(){
+    var el = document.getElementById('cage-reset');
+    if(el) el.disabled = !cageHasEdits();
+  }
+
+  // Warns (in the warning color) when freeform mode is active over the
   // 'loops' pattern, since the per-point cage deformation doesn't apply to
   // loop fabric geometry.
   function updateCageNote(){
@@ -2255,7 +2342,10 @@
     if(noteEl) noteEl.style.color = (design.pattern === 'loops') ? '#ffb454' : '';
   }
 
-  // ---- Silhouette mode: Symmetrical (curve editor) vs Unsymmetrical/3D (cage) ----
+  // ---- Silhouette mode: Symmetrical (curve editor) vs Freeform/3D (cage) ----
+  // NOTE: the visible label is "Freeform (3D)" but the persisted mode value
+  // stays "asym" -- it is written into saved designs and localStorage, so
+  // renaming it would orphan every design already on disk.
   function activateSilMode(name){
     document.querySelectorAll('.sil-mode-btn').forEach(function(btn){
       btn.classList.toggle('active', btn.getAttribute('data-silmode') === name);
@@ -2272,6 +2362,9 @@
     } else if(window.hideShapeCage){
       window.hideShapeCage();
     }
+    // Covers entering freeform mode on a restored design, and keeps the
+    // button honest if the mode is switched back and forth.
+    updateCageResetState();
   }
 
   (function(){
@@ -2296,9 +2389,64 @@
       for(var i = 0; i < design.cage.length; i++){
         for(var j = 0; j < design.cage[i].length; j++) design.cage[i][j] = 1.0;
       }
+      // Arm the preview, exactly as the cage-drag callback does. schedulePreview
+      // is a no-op while previewArmed is false, and that flag starts false on
+      // every page load -- so without this, a reset straight after a refresh
+      // updated design.cage but never redrew, and the button looked dead until
+      // the user happened to touch the canvas.
+      previewArmed = true;
       persistDesign();
       schedulePreview();
       refreshShapeCage();
+      updateCageResetState();
+    });
+  })();
+
+  // Selection-size readout + enable/disable for the "reset selected points"
+  // button. Driven by viewer.js: cageRestyle() there calls this every time a
+  // cage handle's hover/selection state is touched, with the current
+  // selection size. Guarded with typeof since viewer.js may call it before
+  // this file has run (module load order), or not at all if viewer.js failed
+  // to load.
+  window.onCageSelectionChange = function(n){
+    var el = document.getElementById('cage-selcount');
+    if(el){
+      el.textContent = n === 0 ? 'No points selected'
+        : (n === 1 ? '1 point selected' : (n + ' points selected'));
+      el.classList.toggle('has-sel', n > 0);
+    }
+    var btn = document.getElementById('cage-reset-sel');
+    if(btn) btn.disabled = (n === 0);
+    var clr = document.getElementById('cage-clear-sel');
+    if(clr) clr.disabled = (n === 0);
+  };
+
+  // Clear-selection button: a pointer-only path to the same thing Esc does,
+  // for when a keyboard shortcut isn't reaching the viewport listener.
+  (function(){
+    var el = document.getElementById('cage-clear-sel');
+    if(!el) return;
+    el.addEventListener('click', function(){
+      if(window.clearCageSelection) window.clearCageSelection();
+    });
+  })();
+
+  // Reset-selected-points button: resets only the handles in the current
+  // cage selection back to 1.0, leaving the rest of the cage untouched.
+  (function(){
+    var el = document.getElementById('cage-reset-sel');
+    if(!el) return;
+    el.addEventListener('click', function(){
+      if(!window.getCageSelection) return;
+      var sel = window.getCageSelection();
+      if(!sel.length) return;
+      ensureCage();
+      for(var k = 0; k < sel.length; k++) design.cage[sel[k].i][sel[k].j] = 1.0;
+      previewArmed = true;   // same reason as the reset-all handler above
+      persistDesign();
+      schedulePreview();
+      refreshShapeCage();
+      updateCageResetState();
     });
   })();
 
@@ -3567,6 +3715,36 @@
   document.getElementById('load-design').addEventListener('click', function(){
     document.getElementById('load-design-file').click();
   });
+  // JSON.parse rejects the bare tokens NaN/Infinity, but NOT a numeral that
+  // overflows to one at parse time -- {"height": 1e999} is syntactically
+  // valid JSON and silently becomes Infinity. That value then survives
+  // straight into `design` (the merge loop below does no range checking)
+  // and on into geometry generation, where it doesn't get clamped -- it
+  // crashes: `new Float32Array(Infinity)` throws a RangeError out of
+  // preview_math.js. Same CLAUDE.md invariant as the server's z_amp_max
+  // parsing ("reject non-finite values at the boundary; never clamp them"),
+  // just reachable here via a loaded file instead of a config string. Scan
+  // BEFORE merging anything into `design` so a bad file can't partially
+  // corrupt the current design.
+  function findNonFiniteNumber(v, path){
+    if(typeof v === 'number') return isFinite(v) ? null : (path || '(root)');
+    if(Array.isArray(v)){
+      for(var i = 0; i < v.length; i++){
+        var hit = findNonFiniteNumber(v[i], (path || '') + '[' + i + ']');
+        if(hit) return hit;
+      }
+      return null;
+    }
+    if(v && typeof v === 'object'){
+      for(var k in v){
+        if(!Object.prototype.hasOwnProperty.call(v, k)) continue;
+        var hit2 = findNonFiniteNumber(v[k], (path ? path + '.' : '') + k);
+        if(hit2) return hit2;
+      }
+    }
+    return null;
+  }
+
   document.getElementById('load-design-file').addEventListener('change', function(e){
     if(!e.target.files.length) return;
     var reader = new FileReader();
@@ -3574,6 +3752,8 @@
       try {
         var loaded = JSON.parse(ev.target.result);
         if(!loaded || typeof loaded !== 'object') throw new Error('not an object');
+        var badPath = findNonFiniteNumber(loaded, '');
+        if(badPath) throw new Error('non-finite value at ' + badPath + ' (NaN/Infinity are not valid design values)');
         for(var k in loaded){ if(design.hasOwnProperty(k)) design[k] = loaded[k]; }
         deriveLegacyBlobAlign(loaded);
         migrateBlobPattern();
@@ -3987,4 +4167,80 @@
       });
     });
   }
+
+  // ---- session restore prompt ----------------------------------------------
+  // A saved design is reinstated from localStorage on every load, which is
+  // convenient right up until it isn't: coming back days later and silently
+  // inheriting a half-finished vase -- its own wave amplitudes, texture and
+  // silhouette already in the boxes -- is how someone generates G-code they did
+  // not mean to. When there is something restorable, say so and let them pick.
+  //
+  // Ordering is deliberate. The design is restored BEFORE this asks, so the app
+  // is never sitting half-initialised behind a dialog, and "Start new" is then
+  // an ordinary edit through applyDesignToUI(): it repaints every control,
+  // re-runs the preview, and lands on the undo stack, so Ctrl+Z brings the old
+  // design back.
+  //
+  // The selected PRINTER is deliberately not reset. It is a statement about the
+  // hardware on the desk, not about this particular vase -- silently putting a
+  // Bambu user back onto the default Trident would hand them a design carrying
+  // a machine limit that is not theirs, which is exactly the class of mistake
+  // this project treats as a hardware problem rather than a UI one. Imported
+  // printers are likewise untouched: those are user assets (a .cfg they had to
+  // find and import), not session scratch.
+  (function(){
+    var modal = document.getElementById('session-modal');
+    if(!modal || !cachedDesign) return;
+
+    var summary = document.getElementById('sr-summary');
+    if(summary){
+      var d = cachedDesign;
+      var pick = function(key){ return d[key] != null ? d[key] : DEFAULT_DESIGN[key]; };
+      var bits = [];
+      var shape = String(pick('shape') || '');
+      if(shape) bits.push(shape.charAt(0).toUpperCase() + shape.slice(1));
+      bits.push((+pick('radius') * 2).toFixed(0) + ' x ' + (+pick('height')).toFixed(0) + ' mm');
+      if(+pick('z_waves')) bits.push(pick('z_waves') + ' Z waves');
+      if(+pick('xy_twist')) bits.push(pick('xy_twist') + ' deg twist');
+      if(d.pattern) bits.push('texture: ' + d.pattern);
+      if(+pick('base_layers')) bits.push(pick('base_layers') + ' base layers');
+      bits.forEach(function(t){
+        var el = document.createElement('span');
+        el.className = 'chip';
+        el.textContent = t;          // textContent, never innerHTML: this is
+        el.style.cursor = 'default'; // rendering values out of localStorage
+        summary.appendChild(el);
+      });
+    }
+
+    function close(){
+      modal.style.display = 'none';
+      document.removeEventListener('keydown', onKey, true);
+    }
+    // Esc resolves to "continue" -- the choice that changes nothing. A stray
+    // keypress must never be the thing that discards a design.
+    function onKey(e){
+      if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); close(); }
+    }
+
+    document.getElementById('sr-continue').addEventListener('click', close);
+    document.getElementById('sr-new').addEventListener('click', function(){
+      var keepPrinter = design.printer;
+      for(var k in DEFAULT_DESIGN){
+        if(!DEFAULT_DESIGN.hasOwnProperty(k)) continue;
+        design[k] = JSON.parse(JSON.stringify(DEFAULT_DESIGN[k]));
+      }
+      if(keepPrinter) design.printer = keepPrinter;
+      applyDesignToUI();                 // repaints, persists, re-previews
+      if(typeof activateStep === 'function') activateStep('model');
+      close();
+    });
+
+    // Deliberately no backdrop-click dismissal: the whole point is an explicit
+    // choice, and a misplaced click should not count as one.
+    modal.style.display = '';
+    document.addEventListener('keydown', onKey, true);
+    var primary = document.getElementById('sr-continue');
+    if(primary) primary.focus();
+  })();
 })();

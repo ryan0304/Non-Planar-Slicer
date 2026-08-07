@@ -157,8 +157,9 @@
   // protection gate (multiply into one 0..1 weight) how much FFD / Smooth /
   // Radial Push are allowed to move each point. Runs on PRINTER-space (x,y,z)
   // coordinates -- generatePreview() converts to/from its Three.js world-space
-  // layout (worldX=printerX, worldY=printerZ/height, worldZ=printerY) around
-  // the call into applyPointEditsPreview() below.
+  // layout (worldX=printerX, worldY=printerZ/height, worldZ=-printerY, negated
+  // to keep the world basis right-handed) around the call into
+  // applyPointEditsPreview() below.
   var MASK_CHANNELS = {
     checker:    function(a, b){ return (Math.floor(a/Math.PI) + Math.floor(b/Math.PI)) % 2 === 0 ? 1.0 : 0.0; },
     stripes_v:  function(a, b){ return 0.5 + 0.5*Math.sin(a); },
@@ -263,12 +264,18 @@
     if(!pointEditActive(design)) return;
     var n = totalPoints, ppt = Math.max(1, pointsPerTurn);
     // Un-pack world-space -> printer-space parallel arrays: worldX=printerX,
-    // worldZ=printerY, worldY=printerZ(height) -- see generatePreview()'s wx/wy/wz.
+    // worldY=printerZ(height) -- see generatePreview()'s wx/wy/wz. worldZ is
+    // NEGATED printerY (wz = -py, the handedness-preserving flip), so it is
+    // negated back here. This matters beyond cosmetics: the FFD cage's
+    // (dx,dy) displacement is built from cos(theta)/sin(theta) at the SAME
+    // theta the point itself was swept to (see buildFFDCageFromGrid /
+    // ffdSample below), so `py` here must be true printer Y or a cage push
+    // would shove the point in the mirror-image direction.
     var px = new Float64Array(n), py = new Float64Array(n), pz = new Float64Array(n);
     var i;
     for(i = 0; i < n; i++){
       px[i] = allPos[i*3];
-      py[i] = allPos[i*3+2];
+      py[i] = -allPos[i*3+2];
       pz[i] = allPos[i*3+1];
     }
     var gates = new Float64Array(n);
@@ -355,7 +362,7 @@
     for(i = 0; i < n; i++){
       allPos[i*3]   = px[i];
       allPos[i*3+1] = pz[i];
-      allPos[i*3+2] = py[i];
+      allPos[i*3+2] = -py[i];   // printer Y -> world Z: re-apply the negation
     }
   }
 
@@ -469,7 +476,11 @@
   // design: the central design state object from designer.js.
   // Returns Float32Array of [x0,y0,z0, x1,y1,z1, ...] for LineSegments2.
   // Coordinates are in world space (Three.js: X = printer X - cx, Y = printer Z,
-  // Z = printer Y - cy) to match the viewer's coordinate convention.
+  // Z = cy - printer Y) to match the viewer's coordinate convention. Printer Y
+  // is NEGATED (not just offset) so the world basis stays right-handed --
+  // otherwise the swap of two axes (Y-up <- Z-up) is a reflection, and any
+  // chiral geometry (e.g. xy_twist) would preview mirrored from what prints.
+  // parseGcode() in viewer.js uses the identical transform; see its comment.
   function generatePreview(design){
     // Bed centre: prefer an explicit per-design override (set by designer.js
     // from the /api/printers response), else fall back to the last printer
@@ -604,11 +615,12 @@
       }
 
       // Convert to Three.js world space:
-      // world X = printer X (centred), world Y = printer Z (up), world Z = printer Y (centred).
+      // world X = printer X (centred), world Y = printer Z (up),
+      // world Z = -printer Y (centred, NEGATED to keep the basis right-handed).
       // Offset to bed centre so the preview sits at the same position as the real print.
       var wx = px;   // already centred on origin; viewer bed is centred at world origin
       var wy = z;    // printer Z -> world Y (up)
-      var wz = py;   // printer Y -> world Z
+      var wz = -py;  // printer Y -> world Z (negated -- see the comment on generatePreview above)
 
       if(allPos){
         allPos[i*3] = wx; allPos[i*3+1] = wy; allPos[i*3+2] = wz;
