@@ -356,7 +356,7 @@
     if(previewTimer) clearTimeout(previewTimer);
     previewTimer = setTimeout(function(){
       if(typeof generatePreview === 'function' && typeof window.showPreview === 'function'){
-        var pts = generatePreview(design);
+        var pts = generatePreview(design, effectiveBaseSpec());
         if(pts && pts.length > 0){
           window.showPreview(pts);
           var ov = document.getElementById('overlay');
@@ -3242,6 +3242,26 @@
     return document.getElementById('d-pattern').value === 'loops' && noMesh;
   }
 
+  // Single source of truth for what actually prints at the bottom of the
+  // part: base disks, brim, skirt -- after BOTH the Bottom=Open rule and the
+  // loop-fabric rule (parametric loop fabric anchors on its own solid cuff
+  // and never gets a base/brim/skirt, see loopFabricActive() above) are
+  // applied. buildGenerateBody() (the /api/generate request) and
+  // schedulePreview() (the live draft) both read this instead of each
+  // re-deriving the same rule, so the draft can never promise a base the
+  // request will not actually carry, or vice versa.
+  function effectiveBaseSpec(){
+    var lf = loopFabricActive();
+    return {
+      base_layers: (design.bottom === 'open' || lf) ? 0 : Math.round(design.base_layers),
+      // Bottom=Open zeroes ONLY base_layers -- the server still prints a brim
+      // for an open-bottom design (serve.py:660 leaves brim alone). Keep that
+      // exact asymmetry: brim is gated on loop-fabric alone.
+      brim: lf ? 0 : Math.round(design.brim),
+      skirt: lf ? 0 : Math.round(design.skirt || 0)
+    };
+  }
+
   function refreshShapeRows(){
     var isStar = document.getElementById('d-shape').value === 'star';
     var starRows = document.getElementById('star-rows');
@@ -3956,6 +3976,7 @@
   // design snapshot to the server, just to different endpoints, so the body
   // assembly lives in one place instead of drifting out of sync.
   function buildGenerateBody(){
+    var baseSpec = effectiveBaseSpec();
     var body = {
       printer: design.printer || 'trident',
       shape: design.shape,
@@ -3966,15 +3987,15 @@
       z_waves: Math.round(design.z_waves),
       xy_twist: design.xy_twist,
       z_twist: design.z_twist,
-      base_layers: design.bottom === 'open' ? 0 : Math.round(design.base_layers),
-      brim: Math.round(design.brim),
+      base_layers: baseSpec.base_layers,
+      brim: baseSpec.brim,
       squish: design.squish,
       first_layer_height: design.first_layer_height || 0,
       spine_mm: design.spine_mm || 0,
       spine_deg: design.spine_deg || 0,
       ovality: design.ovality || 0,
       base_style: design.base_style || 'spiral',
-      skirt: Math.round(design.skirt || 0),
+      skirt: baseSpec.skirt,
       first_layer_spacing_factor: design.spacing_factor,
       print_speed: design.print_speed,
       filament: design.filament || null,
@@ -4089,19 +4110,14 @@
       body.loop_speed = design.loop_speed;
       body.loop_fade_in = design.loop_fade_in;
       body.loop_fade_out = design.loop_fade_out;
-      if(!meshState.mesh_id){
-        // Loop fabric (as opposed to mesh-mode loops, handled below) anchors
-        // itself with its own solid cuff and prints no base/brim/skirt no
-        // matter what is asked for. The stored design values are deliberately
-        // NOT mutated here (same principle as the Bottom radio above): the
-        // request is where this decision belongs, so the settings return
-        // when the user leaves loops. Sending the truth here also stops
-        // every default loop design from tripping the server's new
-        // loop-fabric-base warning for no reason.
-        body.base_layers = 0;
-        body.brim = 0;
-        body.skirt = 0;
-      }
+      // base_layers/brim/skirt are already 0 here when loop fabric is active
+      // (mesh_id absent) -- effectiveBaseSpec() at the top of this function
+      // zeroed them into `body` already. Loop fabric (as opposed to mesh-mode
+      // loops, handled below) anchors itself with its own solid cuff and
+      // prints no base/brim/skirt no matter what is asked for. The stored
+      // design values are deliberately NOT mutated (same principle as the
+      // Bottom radio above): the request is where this decision belongs, so
+      // the settings return when the user leaves loops.
     } else if(patternVal){
       body.pattern = patternVal;
       body.pattern_amp = design.pattern_amp;

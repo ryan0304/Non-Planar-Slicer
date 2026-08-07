@@ -472,8 +472,78 @@
     return out;
   }
 
+  // ---- base disk builders (mirror trident_gcode/generators/base_fill.py's
+  // base_disk_points/base_disk_concentric EXACTLY) --------------------------
+  // The base disk's radius function is the RAW shape outline -- NOT the
+  // wall's envelope-wrapped radius. Confirmed against real Trident output:
+  // radius=30 with radius_profile [[0,0.5],[1,1.0]] (a silhouette that pulls
+  // the wall down to half radius at its base) still prints its base disks at
+  // max radius 30.00mm while the wall itself starts at 15.09mm --
+  // layered_base_and_brim() in base_fill.py is handed the bare `shape`
+  // callable, never the envelope, cage, radial pattern, ovality or spine that
+  // warp the wall. Reproducing that here is the whole point of this preview:
+  // it must show what the machine actually extrudes, wide pancake and all --
+  // not a shape someone "fixed" to agree with the (narrower) wall.
+  function meanRadius(radiusFn, samples){
+    samples = samples || 180;
+    var sum = 0;
+    for(var k = 0; k < samples; k++) sum += radiusFn(TWO_PI * k / samples);
+    return sum / samples;
+  }
+
+  // Appends one spiral-style disk's segments (world-space [x,y,z] sextuples)
+  // to `segs`. Mirrors base_disk_points(): an outline-warped Archimedean
+  // spiral. `nLoops` is the REAL fill density and is never reduced for
+  // performance; only the per-loop point count `pptDisk` is budgeted (see the
+  // caller). Deliberately does not connect to whatever was appended before or
+  // after it in `segs` -- disks sit at different Z, and a straight line
+  // between the last point of one disk and the first of the next would draw
+  // a bogus diagonal cutting through the part.
+  function appendSpiralDisk(segs, radiusFn, nLoops, worldY, pptDisk){
+    var total = nLoops * pptDisk;
+    var prevX, prevZ;
+    for(var i = 0; i <= total; i++){
+      var f = i / total;
+      var theta = TWO_PI * nLoops * f;
+      var r = radiusFn(theta) * f;
+      var x = r * Math.cos(theta);
+      var z = -(r * Math.sin(theta));   // printer Y -> world Z, negated
+      if(i > 0) segs.push(prevX, worldY, prevZ, x, worldY, z);
+      prevX = x; prevZ = z;
+    }
+  }
+
+  // Appends one concentric-style disk's segments. Mirrors
+  // base_disk_concentric(): closed rings stepping inward from the outline,
+  // each ring's point count proportional to its radius (matches the
+  // reference's rationale: a fixed count would put ~0.02mm steps on the tiny
+  // near-centre rings).
+  function appendConcentricDisk(segs, radiusFn, nLoops, step, worldY, pptDisk){
+    for(var ring = 0; ring < nLoops; ring++){
+      var scale = 1.0 - (nLoops - 1 - ring) * step;
+      if(scale <= 1e-6) continue;
+      var nPts = Math.max(12, Math.min(pptDisk, Math.round(pptDisk * scale)));
+      var prevX, prevZ;
+      for(var j = 0; j <= nPts; j++){
+        var theta = TWO_PI * (j / nPts);
+        var r = radiusFn(theta) * scale;
+        var x = r * Math.cos(theta);
+        var z = -(r * Math.sin(theta));
+        if(j > 0) segs.push(prevX, worldY, prevZ, x, worldY, z);
+        prevX = x; prevZ = z;
+      }
+    }
+  }
+
   // ---- main preview generator -----------------------------------------------
   // design: the central design state object from designer.js.
+  // baseSpec: { base_layers, brim, skirt } -- what will ACTUALLY be sent to
+  // /api/generate, per designer.js's effectiveBaseSpec(). Missing/omitted
+  // defaults to "no base": effectiveBaseSpec() is the single source of truth
+  // for that decision (Bottom=Open and loop-fabric both zero it out
+  // independently of the raw design.base_layers/brim fields), so a caller
+  // that forgets to pass it must never have the draft promise a base the
+  // request will not carry.
   // Returns Float32Array of [x0,y0,z0, x1,y1,z1, ...] for LineSegments2.
   // Coordinates are in world space (Three.js: X = printer X - cx, Y = printer Z,
   // Z = cy - printer Y) to match the viewer's coordinate convention. Printer Y
@@ -481,7 +551,9 @@
   // otherwise the swap of two axes (Y-up <- Z-up) is a reflection, and any
   // chiral geometry (e.g. xy_twist) would preview mirrored from what prints.
   // parseGcode() in viewer.js uses the identical transform; see its comment.
-  function generatePreview(design){
+  function generatePreview(design, baseSpec){
+    var spec = baseSpec || { base_layers: 0, brim: 0 };
+
     // Bed centre: prefer an explicit per-design override (set by designer.js
     // from the /api/printers response), else fall back to the last printer
     // set via setBedSize(), else the Trident default.
@@ -516,6 +588,65 @@
     var xyTwist = design.xy_twist || 0;
     var zTwist = design.z_twist || 0;
 
+    // ---- first-layer adhesion math (mirrors continuous_spiral.py exactly) --
+    // Only the disk FILL DENSITY (loop pitch) below depends on the assumed
+    // 0.4mm nozzle fallback -- the disk's outer EXTENT is radiusFn's exact
+    // outline either way, so a wrong nozzle guess never moves the pancake's
+    // edge, only how many loops pave it.
+    var lw = (typeof design.line_width === 'number' && design.line_width > 0)
+      ? design.line_width
+      : Math.round((design.nozzle || 0.4) * 1.125 * 1000) / 1000;  // serve.py:729-730
+    var firstLayerSquish = Math.min(Math.max(
+      (design.first_layer_height > 0)
+        ? design.first_layer_height / Math.max(layerHeight, 1e-6)
+        : (design.squish != null ? design.squish : 0.75),
+      0.5), 1.0);
+    var spacingFactor = Math.max(0.8, Math.min(
+      design.spacing_factor != null ? design.spacing_factor : 1.25, 1.5));
+    var baseLayers = Math.max(0, Math.round(spec.base_layers || 0));
+    var brimLoops = Math.max(0, Math.round(spec.brim || 0));
+    // Server's OR also includes skirt_loops > 0 (continuous_spiral.py:201-202).
+    // Omitted here on purpose, not by oversight: skirt is a known preview
+    // omission (never drawn, see below), AND including/excluding it can never
+    // change squish/base_z/wall_off numerically -- squish only ends up below
+    // 1.0 when first_layer_squish already is, which is already one of these
+    // OR terms.
+    var adhesion = (firstLayerSquish < 1.0) || (baseLayers > 0) || (brimLoops > 0);
+    var squish = adhesion ? firstLayerSquish : 1.0;
+    var baseZ = squish * layerHeight;
+    var s0 = lw / Math.max(squish, 1e-6) * Math.max(spacingFactor, 0.5);
+    var wallOff = baseLayers > 0 ? (baseZ + (baseLayers - 1) * layerHeight) : baseZ;
+
+    // ---- base disks: built BEFORE the wall loop, into their own plain array
+    // of segment endpoints (world-space [x,y,z] sextuples) so they can be
+    // dropped into the front of the final buffer without perturbing the wall
+    // loop's own indexing below.
+    //
+    // Brim and skirt loops are a KNOWN OMISSION here, not an oversight: this
+    // preview draws the wall + solid base disks only. `brimLoops` above feeds
+    // only the adhesion/s0 math (matching the server); spec.skirt is not
+    // consulted at all.
+    var baseSegs = [];
+    // Mean radius of the RAW outline is the same for every disk (shapeFn
+    // never changes between them) -- compute it once, not once per disk.
+    var rMeanBase = baseLayers > 0 ? Math.max(meanRadius(shapeFn), 1e-6) : 0;
+    for(var bk = 0; bk < baseLayers; bk++){
+      var spacingK = (bk === 0) ? s0 : lw;
+      var worldYk = baseZ + bk * layerHeight;   // printer Z -> world Y (up)
+      var nLoopsK = Math.max(1, Math.ceil(rMeanBase / Math.max(spacingK, 1e-6)));
+      // Performance budget: cap SAMPLING density per disk, holding total
+      // samples roughly constant as loop count grows -- n_loops itself (the
+      // real fill density, i.e. how solid the base actually looks) is never
+      // cut. The wall samples at 120 pts/turn; disks share that ceiling and a
+      // 24-point floor so even a single-loop disk still reads as round.
+      var pptDisk = Math.max(24, Math.min(120, Math.round(6000 / nLoopsK)));
+      if(design.base_style === 'concentric'){
+        appendConcentricDisk(baseSegs, shapeFn, nLoopsK, spacingK / rMeanBase, worldYk, pptDisk);
+      } else {
+        appendSpiralDisk(baseSegs, shapeFn, nLoopsK, worldYk, pptDisk);
+      }
+    }
+
     // Radial pattern.
     var patternName = design.pattern || '';
     var patternFn = patternName ? R_PATTERNS[patternName] : null;
@@ -532,9 +663,11 @@
     var turns = height / layerHeight;
     var totalSteps = Math.max(2, Math.round(turns * pointsPerTurn));
 
-    // Pre-allocate output: each step after the first produces a line segment
-    // (2 endpoints * 3 coords = 6 floats per segment).
-    var out = new Float32Array(totalSteps * 6);
+    // Pre-allocate output: the base disk segments built above go first, then
+    // totalSteps wall segments (2 endpoints * 3 coords = 6 floats each).
+    var baseFloatCount = baseSegs.length;
+    var out = new Float32Array(baseFloatCount + totalSteps * 6);
+    for(var bi = 0; bi < baseFloatCount; bi++) out[bi] = baseSegs[bi];
     var amps = new Float32Array(totalSteps + 1);  // rate-limited amplitudes
 
     // Raw per-sample world positions, kept only when blob placement needs to
@@ -545,7 +678,7 @@
     var allPos = (wantBlobs || wantPointEdit) ? new Float32Array((totalSteps + 1) * 3) : null;
 
     var prevX = 0, prevY = 0, prevZ = 0;
-    var outIdx = 0;
+    var outIdx = baseFloatCount;   // wall segments start after the base disks'
 
     for(var i = 0; i <= totalSteps; i++){
       var s = i / totalSteps;          // 0..1 over the whole print
@@ -593,8 +726,11 @@
         py += t * spineMm * Math.sin(sd);
       }
 
-      // Printer Z.
-      var z = t * height;
+      // Printer Z, lifted by wall_off -- the wall starts AT the top base
+      // disk's level (or squish*layer_height with no base) and helixes up
+      // from there, exactly like the reference emission. Drawing the wall
+      // from z=0 was wrong even with no base: it always sits base_z too low.
+      var z = wallOff + t * height;
       if(zWaves > 0){
         var phase = zTwist * TWO_PI * t;
         // Amplitude from the user's amp curve.
@@ -640,7 +776,7 @@
       prevZ = wz;
     }
 
-    // Trim in case of rounding (outIdx should == totalSteps * 6).
+    // Trim in case of rounding (outIdx should == baseFloatCount + totalSteps * 6).
     if(outIdx < out.length){
       out = out.subarray(0, outIdx);
     }
@@ -651,8 +787,10 @@
     // known yet mid-loop).
     if(wantPointEdit){
       applyPointEditsPreview(design, allPos, totalSteps + 1, pointsPerTurn);
-      out = new Float32Array(totalSteps * 6);
-      var oi = 0;
+      // Point Edit only ever touches the WALL polyline (`allPos` holds wall
+      // samples alone) -- overwrite just the wall region of `out`, leaving
+      // the base disk segments already written at the front untouched.
+      var oi = baseFloatCount;
       for(var si = 1; si <= totalSteps; si++){
         var a3 = (si-1)*3, b3 = si*3;
         out[oi++] = allPos[a3];   out[oi++] = allPos[a3+1]; out[oi++] = allPos[a3+2];

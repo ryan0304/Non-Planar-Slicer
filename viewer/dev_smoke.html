@@ -283,6 +283,84 @@
     skirtInput.value = prevSkirtValue;
     skirtInput.dispatchEvent(new w.Event('input'));
 
+    // ---- live draft preview draws the solid base, and lifts the wall --------
+    // generatePreview() used to draw ONLY the spiral wall, from z=0 to
+    // z=height, no matter what Bottom was set to -- picking Bottom=Solid
+    // changed nothing in the draft, and the wall itself sat base_z too low
+    // even with no base at all. Calls generatePreview() directly (not through
+    // the panel) with a small hand-built design so the assertions don't
+    // depend on whatever the panel currently has loaded.
+    const previewDesign = {
+      shape: 'circle', radius: 20, height: 20, layer_height: 0.3,
+      z_waves: 0, squish: 0.75, spacing_factor: 1.25,
+      amp_profile: [[0,0],[1,0]], radius_profile: [[0,1],[1,1]],
+      base_style: 'spiral', nozzle: 0.4,
+      bed_center: [117.5, 117.5]
+    };
+    const bedCenter = previewDesign.bed_center;
+    // generatePreview() returns segment endpoints in PRINTER coordinates
+    // offset by the bed centre -- subtract it back out before measuring
+    // radii/heights against the design's own numbers.
+    function toPrinterXYZ(pts, i) {
+      return [pts[i*3] + bedCenter[0], pts[i*3+1], -pts[i*3+2] + bedCenter[1]];
+    }
+    function minRadiusXY(pts) {
+      let m = Infinity;
+      for (let i = 0; i < pts.length / 3; i++) {
+        const p = toPrinterXYZ(pts, i);
+        const r = Math.hypot(p[0] - bedCenter[0], p[2] - bedCenter[1]);
+        if (r < m) m = r;
+      }
+      return m;
+    }
+    function maxRadiusAtZ(pts, z, tol) {
+      let m = 0;
+      for (let i = 0; i < pts.length / 3; i++) {
+        const p = toPrinterXYZ(pts, i);
+        if (Math.abs(p[1] - z) > tol) continue;
+        const r = Math.hypot(p[0] - bedCenter[0], p[2] - bedCenter[1]);
+        if (r > m) m = r;
+      }
+      return m;
+    }
+    function minZ(pts) {
+      let m = Infinity;
+      for (let i = 0; i < pts.length / 3; i++) {
+        const y = toPrinterXYZ(pts, i)[1];
+        if (y < m) m = y;
+      }
+      return m;
+    }
+
+    const noBase = w.generatePreview(previewDesign, { base_layers: 0, brim: 0 });
+    check('no base: nothing sits near the axis (old behaviour)',
+          minRadiusXY(noBase) > 15, 'got min radius ' + minRadiusXY(noBase));
+
+    const withBase = w.generatePreview(previewDesign, { base_layers: 2, brim: 0 });
+    check('2 base layers: points reach the axis',
+          minRadiusXY(withBase) < 1.0, 'got min radius ' + minRadiusXY(withBase));
+    const expectedBaseZ = 0.75 * 0.3;   // squish * layer_height
+    check('2 base layers: lowest Z is squish*layer_height',
+          near(minZ(withBase), expectedBaseZ, 1e-3),
+          'got ' + minZ(withBase) + ', want ' + expectedBaseZ);
+    check('2 base layers: base disk max radius is the nominal 20mm outline',
+          near(maxRadiusAtZ(withBase, expectedBaseZ, 0.01), 20.0, 0.1),
+          'got ' + maxRadiusAtZ(withBase, expectedBaseZ, 0.01));
+    // Isolate wall-ish points (near the 20mm outline radius, as opposed to
+    // the base disks' inner spiral turns) and confirm none of them sit below
+    // base_z -- the old code drew the wall from z=0 unconditionally, which is
+    // below base_z (0.225) whenever any adhesion feature is active.
+    let minWallZ = Infinity;
+    for (let i = 0; i < withBase.length / 3; i++) {
+      const p = toPrinterXYZ(withBase, i);
+      if (Math.hypot(p[0] - bedCenter[0], p[2] - bedCenter[1]) > 15) {
+        if (p[1] < minWallZ) minWallZ = p[1];
+      }
+    }
+    check('2 base layers: the wall is lifted -- no wall point sits below base_z',
+          minWallZ >= expectedBaseZ - 1e-3,
+          'got min wall-region Z ' + minWallZ + ', want >= ' + expectedBaseZ);
+
     return results;
   }
 
