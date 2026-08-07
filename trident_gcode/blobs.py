@@ -83,8 +83,15 @@ class LoopSpec:
     # re-prime before the descent. Stronger than coasting — physically kills
     # the melt pressure while the strand hardens. 0 = off.
     tip_retract_mm: float = 0.0
-    align: str = ALIGN_STAGGER    # stagger | column (row phase offset)
-    jitter: float = 0.5           # (unused in fabric mode)
+    align: str = ALIGN_STAGGER    # stagger | column | jitter (row phase offset)
+    # Scatter strength when align=jitter, as a fraction of stitch pitch. This
+    # said "(unused in fabric mode)" and listed only stagger|column above,
+    # which was simply wrong: compute_loop_sites() below hands both fields to
+    # the same compute_sites() the blobs use, so jitter has always worked
+    # here. The comment was believed over the code, and the UI controls for it
+    # were never built -- a working feature was unreachable for that reason
+    # alone.
+    jitter: float = 0.5
     row_mm: float = 2.5           # vertical rise per fabric row (spiral pitch)
     up_mm: float = 3.5            # loop height: how far each stitch dips down
     out_mm: float = 0.5           # outward lean at the loop bottom

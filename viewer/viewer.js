@@ -40,10 +40,15 @@ renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-// Kept slightly lighter than --bg (#17191b), same relationship the old
-// 0x101010-vs-#0a0a0a pairing had, so the canvas doesn't read as a darker
-// seam against the surrounding chrome.
-scene.background = new THREE.Color(0x1c1f22);
+// Raised from 0x1c1f22 to 0x2b3036 -- the old value was close enough to
+// --bg (#17191b)/--surface (#1e2124) that the viewport stopped reading as
+// its own region and blended into the surrounding chrome. The reference is
+// Bambu Studio's mid-grey viewport against a dark bed: that pairing separates
+// MORE than a uniformly dark scene does, because the dark bed now has a
+// lighter surround to sit inside instead of matching it. Still unambiguously
+// a dark theme -- --bg and --surface are untouched, so the panel stays
+// darker than the canvas, which is more separation again, not less.
+scene.background = new THREE.Color(0x2b3036);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
 camera.position.set(BED_X*0.9, BED_Z*1.1, BED_Y*1.3);
@@ -57,19 +62,27 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.6);
 dir.position.set(1,2,1); scene.add(dir);
 
 // ---- bed ------------------------------------------------------------------
-// Printer X -> three X, printer Y -> three Z, printer Z -> three Y (up).
-// Origin shifted so bed centre sits at world origin.
+// Printer X -> three X, printer Y -> three -Z (NEGATED), printer Z -> three Y
+// (up). The Y negation is required, not cosmetic: swapping two axes of a
+// right-handed system (Z-up -> Y-up) without also negating one of them is a
+// reflection (determinant -1), which mirrors any chiral geometry (e.g. an
+// xy_twist) in the preview relative to what actually prints. Origin shifted
+// so bed centre sits at world origin. Every site that maps printer Y <-> world
+// Z (parseGcode, fitView, computeTurns, the measure tool, the shape cage, the
+// nav cube) must apply this same negation -- see parseGcode() below for the
+// primary conversion.
 const bedGroup = new THREE.Group(); scene.add(bedGroup);
 {
-  // Both lifted off the old 0x2e2e2e/0x1f1f1f pair to stay legible against the
-  // lighter 0x1c1f22 canvas background; the ~1.6x gap between them (kept from
-  // the original) is what preserves the major/minor line distinction.
-  const grid = new THREE.GridHelper(BED_X, 23, 0x454b52, 0x2a2e33);
+  // Lifted again for the 0x2b3036 canvas background (see scene.background
+  // above): 0x2a2e33 was the previous minor-line colour and is now almost
+  // exactly the background colour itself -- the grid would have nearly
+  // vanished. Both colours keep the same ~1.6x major/minor ratio as before.
+  const grid = new THREE.GridHelper(BED_X, 23, 0x5b6572, 0x393f47);
   bedGroup.add(grid);
   // Safe-print-area outline (30-208 x 30-185 from printer.cfg).
   const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
   const c=[[ax[0],ay[0]],[ax[1],ay[0]],[ax[1],ay[1]],[ax[0],ay[1]],[ax[0],ay[0]]];
-  const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,y-cy));
+  const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,cy-y));
   const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
     new THREE.LineDashedMaterial({color:0x2f6bff,dashSize:4,gapSize:3,transparent:true,opacity:.7}));
   ln.computeLineDistances(); bedGroup.add(ln);
@@ -83,7 +96,11 @@ const printerGroup = new THREE.Group(); scene.add(printerGroup);
   const HX = BED_X/2 + 30, HZ = BED_Y/2 + 30;   // frame half-extents
   const Y_BOT = -25, Y_TOP = BED_Z + 45;         // frame bottom / top (world Y up)
   const T = 12;                                   // extrusion thickness
-  const alu = new THREE.MeshStandardMaterial({ color:0x3b424c, metalness:0.6, roughness:0.5 });
+  // Lightened from 0x3b424c alongside the 0x2b3036 canvas background -- at
+  // the old value the frame's contrast against the background nearly halved
+  // (a smaller lift than the grid needed since the frame is a lit mesh, not
+  // a flat colour, but still enough to start disappearing into the canvas).
+  const alu = new THREE.MeshStandardMaterial({ color:0x4a5360, metalness:0.6, roughness:0.5 });
   const accent = new THREE.MeshStandardMaterial({ color:0xc0392b, metalness:0.3, roughness:0.6 });
 
   const beam = (x,y,z, sx,sy,sz, mat=alu) => {
@@ -181,10 +198,14 @@ function computeRiskFlags(ext, nSeg){
   for(let s = 0; s < nSeg; s++){
     const base = s * 6;
     // Midpoint in printer coordinates (not world coords).
-    // ext[] stores world-space: ax=printerX-cx, ay=printerZ(=worldY), az=printerY-cy.
+    // ext[] stores world-space: ax=printerX-cx, ay=printerZ(=worldY), az=cy-printerY
+    // (negated -- see the coordinate-mapping note near the top of this file).
     // We stored ax/ay/az for start, bx/by/bz for end.
     const mx = (ext[base+0] + ext[base+3]) * 0.5;   // world X = printerX - cx
-    const mz = (ext[base+2] + ext[base+5]) * 0.5;   // world Z = printerY - cy
+    const mz = (ext[base+2] + ext[base+5]) * 0.5;   // world Z = cy - printerY
+    // NOTE: this function only ever uses mz through hypot()/distance math below,
+    // so the sign of the Y<->Z mapping does not affect its result -- confirmed,
+    // no logic change needed here beyond the comment.
     const my = (ext[base+1] + ext[base+4]) * 0.5;   // world Y = printerZ
 
     // Only test segments above the first-layer threshold.
@@ -237,8 +258,12 @@ function computeOverhang(ext, nSeg){
 
   for(let s = 0; s < nSeg; s++){
     const base = s * 6;
-    // Printer coordinates: world X = printerX, world Z = printerY (both the
-    // horizontal plane); world Y = printerZ (height).
+    // Printer coordinates: world X = printerX, world Z = cy - printerY (both
+    // the horizontal plane, Y negated per the top-of-file mapping note);
+    // world Y = printerZ (height). This function only ever uses mx/my/mz
+    // through hypot()/atan2(h, dz) with h itself a hypot() -- purely metric,
+    // no chirality -- so the sign of the Y<->Z mapping does not change its
+    // output; confirmed, no logic change needed here beyond this comment.
     const mx = (ext[base+0] + ext[base+3]) * 0.5;   // printer X (horizontal)
     const mz = (ext[base+1] + ext[base+4]) * 0.5;   // printer Z (height)
     const my = (ext[base+2] + ext[base+5]) * 0.5;   // printer Y (horizontal)
@@ -437,8 +462,15 @@ function parseGcode(text){
     if(f!==null) curF=f;                       // feedrate is sticky across moves
     const extruding = e!==null && (relE ? e>1e-6 : e>0);
     if(has){
-      const ax=x-cx, ay=z, az=y-cy;     // remap to world (Y up)
-      const bx=nx-cx, by=nz, bz=ny-cy;
+      // Remap to world (Y up). Y is NEGATED (cy-y, not y-cy) so the swap of
+      // two axes (printer Z-up -> Three.js Y-up) stays a rotation rather than
+      // a reflection -- an un-negated swap has determinant -1 and mirrors any
+      // chiral geometry (e.g. xy_twist) in the preview relative to what the
+      // machine actually prints. Every other printer-Y <-> world-Z site in
+      // this file (fitView, computeTurns, the measure tool, the shape cage,
+      // the nav cube) must use this same negated form.
+      const ax=x-cx, ay=z, az=cy-y;
+      const bx=nx-cx, by=nz, bz=cy-ny;
       if(extruding){
         ext.push(ax,ay,az, bx,by,bz);
         extCol.push(nz, nz);            // store z; convert to colour after
@@ -588,9 +620,11 @@ function buildGeometry(d){
 
   const tg=new THREE.BufferGeometry();
   tg.setAttribute('position', new THREE.Float32BufferAttribute(d.trv,3));
-  // Lifted from 0x4a4a4a: at the same opacity the old value blended nearly
-  // invisibly into the new, lighter 0x1c1f22 canvas background.
-  travelObj=new THREE.LineSegments(tg, new THREE.LineBasicMaterial({color:0x5a5a5a,transparent:true,opacity:0.45}));
+  // 0x5a5a5a was tuned against the 0x1c1f22 canvas; against the lighter
+  // 0x2b3036 background its contrast dropped by roughly half, so it is
+  // lifted again here to keep travel moves legible without turning them into
+  // a distraction from the extrude path they are meant to sit behind.
+  travelObj=new THREE.LineSegments(tg, new THREE.LineBasicMaterial({color:0x74747a,transparent:true,opacity:0.45}));
   travelObj.visible=document.getElementById('t-travel').checked;
   scene.add(travelObj);
 
@@ -621,12 +655,19 @@ function applyXray(){
 function fitView(){
   if(!lastData) return;
   const d=lastData;
-  const cx=(d.minx+d.maxx)/2-BED_X/2, cz=(d.miny+d.maxy)/2-BED_Y/2;
+  // cz uses BED_Y/2 - (miny+maxy)/2 (not the reverse) to match parseGcode's
+  // negated printer-Y -> world-Z mapping (az = cy - y).
+  const cx=(d.minx+d.maxx)/2-BED_X/2, cz=BED_Y/2-(d.miny+d.maxy)/2;
   const h=d.maxz-d.minz, cy=(d.minz+d.maxz)/2;
   const span=Math.max(d.maxx-d.minx, d.maxy-d.miny, h*1.6, 12);
   const flat = h < span*0.15;
   const dist = span*1.55;
   const elev = flat ? 1.15 : 0.55;          // steeper for flat prints
+  // Positive Z offset from the model centre = the FRONT side of the bed
+  // (world +Z is printer Y=0 after the negated mapping above), so this is a
+  // deliberate front-right-above 3/4 view, matching the initial
+  // camera.position.set() near the top of this file -- not an accident of
+  // the sign of `dist`.
   camera.position.set(cx + dist*Math.cos(elev)*0.75,
                       cy + dist*Math.sin(elev),
                       cz + dist*Math.cos(elev)*0.75);
@@ -820,7 +861,12 @@ function load(name,text){
   lastData=parseGcode(text);
   cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
   buildGeometry(lastData); showStats(name,lastData);
+  measureReload();                       // new model: any old measurement is meaningless
   document.getElementById('tl-wrap').style.display='';
+  // Widens --overlay-bottom (style.css) so the nav cube and its neighbours
+  // clear the now-visible machine-readout strip instead of floating 92px
+  // above empty canvas, which is what happened before this class existed.
+  wrap.classList.add('has-timeline');
   document.getElementById('telemetry-card').style.display='';
   stopPlay(); setProgress(1);            // start fully drawn
   fitView();                             // frame the camera on the model
@@ -833,7 +879,13 @@ function load(name,text){
 // Detect spiral-turn boundaries by unwrapping the path's angle about its centre.
 // Each full 2*pi revolution = one "layer/turn" for the step controls.
 function computeTurns(d){
-  const cx=((d.minx+d.maxx)/2)-BED_X/2, cz=((d.miny+d.maxy)/2)-BED_Y/2;
+  // cz mirrors parseGcode's negated printer-Y -> world-Z mapping (az = cy - y),
+  // as fitView() does. ext[] holds world coords, so deriving the centre with
+  // the un-negated form put it at the reflected position -- harmless for a
+  // bed-centred print (both land near 0) but wrong for an off-centre one,
+  // where the angle unwrap below would be taken about a point outside the
+  // model and hand back garbage turn boundaries.
+  const cx=((d.minx+d.maxx)/2)-BED_X/2, cz=BED_Y/2-((d.miny+d.maxy)/2);
   const ext=d.ext, nSeg=ext.length/6;
   const out=[0]; let cum=0, prev=null, last=0;
   for(let s=0;s<nSeg;s++){
@@ -1009,8 +1061,41 @@ function stepLayer(dir){
   setProgress(cuts[p]/animSeg);
 }
 window.stepLayer = stepLayer;   // automation hook
+
+// ---- global-shortcut guards -------------------------------------------------
+// Every window-level shortcut in this file has to answer the same two
+// questions before it fires, and each one used to answer them differently.
+// That is not cosmetic: these handlers call preventDefault(), so a missed
+// case does not merely fire the shortcut, it SWALLOWS the keystroke.
+//
+// TEXTAREA was the missing case. The printer-import modal edits start/end
+// G-code in #pm-start-gcode / #pm-end-gcode, which are textareas, not inputs
+// -- so hand-typing "G1 F3000" lost the space to play/pause and the F to
+// fit-view, and what got saved was "G1F3000". Start G-code is the one blob of
+// text in this app that goes to the machine unedited, which makes a silently
+// dropped character a hardware problem, not a typo.
+function typingInField(e){
+  const el = e.target;
+  if(!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' ||
+         el.isContentEditable === true;
+}
+
+// Playback shortcuts belong to the G-code viewer, not to the design form.
+// The old guard tested #tl-wrap's inline display, which reads as "a file is
+// loaded" but never as "the viewer is on screen": #tl-wrap lives in
+// #canvas-wrap, outside BOTH mode panels, so load() reveals it once and
+// nothing hides it again. After one generate, space/arrows/Home/End stayed
+// armed over the whole design form for the rest of the session.
+function viewerModeActive(){
+  const p = document.getElementById('mode-viewer');
+  return !!(p && p.classList.contains('active'));
+}
 window.addEventListener('keydown',e=>{
-  if(e.target.tagName==='SELECT' || document.getElementById('tl-wrap').style.display==='none') return;
+  if(typingInField(e)) return;
+  if(!viewerModeActive()) return;
+  if(document.getElementById('tl-wrap').style.display==='none') return;
   if(e.key==='ArrowRight'||e.key==='ArrowUp'){ stepLayer(1); e.preventDefault(); }
   else if(e.key==='ArrowLeft'||e.key==='ArrowDown'){ stepLayer(-1); e.preventDefault(); }
   else if(e.key==='Home'){ setProgress(0); e.preventDefault(); }
@@ -1045,8 +1130,8 @@ document.getElementById('t-truewidth').addEventListener('change',e=>{
 });
 document.getElementById('fit-view').addEventListener('click',fitView);
 window.addEventListener('keydown',e=>{
-  if((e.key==='f'||e.key==='F') && !e.ctrlKey && !e.metaKey &&
-     e.target.tagName!=='INPUT' && e.target.tagName!=='SELECT'){ fitView(); e.preventDefault(); }
+  if(typingInField(e)) return;
+  if((e.key==='f'||e.key==='F') && !e.ctrlKey && !e.metaKey){ fitView(); e.preventDefault(); }
 });
 controls.autoRotateSpeed = 1.2;
 document.getElementById('t-spin').addEventListener('change',e=>{controls.autoRotate=e.target.checked; if(e.target.checked) spinLoop();});
@@ -1064,6 +1149,16 @@ function render(){
     for(const m of window.__bedMats) m.opacity = op;
   }
   renderer.render(scene,camera);
+  // Measure tool's floating value tag is a DOM node, so it has to be
+  // re-projected after every camera change. Read off `window` (same idiom as
+  // __bedMats above) because render() runs once during module init, before the
+  // measure section further down has initialised its bindings.
+  if(window.__measureSync) window.__measureSync();
+  // Orientation cube tracks the main camera every frame this renders --
+  // see the comment on navSyncCamera() further down for why this is a
+  // window.__* hook rather than a direct call (TDZ: that section is defined
+  // after this function, and render() also runs once during module init).
+  if(window.__navCubeSync) window.__navCubeSync();
 }
 function resize(){
   const w=wrap.clientWidth, h=wrap.clientHeight;
@@ -1232,20 +1327,48 @@ window.clearPreview = function(){
 // lets the user drag local radius bumps/dents directly on the 3D preview,
 // mirrored two-way with design.cage (see designer.js refreshShapeCage).
 //
-// Freeze-safety: pointerdown is the only listener on the renderer canvas --
-// pointermove/pointerup/pointercancel live on `window` so a drag that ends
-// with the mouse released outside the canvas (or the window losing focus)
-// still terminates the drag and re-enables OrbitControls. See cageEndDrag().
+// Picking is screen-space (cagePickAt), not a raycast against the tiny 1.6mm
+// spheres -- a raycast miss used to fall straight through to OrbitControls
+// and yank the view while the user was trying to grab a dot. Merely hovering
+// a handle now suppresses the left-button orbit BEFORE the click happens
+// (cageSetHoverLock), so a grab can never be mistaken for an orbit gesture.
+// Wheel zoom and right-button pan deliberately keep working while hovering --
+// see cageSetHoverLock for why that distinction matters.
+//
+// Freeze-safety: pointerdown is the only *drag-starting* listener on the
+// renderer canvas -- pointermove/pointerup/pointercancel for an active drag
+// live on `window` so a drag that ends with the mouse released outside the
+// canvas (or the window losing focus) still terminates the drag and
+// re-enables OrbitControls. `controls.enabled = false` is written in exactly
+// one place (drag start) and restored on every exit: cageEndDrag(), window
+// blur, and hideShapeCage(). The lighter hover-lock is released by those same
+// three plus canvas pointerleave.
 let cageGroup = null;            // THREE.Group holding spheres + wireframe
 let cageSpheres = [];            // flat list of {mesh,i,j}, ordered i*cols+j
 let cageRows = 0, cageCols = 0;
 let cageBase = null;             // N x M base radii (mm, before cage scale)
 let cageScales = null;           // N x M current cage scale values
 let cageHeight = 0;
-let cageDragCallback = null;     // onDrag(i, j, newScale)
+let cageDragCallback = null;     // onDrag(changes) -- changes = [{i,j,scale}, ...]
 let cageActive = null;           // {i,j} of the handle being dragged, or null
 let cageRowLines = [];           // THREE.Line per row (closed ring)
 let cageColLines = [];           // THREE.Line per column (open polyline)
+let cageHover = -1;              // index into cageSpheres currently hovered, or -1
+let cageSelection = new Set();   // flat indices (i*cageCols+j) currently selected
+let cageDragStart = null;        // [{idx,i,j,scale}, ...] snapshot at drag start
+let cageDragAnchorScale = 0;     // starting scale of the actively-dragged handle
+let cageRings = [];              // one camera-facing ring sprite per handle
+let cageRingTex = null;          // shared ring texture, built once and cached
+const CAGE_PICK_PX = 14;         // screen-space pick radius, in CSS pixels
+// Ring sprite size in mm. Must leave clear dark space between the dot and the
+// ring: at 6.5 the stroke landed 0.28mm off a hovered (2.16mm) dot, close
+// enough that it blended into the dot's antialiased edge and read as an
+// orange halo rather than a white ring. At 9.0 the stroke sits ~3.5mm out,
+// about 1mm clear, while still fitting between adjacent handles on a small
+// model (8 columns on a 10mm radius puts neighbours 7.9mm apart).
+const CAGE_RING_MM = 9.0;
+// Captured at module load, before any hover can have nulled it out.
+const CAGE_LEFT_BUTTON = controls.mouseButtons.LEFT;
 const cageRaycaster = new THREE.Raycaster();
 const cagePointerNDC = new THREE.Vector2();
 const cageDragPlane = new THREE.Plane();
@@ -1262,12 +1385,130 @@ function cageUpdatePointerNDC(e){
   cagePointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 }
 
+// Screen-space proximity pick: returns the index into cageSpheres of the
+// nearest handle within CAGE_PICK_PX of (clientX, clientY), or -1. Deliberately
+// NOT a raycast against the handle geometry -- the spheres are 1.6mm, so a
+// raycast miss by a pixel used to fall straight through to OrbitControls.
+// Projection matches window.__cageDebug()'s screen-position math exactly.
+// Ties (equal screen distance) break toward the handle nearer the camera.
+function cagePickAt(clientX, clientY){
+  if(!cageSpheres.length) return -1;
+  const rect = renderer.domElement.getBoundingClientRect();
+  let best = -1, bestDist = Infinity, bestZ = Infinity;
+  for(let k = 0; k < cageSpheres.length; k++){
+    const v = cageSpheres[k].mesh.position.clone().project(camera);
+    if(v.z < -1 || v.z > 1) continue;   // behind the camera / clipped
+    const sx = rect.left + (v.x+1)/2*rect.width;
+    const sy = rect.top + (1-v.y)/2*rect.height;
+    const dx = sx - clientX, dy = sy - clientY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if(dist > CAGE_PICK_PX) continue;
+    if(dist < bestDist || (dist === bestDist && v.z < bestZ)){
+      best = k; bestDist = dist; bestZ = v.z;
+    }
+  }
+  return best;
+}
+
+// White ring drawn around a selected handle, as a Sprite so it always faces
+// the camera without any per-frame billboarding work.
+//
+// Selection needs its own channel. It was originally folded into the size
+// bump, which made a selected dot and a hovered dot both 1.35x -- visually
+// identical, so there was no way to tell "this is picked" from "the cursor
+// happens to be here". The three states are now fully orthogonal:
+//   colour = edited (red) / hovered (orange) / idle (amber)
+//   size   = hovered
+//   ring   = selected
+// White is chosen deliberately: it is outside the amber/orange/red ramp, so
+// it reads on all three dot colours and adds no new meaning to that ramp.
+function cageRingTexture(){
+  if(cageRingTex) return cageRingTex;
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const g = c.getContext('2d');
+  // Dark outer casing first, so the white ring keeps its edge even when it
+  // passes over a bright amber dot or a pale part of the model behind it.
+  g.strokeStyle = 'rgba(0,0,0,0.55)';
+  g.lineWidth = 16;
+  g.beginPath();
+  g.arc(S/2, S/2, S/2 - 14, 0, Math.PI*2);
+  g.stroke();
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 10;
+  g.beginPath();
+  g.arc(S/2, S/2, S/2 - 14, 0, Math.PI*2);
+  g.stroke();
+  // Cached for the page lifetime and shared by every ring; deliberately NOT
+  // disposed in hideShapeCage, since the cage is shown/hidden repeatedly.
+  cageRingTex = new THREE.CanvasTexture(c);
+  // Tag it as sRGB so the white stays white through the renderer's colour
+  // pipeline instead of being treated as linear data.
+  if(THREE.SRGBColorSpace) cageRingTex.colorSpace = THREE.SRGBColorSpace;
+  return cageRingTex;
+}
+
+// Walks every handle and sets its material color + mesh scale from its
+// edited/hovered/selected state. Colour precedence is deliberately
+// edited-over-hover: hovering an edited dot must not hide the fact that it
+// is edited, so hover never overwrites the "you changed this" red. Hover is
+// instead ALWAYS signalled by size instead, which stays legible on top of
+// either colour. Selection is also signalled by size (additively), so a
+// selected+hovered dot is visibly larger than either alone.
+// These are three.js hex literals private to this subsystem, deliberately
+// NOT the reserved CSS --danger/--warn safety tokens (see style.css) -- this
+// red means "you edited this point", not "unsafe machine state".
+function cageRestyle(){
+  for(let k = 0; k < cageSpheres.length; k++){
+    const s = cageSpheres[k];
+    const idx = s.i*cageCols + s.j;
+    const scale = (cageScales && cageScales[s.i]) ? cageScales[s.i][s.j] : 1.0;
+    const edited = Math.abs(scale - 1.0) > 1e-6;
+    const hovered = (idx === cageHover);
+    const selected = cageSelection.has(idx);
+    const color = edited ? 0xe8443a : (hovered ? 0xff8c1a : 0xffc24c);
+    s.mesh.material.color.setHex(color);
+    // Size carries hover ONLY -- see cageRingTexture() for why selection is
+    // not allowed to share this channel.
+    s.mesh.scale.setScalar(hovered ? 1.35 : 1.0);
+    const ring = cageRings[k];
+    if(ring){
+      ring.visible = selected;
+      // Handles move while dragging, so keep the ring pinned to its dot here
+      // (cageRestyle runs on every drag move).
+      const p = s.mesh.position;
+      ring.position.set(p.x, p.y, p.z);
+    }
+  }
+  if(typeof window.onCageSelectionChange === 'function') window.onCageSelectionChange(cageSelection.size);
+}
+
+// Hover-lock. Suppresses ONLY the left-button orbit, by nulling OrbitControls'
+// LEFT binding -- deliberately not `controls.enabled = false`, which would also
+// kill wheel zoom and right-button pan. With 40 handles at a 14px pick radius
+// the pointer rests on a dot constantly while just looking at the model, and
+// having the scroll wheel go dead whenever that happened would be worse than
+// the mis-grab this whole feature exists to fix. Left-drag is the grab gesture,
+// so that is the only binding that has to yield.
+// An actual in-progress drag still takes the full `controls.enabled = false`
+// lock below -- that path is unchanged and proven.
+function cageSetHoverLock(on){
+  controls.mouseButtons.LEFT = on ? null : CAGE_LEFT_BUTTON;
+}
+
 // Ends the current drag exactly the same way regardless of what triggered it
 // (pointerup on window, pointercancel, or the window losing focus mid-drag).
+// Controls always come back on; if the pointer is still resting on a handle the
+// lighter hover-lock takes over from the full drag lock.
 function cageEndDrag(){
   cageActive = null;
+  cageDragStart = null;
   window.__silDragActive = false;
   controls.enabled = true;
+  cageSetHoverLock(cageHover >= 0);
+  renderer.domElement.style.cursor =
+    measureOn ? 'crosshair' : ((cageHover >= 0) ? 'pointer' : '');
 }
 
 function cageRebuildLines(){
@@ -1301,19 +1542,102 @@ function cageBindListeners(){
   cageListenersBound = true;
   const canvas = renderer.domElement;
 
-  // pointerdown stays on the canvas -- only a hit on a handle sphere starts
-  // a drag; otherwise the pointer falls through to OrbitControls normally.
+  // pointerdown stays on the canvas. Picking is screen-space (cagePickAt),
+  // not a raycast -- see the comment on that function.
   canvas.addEventListener('pointerdown', function(e){
     if(!cageSpheres.length) return;
-    cageUpdatePointerNDC(e);
-    cageRaycaster.setFromCamera(cagePointerNDC, camera);
-    const hits = cageRaycaster.intersectObjects(cageSpheres.map(function(s){ return s.mesh; }), false);
-    if(!hits.length) return;
-    const ud = hits[0].object.userData;
-    cageActive = { i: ud.i, j: ud.j };
+    // The measure tool owns the left button while it is active. Without this
+    // a click aimed at a measurement point would also land as "clicked empty
+    // space" here and silently wipe the cage selection underneath.
+    if(measureOn) return;
+    // Left button only. Right-drag is OrbitControls' pan and middle is its
+    // dolly; hijacking either to move a handle would make navigation
+    // unpredictable exactly where the dots are densest.
+    if(e.button !== 0) return;
+    const hit = cagePickAt(e.clientX, e.clientY);
+
+    // Multi-select modifier. Shift is accepted alongside ctrl/meta because
+    // ctrl+click is unreliable in practice -- some platforms and input
+    // devices re-map or swallow it (on macOS it is right-click emulation),
+    // and when it is swallowed the click falls through to the plain-click
+    // path, which REPLACES the selection and makes previously picked dots
+    // silently vanish. Shift is never intercepted, so it is the dependable
+    // path; both are documented in the panel hint.
+    const addToSel = e.ctrlKey || e.metaKey || e.shiftKey;
+
+    if(hit < 0){
+      // Missed every handle. Plain click clears the selection; a modified
+      // click on empty space is a no-op (so a stray miss while multi-
+      // selecting doesn't wipe the picks already made). Either way, do NOT
+      // preventDefault -- let OrbitControls orbit normally.
+      if(!addToSel){
+        cageSelection.clear();
+        cageRestyle();
+        render();
+      }
+      return;
+    }
+
+    const s = cageSpheres[hit];
+    const idx = s.i*cageCols + s.j;
+
+    if(addToSel){
+      // Toggle membership only -- never starts a drag.
+      if(cageSelection.has(idx)) cageSelection.delete(idx); else cageSelection.add(idx);
+      cageRestyle();
+      render();
+      e.preventDefault();
+      return;
+    }
+
+    if(!cageSelection.has(idx)){
+      cageSelection.clear();
+      cageSelection.add(idx);
+    }
+
+    // Snapshot every selected handle's starting scale so the whole group can
+    // be dragged rigidly together (see the delta-clamp in the move handler).
+    cageDragStart = [];
+    cageSelection.forEach(function(fi){
+      const si = Math.floor(fi / cageCols), sj = fi % cageCols;
+      const sc = (cageScales && cageScales[si]) ? cageScales[si][sj] : 1.0;
+      cageDragStart.push({ idx: fi, i: si, j: sj, scale: sc });
+    });
+    cageDragAnchorScale = (cageScales && cageScales[s.i]) ? cageScales[s.i][s.j] : 1.0;
+    cageActive = { i: s.i, j: s.j };
     window.__silDragActive = true;
     controls.enabled = false;
+    canvas.style.cursor = 'grabbing';
     e.preventDefault();
+  });
+
+  // Hover tracking lives on the canvas (not window) -- only cursor-over-
+  // canvas should highlight/lock. Guarded so it only does work when the
+  // hovered handle actually changes; pointermove fires constantly.
+  canvas.addEventListener('pointermove', function(e){
+    if(cageActive) return;   // mid-drag: the window listener below owns this
+    if(measureOn) return;    // measure tool owns hover + cursor while active
+    const hit = cagePickAt(e.clientX, e.clientY);
+    if(hit === cageHover) return;
+    cageHover = hit;
+    cageRestyle();
+    canvas.style.cursor = (cageHover >= 0) ? 'pointer' : '';
+    cageSetHoverLock(cageHover >= 0);   // orbit is dead before the click lands
+    render();
+  });
+
+  // Leaving the canvas clears hover and releases the hover-lock -- see the
+  // freeze-safety note at the top of this section. Skipped mid-drag: dragging
+  // a handle out past the canvas edge is normal, and the drag's own full lock
+  // must stay in force until pointerup.
+  canvas.addEventListener('pointerleave', function(){
+    if(cageActive) return;
+    if(cageHover < 0) return;   // nothing to clear; don't burn a render
+    cageHover = -1;
+    cageRestyle();
+    cageSetHoverLock(false);
+    canvas.style.cursor = '';
+    render();
   });
 
   // move/up/cancel + blur all live on window so releasing (or losing focus)
@@ -1324,7 +1648,11 @@ function cageBindListeners(){
     const mesh = cageSpheres[i*cageCols+j].mesh;
     const theta = mesh.userData.theta;
 
-    cageTangent.set(-Math.sin(theta), 0, Math.cos(theta));
+    // Tangent = d/dtheta of the handle's world position (cos t, ., -sin t),
+    // i.e. (-sin t, ., -cos t) -- the world Z component carries the same
+    // negation as the placement above. It is the drag plane's normal, so the
+    // plane spans the radial direction and the vertical axis.
+    cageTangent.set(-Math.sin(theta), 0, -Math.cos(theta));
     cageDragPlane.setFromNormalAndCoplanarPoint(cageTangent, mesh.position);
 
     cageUpdatePointerNDC(e);
@@ -1332,26 +1660,95 @@ function cageBindListeners(){
     const hit = cageRaycaster.ray.intersectPlane(cageDragPlane, cageDragPoint);
     if(!hit) return;   // ray near-parallel to the plane -- ignore this move
 
-    cageRadialDir.set(Math.cos(theta), 0, Math.sin(theta));
+    cageRadialDir.set(Math.cos(theta), 0, -Math.sin(theta));
     const dist = cageDragPoint.dot(cageRadialDir);
     const base = cageBase[i][j];
     const newScale = cageClamp(dist / base, 0.5, 1.5);
-    const r = base * newScale;
-    mesh.position.set(r * Math.cos(theta), mesh.position.y, r * Math.sin(theta));
-    if(cageScales && cageScales[i]) cageScales[i][j] = newScale;
+
+    // Move the whole selection together, but clamp the shared delta so no
+    // selected handle would leave [0.5, 1.5] -- this keeps the group rigid
+    // instead of letting handles pile up on the rail and silently distort
+    // the group's relative shape.
+    let delta = newScale - cageDragAnchorScale;
+    let maxDelta = Infinity, minDelta = -Infinity;
+    for(let k = 0; k < cageDragStart.length; k++){
+      maxDelta = Math.min(maxDelta, 1.5 - cageDragStart[k].scale);
+      minDelta = Math.max(minDelta, 0.5 - cageDragStart[k].scale);
+    }
+    delta = Math.max(minDelta, Math.min(maxDelta, delta));
+
+    const changes = [];
+    for(let k = 0; k < cageDragStart.length; k++){
+      const st = cageDragStart[k];
+      const s = st.scale + delta;
+      if(cageScales && cageScales[st.i]) cageScales[st.i][st.j] = s;
+      const m = cageSpheres[st.i*cageCols+st.j].mesh;
+      const th = m.userData.theta;
+      const r = cageBase[st.i][st.j] * s;
+      m.position.set(r * Math.cos(th), m.position.y, -r * Math.sin(th));
+      changes.push({ i: st.i, j: st.j, scale: s });
+    }
 
     cageRebuildLines();
+    cageRestyle();
     render();
-    if(cageDragCallback) cageDragCallback(i, j, newScale);
+    if(cageDragCallback) cageDragCallback(changes);
   });
 
   window.addEventListener('pointerup', cageEndDrag);
   window.addEventListener('pointercancel', cageEndDrag);
-  window.addEventListener('blur', cageEndDrag);
+  // blur is a stronger reset than cageEndDrag alone -- hover state has no
+  // meaning once the window isn't focused, so force controls back on
+  // unconditionally rather than leaving them hostage to a hover that will
+  // never get a pointerleave to clear it (e.g. alt-tab while hovering).
+  window.addEventListener('blur', function(){
+    cageHover = -1;            // cleared BEFORE cageEndDrag so it can't re-lock
+    cageEndDrag();
+    controls.enabled = true;
+    cageSetHoverLock(false);
+    canvas.style.cursor = '';
+    if(cageSpheres.length){ cageRestyle(); render(); }
+  });
+
+  // Escape: mid-drag, revert to the pre-drag scales (and tell designer.js so
+  // design.cage matches); otherwise, if there's a selection, just clear it.
+  window.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    if(measureOn) return;    // Esc belongs to the measure tool while it is open
+    if(cageActive && cageDragStart){
+      const changes = [];
+      for(let k = 0; k < cageDragStart.length; k++){
+        const st = cageDragStart[k];
+        if(cageScales && cageScales[st.i]) cageScales[st.i][st.j] = st.scale;
+        const m = cageSpheres[st.i*cageCols+st.j].mesh;
+        const th = m.userData.theta;
+        const r = cageBase[st.i][st.j] * st.scale;
+        m.position.set(r * Math.cos(th), m.position.y, -r * Math.sin(th));
+        changes.push({ i: st.i, j: st.j, scale: st.scale });
+      }
+      cageRebuildLines();
+      if(cageDragCallback) cageDragCallback(changes);
+      cageEndDrag();
+      cageRestyle();
+      render();
+    } else if(cageSelection.size){
+      cageSelection.clear();
+      cageRestyle();
+      render();
+    }
+  });
 }
 
 window.showShapeCage = function(data, onDrag){
   if(!data || !data.base || !data.base.length || !data.cols) return;
+  // A preview refresh (e.g. right after a drag) calls back in here and must
+  // not lose the user's selection -- snapshot it before the internal
+  // hideShapeCage() call (which clears it) and restore below, but only if
+  // the grid shape didn't change: the flat indices in the selection mean a
+  // different handle once rows/cols change, so a stale selection would
+  // silently select the wrong points.
+  const prevRows = cageRows, prevCols = cageCols;
+  const prevSelection = new Set(cageSelection);
   window.hideShapeCage();
 
   const N = data.rows, M = data.cols;
@@ -1364,6 +1761,7 @@ window.showShapeCage = function(data, onDrag){
   const group = new THREE.Group();
   const sphereGeo = new THREE.SphereGeometry(1.6, 12, 10);
   cageSpheres = [];
+  cageRings = [];
 
   for(let i = 0; i < N; i++){
     const t = N > 1 ? i/(N-1) : 0;
@@ -1380,10 +1778,33 @@ window.showShapeCage = function(data, onDrag){
         depthTest: false, depthWrite: false, transparent: true, opacity: 1.0 });
       const mesh = new THREE.Mesh(sphereGeo, mat);
       mesh.renderOrder = 20;
-      mesh.position.set(r * Math.cos(theta), t * data.height, r * Math.sin(theta));
+      // World Z is NEGATED printer Y (see the coordinate-mapping note at the
+      // top of this file). Handle (i,j) steers the model at printer bed angle
+      // theta = 2*pi*j/M, and preview_math.js sweeps that angle to world
+      // (r*cos theta, ., -r*sin theta) -- so the handle must be drawn there
+      // too. Without the minus sign the cage is the mirror image of the model
+      // it deforms, and dragging the front-left handle bulges the front-right.
+      mesh.position.set(r * Math.cos(theta), t * data.height, -r * Math.sin(theta));
       mesh.userData = { i: i, j: j, theta: theta, t: t };
       group.add(mesh);
       cageSpheres.push({ mesh: mesh, i: i, j: j });
+
+      // Selection ring, hidden until the handle is selected. renderOrder 19
+      // puts it just under the dot (20) so the dot stays crisp on top; the
+      // ring radius clears even a hovered 1.35x dot, so they never overlap.
+      // color is set explicitly rather than left to default so the ring can
+      // never pick up a tint from anywhere else.
+      const ringMat = new THREE.SpriteMaterial({ map: cageRingTexture(),
+        color: 0xffffff, depthTest: false, depthWrite: false, transparent: true });
+      const ring = new THREE.Sprite(ringMat);
+      ring.scale.set(CAGE_RING_MM, CAGE_RING_MM, 1);
+      ring.position.set(mesh.position.x, mesh.position.y, mesh.position.z);
+      // Above the dot (20): the ring clears the dot geometrically, so drawing
+      // it on top costs nothing and guarantees it is never occluded.
+      ring.renderOrder = 21;
+      ring.visible = false;
+      group.add(ring);
+      cageRings.push(ring);
     }
   }
 
@@ -1425,7 +1846,34 @@ window.showShapeCage = function(data, onDrag){
   cageGroup = group;
 
   cageBindListeners();
+
+  if(prevRows === N && prevCols === M){
+    cageSelection = prevSelection;
+  } else if(prevRows){
+    // Grid shape changed -- the stored flat indices now name other handles,
+    // so this is the one place a selection is dropped without the user
+    // asking. (prevRows 0 means there was no previous cage at all.)
+    cageSelection = new Set();
+  }
+  cageRestyle();   // so a reloaded design shows its edited points red immediately
   render();
+};
+
+// Returns the current selection as [{i,j}, ...] for designer.js's "reset
+// selected points" button.
+// Clears the selection from the sidebar, so it never depends on the Esc key
+// reaching this listener.
+window.clearCageSelection = function(){
+  if(!cageSelection.size) return;
+  cageSelection.clear();
+  cageRestyle();
+  render();
+};
+
+window.getCageSelection = function(){
+  return Array.from(cageSelection).sort(function(a,b){ return a-b; }).map(function(idx){
+    return { i: Math.floor(idx / cageCols), j: idx % cageCols };
+  });
 };
 
 // Debug/automation hook: handle count + world/screen positions so tests can
@@ -1438,6 +1886,16 @@ window.__cageDebug = function(){
     hasGroup: !!cageGroup,
     inScene: cageGroup ? scene.children.indexOf(cageGroup) >= 0 : null,
     dragActive: !!cageActive,
+    hover: cageHover,
+    selection: Array.from(cageSelection).sort(function(a,b){ return a-b; }),
+    controlsEnabled: controls.enabled,
+    hoverLocked: controls.mouseButtons.LEFT === null,
+    colors: cageSpheres.map(function(s){ return s.mesh.material.color.getHex(); }),
+    scaleValues: cageSpheres.map(function(s){
+      return (cageScales && cageScales[s.i]) ? cageScales[s.i][s.j] : 1.0;
+    }),
+    dotScales: cageSpheres.map(function(s){ return s.mesh.scale.x; }),
+    ringsVisible: cageRings.map(function(r){ return !!r.visible; }),
     dotMat: cageSpheres.length ? {
       transparent: cageSpheres[0].mesh.material.transparent,
       depthTest: cageSpheres[0].mesh.material.depthTest,
@@ -1458,6 +1916,7 @@ window.__cageDebug = function(){
 window.hideShapeCage = function(){
   if(cageGroup){
     cageSpheres.forEach(function(s){ s.mesh.material.dispose(); });
+    cageRings.forEach(function(r){ r.material.dispose(); });   // shared map kept
     if(cageGroup.userData.sphereGeo) cageGroup.userData.sphereGeo.dispose();
     cageRowLines.forEach(function(l){ l.geometry.dispose(); l.material.dispose(); });
     cageColLines.forEach(function(l){ l.geometry.dispose(); l.material.dispose(); });
@@ -1465,12 +1924,1288 @@ window.hideShapeCage = function(){
     cageGroup = null;
   }
   cageSpheres = [];
+  cageRings = [];
   cageRowLines = [];
   cageColLines = [];
-  // Failsafe: always leave the drag state clean, even if hide is called
-  // mid-drag (e.g. the checkbox is toggled off while dragging).
+  // Failsafe: always leave drag/hover/selection state clean, even if hide is
+  // called mid-drag or mid-hover (e.g. the checkbox is toggled off while
+  // dragging, or a preview refresh rebuilds the cage under the mouse).
   cageActive = null;
+  cageDragStart = null;
+  cageHover = -1;
+  // The SELECTION deliberately survives a hide. clearPreview() calls this
+  // every time the draft preview is rebuilt -- which happens as soon as you
+  // start dragging a handle -- so clearing here made a multi-point selection
+  // evaporate the instant the user began adjusting it. The selection is only
+  // dropped by an explicit user action (Esc / Clear selection, both via
+  // window.clearCageSelection) or by a grid-shape change in showShapeCage,
+  // where the stored flat indices would otherwise point at other handles.
   window.__silDragActive = false;
   controls.enabled = true;
+  cageSetHoverLock(false);
+  renderer.domElement.style.cursor = measureOn ? 'crosshair' : '';
+  // Re-assert the real count: the sidebar buttons stay correct even with no
+  // handles on screen, and getCageSelection() still resolves (cageCols is
+  // left intact), so "Reset selected points" keeps working.
+  if(typeof window.onCageSelectionChange === 'function'){
+    window.onCageSelectionChange(cageSelection.size);
+  }
   render();
+};
+
+// ---- measure tool -----------------------------------------------------------
+// A read-only instrument. It reports distances read off the toolpath that is
+// already on screen; it never writes G-code and never feeds a value back into
+// the design.
+//
+// What the numbers mean, precisely: every figure is measured on the toolpath
+// CENTRELINE, which is not what calipers read off the finished part. A bead
+// straddles its centreline, so the printed wall stands half a line width
+// further out on each side -- an outer diameter is centreline + one full line
+// width, a bore is centreline - one full line width. The card prints those two
+// derived figures beside the measured one and labels them derived, rather than
+// folding the correction in silently. A dimension that quietly means something
+// other than what you would measure is how a lid gets printed to the wrong
+// size.
+//
+// Picks snap to the toolpath and never to empty space, so the same spot clicked
+// twice gives the same number.
+
+const MEASURE_CELL = 2.0;       // pick-grid cell size (mm)
+const MEASURE_STEP = 1.0;       // max spacing between pick samples along a segment (mm)
+const MEASURE_PICK_PX = 14;     // screen-space pick radius (CSS px), as CAGE_PICK_PX
+const MEASURE_CLICK_PX = 5;     // pointer travel under which a press counts as a click
+const MEASURE_COL = 0x22d3ee;   // mirrors --measure in style.css -- keep the two in step
+const MEASURE_MIN_RING = 12;    // fewest band samples that can define a cross-section
+// Largest angular gap to the far side of a cross-section that still counts as
+// "closed". Past this there is no opposite wall within reach and the diameter
+// is withheld rather than measured to whatever happened to be nearest.
+const MEASURE_OPP_RAD = 0.25;   // radians (~14 deg)
+const MEASURE_BAND_MAX = 2.0;   // widest half-band the ring search will grow to (mm)
+const MEASURE_BINS = 72;        // angular sectors (5 deg) used to trace the outer profile
+
+let measureOn = false;
+let measureMode = 'span';       // 'span' = point to point, 'ring' = radius/diameter
+let measurePts = [];            // picked world-space points, in click order
+let measureHoverPt = null;      // ghost point under the cursor, or null
+let measureRingInfo = null;     // measureRing() result for the current ring pick
+let measureGroup = null;        // scene overlay (markers + spans)
+let measureLineMat = null;      // shared fat-line material for the overlay
+let measureTagEl = null;        // floating value tag over the canvas
+let measureTagPos = null;       // world anchor for that tag, or null when hidden
+let measureDownX = 0, measureDownY = 0, measureDownOK = false;
+let measureHoverX = 0, measureHoverY = 0, measureHoverRAF = 0;
+let measureListenersBound = false;
+
+// Pick cloud: one sample every MEASURE_STEP mm (or less) along the extrude
+// path, plus the segment each sample came from -- so a pick can be refined onto
+// the exact segment, and so segments the scrubber has not revealed yet can be
+// excluded.
+let msX = null, msY = null, msZ = null, msSeg = null;
+let msGrid = null;              // Map "ix,iy,iz" -> array of sample indices
+
+const msRaycaster = new THREE.Raycaster();
+const msNDC = new THREE.Vector2();
+const msPoint = new THREE.Vector3();
+const msProj = new THREE.Vector3();
+
+function measureKey(x, y, z){
+  return Math.floor(x/MEASURE_CELL) + ',' + Math.floor(y/MEASURE_CELL) + ',' +
+         Math.floor(z/MEASURE_CELL);
+}
+
+function measureBuildGrid(){
+  msX = msY = msZ = msSeg = null;
+  msGrid = null;
+  if(!extArr || extArr.length < 6) return;
+  const nSeg = extArr.length / 6;
+  const xs = [], ys = [], zs = [], sg = [];
+  for(let s = 0; s < nSeg; s++){
+    const b = s*6;
+    const ax = extArr[b], ay = extArr[b+1], az = extArr[b+2];
+    const dx = extArr[b+3]-ax, dy = extArr[b+4]-ay, dz = extArr[b+5]-az;
+    // Long moves (a calibration disk's straight fills) would otherwise only
+    // register at their endpoints, and clicking the middle of one would snap
+    // the marker to an end. Subdivide anything longer than MEASURE_STEP.
+    const n = Math.max(1, Math.ceil(Math.sqrt(dx*dx+dy*dy+dz*dz) / MEASURE_STEP));
+    for(let k = 0; k < n; k++){
+      const t = k/n;
+      xs.push(ax+dx*t); ys.push(ay+dy*t); zs.push(az+dz*t); sg.push(s);
+    }
+  }
+  const lb = (nSeg-1)*6;                        // close with the final vertex
+  xs.push(extArr[lb+3]); ys.push(extArr[lb+4]); zs.push(extArr[lb+5]); sg.push(nSeg-1);
+
+  msX = new Float32Array(xs); msY = new Float32Array(ys); msZ = new Float32Array(zs);
+  msSeg = new Uint32Array(sg);
+  msGrid = new Map();
+  for(let i = 0; i < msX.length; i++){
+    const key = measureKey(msX[i], msY[i], msZ[i]);
+    const cell = msGrid.get(key);
+    if(cell) cell.push(i); else msGrid.set(key, [i]);
+  }
+}
+
+// How much of the print is currently on screen. Measuring a wall the scrubber
+// has not drawn yet would report a number for something the user cannot see.
+// A fresh InstancedBufferGeometry starts at Infinity (= draw everything).
+function measureDrawnSegs(){
+  if(!pathObj || !pathObj.geometry || !extArr) return 0;
+  const n = pathObj.geometry.instanceCount;
+  const all = extArr.length/6;
+  return (n == null || !isFinite(n)) ? all : Math.min(n, all);
+}
+
+// Millimetres per on-screen pixel at `dist` from the camera. The pick
+// tolerance is defined in CSS pixels and converted through this, so it stays a
+// constant on-screen size at every zoom level instead of getting unusably tight
+// when you zoom out.
+function measureMmPerPx(dist){
+  const h = wrap.clientHeight || 1;
+  return 2 * dist * Math.tan(camera.fov*Math.PI/360) / h;
+}
+
+// Slab test: [entry, exit] parameters of `ray` through the loaded model's
+// bounds, padded so a pick just off the surface still starts marching inside.
+// null when the ray misses the model entirely.
+function measureRaySpan(ray, pad){
+  if(!lastData) return null;
+  const d = lastData;
+  // World Z runs OPPOSITE printer Y (wz = cy - printerY), so the printer-Y
+  // span [miny, maxy] maps to the world-Z span [cy-maxy, cy-miny] -- max and
+  // min swap sides. Subtracting cy from each without the flip gave the
+  // mirror-image slab, which for an off-centre model does not contain the
+  // model at all and made every measure pick miss.
+  const lo = [d.minx-BED_X/2-pad, d.minz-pad, BED_Y/2-d.maxy-pad];
+  const hi = [d.maxx-BED_X/2+pad, d.maxz+pad, BED_Y/2-d.miny+pad];
+  const o = [ray.origin.x, ray.origin.y, ray.origin.z];
+  const v = [ray.direction.x, ray.direction.y, ray.direction.z];
+  let t0 = 0, t1 = Infinity;
+  for(let a = 0; a < 3; a++){
+    if(Math.abs(v[a]) < 1e-9){
+      if(o[a] < lo[a] || o[a] > hi[a]) return null;   // parallel and outside the slab
+      continue;
+    }
+    let ta = (lo[a]-o[a])/v[a], tb = (hi[a]-o[a])/v[a];
+    if(ta > tb){ const s = ta; ta = tb; tb = s; }
+    if(ta > t0) t0 = ta;
+    if(tb < t1) t1 = tb;
+    if(t0 > t1) return null;
+  }
+  return [t0, t1];
+}
+
+// Closest point on extrude segment `s` to `ray`, clamped to the segment ends.
+// Standard closest-approach between two lines; the ray direction is unit
+// length, so its own squared length drops out of the denominator.
+function measureClosestOnSeg(s, ray, out){
+  const b = s*6;
+  const ax = extArr[b], ay = extArr[b+1], az = extArr[b+2];
+  const ux = extArr[b+3]-ax, uy = extArr[b+4]-ay, uz = extArr[b+5]-az;
+  const o = ray.origin, d = ray.direction;
+  const wx = ax-o.x, wy = ay-o.y, wz = az-o.z;
+  const uu = ux*ux + uy*uy + uz*uz;
+  const ud = ux*d.x + uy*d.y + uz*d.z;
+  const uw = ux*wx + uy*wy + uz*wz;
+  const dw = d.x*wx + d.y*wy + d.z*wz;
+  const den = uu - ud*ud;
+  let f = (den > 1e-9) ? (ud*dw - uw)/den : 0;
+  if(f < 0) f = 0; else if(f > 1) f = 1;
+  return out.set(ax+ux*f, ay+uy*f, az+uz*f);
+}
+
+// Nearest toolpath point under (clientX, clientY), or null. Marches the camera
+// ray through the sample grid rather than projecting every vertex: a 3 MB
+// G-code file is well over 100k segments, and a full projection sweep on every
+// pointermove would make the hover ghost stutter. Front-most wins, which is
+// what "the point I am looking at" means on a surface.
+function measurePick(clientX, clientY){
+  if(!msGrid) measureBuildGrid();
+  if(!msGrid) return null;
+  const drawn = measureDrawnSegs();
+  if(drawn <= 0) return null;             // scrubbed to 0% -- nothing is on screen
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  msNDC.x = ((clientX-rect.left)/rect.width)*2 - 1;
+  msNDC.y = -((clientY-rect.top)/rect.height)*2 + 1;
+  msRaycaster.setFromCamera(msNDC, camera);
+  const ray = msRaycaster.ray;
+
+  // Pad the bounds by the pick tolerance as well as a couple of cells: zoomed
+  // right out, 14 px is several millimetres of world space, and a pick aimed at
+  // the silhouette edge would otherwise never enter the box to start marching.
+  const mmPerPx = measureMmPerPx(camera.position.distanceTo(controls.target));
+  const span = measureRaySpan(ray, MEASURE_CELL*2 + MEASURE_PICK_PX*mmPerPx);
+  if(!span) return null;
+  const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
+  const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
+
+  const seen = new Set();                 // each cell is scanned once per pick
+  let best = -1, bestT = Infinity;
+  for(let t = Math.max(span[0], 0); t <= span[1]; t += MEASURE_CELL){
+    const ix = Math.floor((ox+dx*t)/MEASURE_CELL);
+    const iy = Math.floor((oy+dy*t)/MEASURE_CELL);
+    const iz = Math.floor((oz+dz*t)/MEASURE_CELL);
+    for(let a = -1; a <= 1; a++) for(let b = -1; b <= 1; b++) for(let c = -1; c <= 1; c++){
+      const key = (ix+a) + ',' + (iy+b) + ',' + (iz+c);
+      if(seen.has(key)) continue;
+      seen.add(key);
+      const cell = msGrid.get(key);
+      if(!cell) continue;
+      for(let m = 0; m < cell.length; m++){
+        const i = cell[m];
+        if(msSeg[i] >= drawn) continue;             // not drawn at this scrub position
+        const wx = msX[i]-ox, wy = msY[i]-oy, wz = msZ[i]-oz;
+        const along = wx*dx + wy*dy + wz*dz;
+        if(along <= 0 || along >= bestT) continue;  // behind the camera, or already beaten
+        const px = wx-dx*along, py = wy-dy*along, pz = wz-dz*along;
+        if(Math.sqrt(px*px+py*py+pz*pz) > MEASURE_PICK_PX*measureMmPerPx(along)) continue;
+        bestT = along; best = i;
+      }
+    }
+  }
+  if(best < 0) return null;
+
+  // Refine onto the exact segment the winning sample came from, so the reading
+  // is the toolpath itself and not the sampling lattice.
+  measureClosestOnSeg(msSeg[best], ray, msPoint);
+  return { point: msPoint.clone(), seg: msSeg[best] };
+}
+
+// One horizontal cross-section through `p`, using samples within +/-`band` of
+// its height. Returns the section's centroid (the local axis), the radius out
+// to `p`, and the section's OUTER wall on both the pick's side and the far side.
+//
+// The outer wall is found by splitting the section into angular sectors and
+// keeping the FARTHEST point in each. Taking the nearest point across from the
+// pick instead is what the first cut of this did, and it read 36.0 mm across a
+// vase whose base is 64.0 mm: the base is solid, so there is toolpath at every
+// radius from the centre outwards, and the search happily returned an infill
+// line near the middle and called it the far wall. Calipers close on the
+// outside of a part, so the outside is what gets traced.
+function measureRingAt(p, band, drawn){
+  const n = msX.length;
+  let sx = 0, sz = 0, count = 0;
+  for(let i = 0; i < n; i++){
+    if(msSeg[i] >= drawn) continue;
+    if(Math.abs(msY[i]-p.y) > band) continue;
+    sx += msX[i]; sz += msZ[i]; count++;
+  }
+  if(count < 3) return null;
+  const cx = sx/count, cz = sz/count;
+
+  const outR = new Float64Array(MEASURE_BINS);
+  const outX = new Float64Array(MEASURE_BINS);
+  const outY = new Float64Array(MEASURE_BINS);
+  const outZ = new Float64Array(MEASURE_BINS);
+  const used = new Uint8Array(MEASURE_BINS);
+  for(let i = 0; i < n; i++){
+    if(msSeg[i] >= drawn) continue;
+    if(Math.abs(msY[i]-p.y) > band) continue;
+    const dx = msX[i]-cx, dz = msZ[i]-cz;
+    const r = Math.hypot(dx, dz);
+    let b = Math.floor((Math.atan2(dz, dx) + Math.PI) / (2*Math.PI) * MEASURE_BINS);
+    if(b < 0) b = 0; else if(b >= MEASURE_BINS) b = MEASURE_BINS-1;
+    if(!used[b] || r > outR[b]){
+      used[b] = 1; outR[b] = r; outX[b] = msX[i]; outY[b] = msY[i]; outZ[b] = msZ[i];
+    }
+  }
+
+  // Nearest occupied sector to `ang`, plus how far off it is in radians. An
+  // empty sector means the section genuinely has no wall in that direction at
+  // this height, which the caller reports rather than papering over.
+  function nearestBin(ang){
+    const binW = 2*Math.PI/MEASURE_BINS;
+    // Wrap into [0, MEASURE_BINS) first. Callers pass theta+PI for the far
+    // side, which runs past 2*PI, and an unwrapped target made the distance
+    // below come out NEGATIVE -- which then slid under every "is the section
+    // closed" threshold unchallenged.
+    let target = ((ang + Math.PI) / (2*Math.PI) * MEASURE_BINS) % MEASURE_BINS;
+    if(target < 0) target += MEASURE_BINS;
+    let best = -1, bestOff = Infinity;
+    for(let b = 0; b < MEASURE_BINS; b++){
+      if(!used[b]) continue;
+      let off = Math.abs((b + 0.5) - target);
+      if(off > MEASURE_BINS/2) off = MEASURE_BINS - off;
+      if(off < bestOff){ bestOff = off; best = b; }
+    }
+    // Discount half a sector: a fully covered section still lands up to half a
+    // bin off the exact direction purely from binning, and reporting that as a
+    // gap would overstate how open the section is.
+    return { bin:best, off: Math.max(0, bestOff*binW - binW/2) };
+  }
+
+  const radius = Math.hypot(p.x-cx, p.z-cz);
+  const theta = Math.atan2(p.z-cz, p.x-cx);
+  const near = nearestBin(theta);
+  const far = nearestBin(theta + Math.PI);
+
+  let coverage = 0, outerMin = Infinity, outerMax = -Infinity;
+  for(let b = 0; b < MEASURE_BINS; b++){
+    if(!used[b]) continue;
+    coverage++;
+    if(outR[b] < outerMin) outerMin = outR[b];
+    if(outR[b] > outerMax) outerMax = outR[b];
+  }
+
+  return {
+    cx:cx, cz:cz, radius:radius, band:band, count:count,
+    nearR: near.bin >= 0 ? outR[near.bin] : radius,
+    farR:  far.bin  >= 0 ? outR[far.bin]  : 0,
+    gap:   far.bin  >= 0 ? far.off : Math.PI,
+    nearPt: near.bin >= 0
+      ? new THREE.Vector3(outX[near.bin], outY[near.bin], outZ[near.bin])
+      : p.clone(),
+    opp: far.bin >= 0
+      ? new THREE.Vector3(outX[far.bin], outY[far.bin], outZ[far.bin])
+      : new THREE.Vector3(cx, p.y, cz),
+    coverage:coverage, bins:MEASURE_BINS,
+    outerMin: coverage ? outerMin : 0, outerMax: coverage ? outerMax : 0
+  };
+}
+
+// Cross-section through the picked point, widening the band until the section
+// actually closes.
+//
+// It has to widen. This generator modulates Z by up to z_amp_max, so a
+// horizontal slice cuts several spiral turns at whatever phase each is in, and
+// a band sized for flat layers can come back as a few disconnected arcs. A
+// centroid taken from arcs is not on the axis at all, and the radius read off
+// it is wrong by a lot rather than a little. So the band grows until the far
+// side is genuinely covered -- and the band that was used is printed on the
+// card, because a reading smeared over 2 mm of height is a different claim
+// from one taken over 0.2 mm.
+function measureRing(p){
+  if(!msX || !lastData) return null;
+  const drawn = measureDrawnSegs();
+  if(drawn <= 0) return null;
+  const lh = (lastData.meta && lastData.meta.layerHeight) || null;
+  // Half a layer is the floor: a spiral vase climbs one layer height per
+  // revolution, so a thinner band cannot contain a whole turn even on a
+  // perfectly flat-layered print.
+  let band = lh ? Math.max(lh*0.55, 0.15) : 0.5;
+  let out = null;
+  for(;;){
+    const got = measureRingAt(p, band, drawn);
+    if(got) out = got;
+    if(got && got.count >= MEASURE_MIN_RING && got.gap <= MEASURE_OPP_RAD) return got;
+    if(band >= MEASURE_BAND_MAX) break;
+    band = Math.min(band*2, MEASURE_BAND_MAX);
+  }
+  return out;   // best effort; the caller reports the gap instead of a diameter
+}
+
+// ---- overlay ---------------------------------------------------------------
+// Markers and spans deliberately ignore the depth buffer: a measurement you can
+// only see when it happens to fall on the near side of the model is not much of
+// a measurement. renderOrder keeps them above the toolpath.
+
+function measureLineMaterial(){
+  if(measureLineMat) return measureLineMat;
+  measureLineMat = new LineMaterial({ color:MEASURE_COL, linewidth:2,
+    worldUnits:false, depthTest:false, transparent:true });
+  measureLineMat.resolution.set(wrap.clientWidth||1, wrap.clientHeight||1);
+  return measureLineMat;
+}
+
+function measureDot(p, ghost){
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(ghost ? 0.55 : 0.8, 12, 8),
+    new THREE.MeshBasicMaterial({ color:MEASURE_COL, depthTest:false,
+      transparent:true, opacity: ghost ? 0.45 : 1.0 }));
+  m.position.copy(p);
+  m.renderOrder = 1000;
+  return m;
+}
+
+// `pts` is a polyline; LineSegmentsGeometry wants explicit endpoint pairs.
+function measureLine(pts){
+  const segs = [];
+  for(let i = 0; i+1 < pts.length; i++){
+    segs.push(pts[i].x, pts[i].y, pts[i].z, pts[i+1].x, pts[i+1].y, pts[i+1].z);
+  }
+  const g = new LineSegmentsGeometry();
+  g.setPositions(segs);
+  const l = new LineSegments2(g, measureLineMaterial());
+  l.renderOrder = 1000;
+  return l;
+}
+
+function measureEnsureGroup(){
+  if(!measureGroup){
+    measureGroup = new THREE.Group();
+    scene.add(measureGroup);
+  }
+  return measureGroup;
+}
+
+function measureClearOverlay(){
+  if(!measureGroup) return;
+  while(measureGroup.children.length){
+    const c = measureGroup.children[0];
+    measureGroup.remove(c);
+    if(c.geometry) c.geometry.dispose();
+    // The line material is shared and cached for the page lifetime; marker
+    // materials are one per marker and must go with them.
+    if(c.material && c.material !== measureLineMat) c.material.dispose();
+  }
+}
+
+function measureSetTag(pos, text){
+  measureTagPos = pos;
+  if(!measureTagEl){
+    measureTagEl = document.createElement('div');
+    measureTagEl.className = 'measure-tag';
+    wrap.appendChild(measureTagEl);
+  }
+  if(text != null) measureTagEl.textContent = text;
+}
+
+// Re-projects the floating tag. Called from render() through window.__measureSync
+// so it tracks orbit, zoom and resize without a loop of its own.
+function measureSync(){
+  if(measureLineMat) measureLineMat.resolution.set(wrap.clientWidth||1, wrap.clientHeight||1);
+  if(!measureTagEl) return;
+  if(!measureOn || !measureTagPos){ measureTagEl.style.display = 'none'; return; }
+  msProj.copy(measureTagPos).project(camera);
+  if(msProj.z < -1 || msProj.z > 1){ measureTagEl.style.display = 'none'; return; }
+  measureTagEl.style.display = '';
+  measureTagEl.style.left = ((msProj.x+1)/2*wrap.clientWidth) + 'px';
+  measureTagEl.style.top  = ((1-msProj.y)/2*wrap.clientHeight) + 'px';
+}
+window.__measureSync = measureSync;
+
+function measureMid(a, b){
+  return new THREE.Vector3((a.x+b.x)/2, (a.y+b.y)/2, (a.z+b.z)/2);
+}
+
+function measureRedraw(){
+  measureClearOverlay();
+  measureTagPos = null;
+  if(measureOn){
+    const g = measureEnsureGroup();
+    if(measureMode === 'span'){
+      for(let i = 0; i < measurePts.length; i++) g.add(measureDot(measurePts[i], false));
+      if(measurePts.length >= 2){
+        g.add(measureLine([measurePts[0], measurePts[1]]));
+        measureSetTag(measureMid(measurePts[0], measurePts[1]),
+                      measurePts[0].distanceTo(measurePts[1]).toFixed(2) + ' mm');
+      } else if(measurePts.length === 1 && measureHoverPt){
+        // Rubber band: the span updates live as the cursor moves, so you can
+        // see the number before committing the second point.
+        g.add(measureDot(measureHoverPt, true));
+        g.add(measureLine([measurePts[0], measureHoverPt]));
+        measureSetTag(measureMid(measurePts[0], measureHoverPt),
+                      measurePts[0].distanceTo(measureHoverPt).toFixed(2) + ' mm');
+      } else if(measureHoverPt){
+        g.add(measureDot(measureHoverPt, true));
+      }
+    } else {
+      if(measureHoverPt && !measurePts.length) g.add(measureDot(measureHoverPt, true));
+      if(measurePts.length){
+        const p = measurePts[0], r = measureRingInfo;
+        g.add(measureDot(p, false));
+        if(r){
+          const axis = new THREE.Vector3(r.cx, p.y, r.cz);
+          const closed = r.gap <= MEASURE_OPP_RAD && r.radius > 0.05;
+          // Axis tick: a short cross on the section centre, so it is obvious
+          // which point the radius is being measured from.
+          g.add(measureLine([new THREE.Vector3(r.cx-1.5, p.y, r.cz),
+                             new THREE.Vector3(r.cx+1.5, p.y, r.cz)]));
+          g.add(measureLine([new THREE.Vector3(r.cx, p.y, r.cz-1.5),
+                             new THREE.Vector3(r.cx, p.y, r.cz+1.5)]));
+          // The diameter is drawn across the outer wall, which is where it is
+          // measured -- when the pick is on that wall the two coincide, and
+          // when it is not (a pick on a solid base's infill) the line shows
+          // plainly that the span is not the one through the picked point.
+          g.add(measureLine(closed ? [r.nearPt, axis, r.opp] : [p, axis]));
+          if(closed){
+            g.add(measureDot(r.opp, true));
+            measureSetTag(axis, 'd ' + (r.nearR + r.farR).toFixed(2) + ' mm');
+          } else {
+            measureSetTag(measureMid(p, axis), 'r ' + r.radius.toFixed(2) + ' mm');
+          }
+        }
+      }
+    }
+  }
+  measureSync();
+  render();
+}
+
+// ---- readout ---------------------------------------------------------------
+
+function measureFmt(v){ return v.toFixed(2) + ' mm'; }
+
+// Printer coordinates. The scene is bed-centred with Y up; the machine is
+// corner-origin with Z up. Always report what the machine would call the point,
+// so a number read here can be typed straight into G-code.
+//
+// Printer Y is the INVERSE of parseGcode's wz = cy - printerY, i.e.
+// printerY = cy - worldZ -- NOT worldZ + cy. The un-negated form reported the
+// mirror-image Y for every point, and this readout is documented as safe to
+// type straight into G-code, so it was handing back a coordinate on the wrong
+// side of the bed.
+function measureFmtPt(p){
+  return (p.x+BED_X/2).toFixed(1) + ', ' + (BED_Y/2-p.z).toFixed(1) + ', ' + p.y.toFixed(1);
+}
+
+function measureRow(label, value, primary){
+  return '<div class="mrow' + (primary ? ' is-primary' : '') + '"><span>' + label +
+         '</span><b>' + value + '</b></div>';
+}
+
+function measureSetHint(text){
+  const el = document.getElementById('measure-hint');
+  if(el) el.textContent = text;
+}
+
+function measureRenderCard(){
+  const body = document.getElementById('measure-read');
+  if(!body) return;
+  const lw = (lastData && lastData.meta && lastData.meta.lineWidth) || null;
+  let html = '', hint = '';
+
+  if(measureMode === 'span'){
+    if(measurePts.length < 2){
+      html = '<div class="measure-empty">Click two points on the model to span ' +
+             'between them. Picks snap to the nearest toolpath point.</div>';
+      hint = measurePts.length ? 'Click the second point.' : 'Click the first point.';
+    } else {
+      const a = measurePts[0], b = measurePts[1];
+      // World X/Z are the machine's X/Y; world Y is the machine's Z.
+      const dx = b.x-a.x, dz = b.z-a.z, dh = b.y-a.y;
+      html = measureRow('From X,Y,Z', measureFmtPt(a)) +
+             measureRow('To X,Y,Z', measureFmtPt(b)) +
+             measureRow('Distance', measureFmt(Math.sqrt(dx*dx+dz*dz+dh*dh)), true) +
+             measureRow('Delta X', measureFmt(dx)) +
+             measureRow('Delta Y', measureFmt(dz)) +
+             measureRow('Delta Z (height)', measureFmt(dh)) +
+             measureRow('In the XY plane', measureFmt(Math.hypot(dx, dz))) +
+             '<div class="measure-note">Toolpath centreline, not the outside of the ' +
+             'wall. ' + (lw
+               ? 'The printed bead stands ' + (lw/2).toFixed(2) + ' mm beyond it on each side.'
+               : 'This file declares no line width, so the bead offset is unknown.') +
+             '</div>';
+      hint = 'Click again to start a new span.';
+    }
+  } else {
+    if(!measurePts.length){
+      html = '<div class="measure-empty">Click a point on the wall. Reports the ' +
+             'radius out to it and the diameter across the model at that height.</div>';
+      hint = 'Click a point on the wall.';
+    } else if(!measureRingInfo){
+      html = '<div class="measure-empty">Not enough of the model is drawn at this ' +
+             'height to form a cross-section. Scrub the timeline further along, or ' +
+             'pick a point lower down.</div>';
+      hint = 'No cross-section here.';
+    } else {
+      const p = measurePts[0], r = measureRingInfo;
+      const closed = r.gap <= MEASURE_OPP_RAD && r.radius > 0.05;
+      const dia = r.nearR + r.farR;
+      // A pick that is not itself on the outer wall (the solid base of a vase,
+      // or any infill) still has an honest radius, but the diameter beside it
+      // is measured wall-to-wall and is NOT twice that radius. Say so rather
+      // than letting the two numbers sit together implying they match.
+      const inside = closed && r.radius < r.nearR - 0.05;
+      html = measureRow('Point X,Y,Z', measureFmtPt(p)) +
+             // printerY = cy - worldZ, as measureFmtPt above -- r.cz is a
+             // world-space centre and needs the same inverse, not an offset.
+             measureRow('Section centre', (r.cx+BED_X/2).toFixed(1) + ', ' +
+                                          (BED_Y/2-r.cz).toFixed(1)) +
+             measureRow('Radius to pick', measureFmt(r.radius), !closed);
+      if(closed){
+        html += measureRow('Diameter', measureFmt(dia), true);
+        if(lw){
+          html += measureRow('Outer / inner',
+            (dia+lw).toFixed(2) + ' / ' + (dia-lw).toFixed(2) + ' mm');
+        }
+      }
+      html += '<div class="measure-note">Cross-section at Z ' + p.y.toFixed(2) +
+        ', from ' + r.count + ' toolpath points within +/-' + r.band.toFixed(2) +
+        ' mm of that height; the centre above is their centroid, not an assumed ' +
+        'axis. Outer wall traced in ' + r.coverage + ' of ' + r.bins +
+        ' sectors, ranging ' + r.outerMin.toFixed(2) + ' to ' + r.outerMax.toFixed(2) +
+        ' mm from that centre, so the section is ' +
+        ((r.outerMax-r.outerMin) <= 0.05
+          ? 'round to within the reading.'
+          : 'not round -- the diameter depends on which way you measure.');
+      if(!closed){
+        html += r.radius <= 0.05
+          ? ' No diameter: that pick is on the section centre, so there is no ' +
+            'direction to measure across. Pick a point on the wall.'
+          : ' No diameter: the section has no wall opposite the pick at this ' +
+            'height (nearest is ' + (r.gap*180/Math.PI).toFixed(0) +
+            ' deg off), so there is nothing to measure across to.';
+      } else {
+        if(inside){
+          html += ' The diameter is measured across the outer wall, which your ' +
+                  'pick is ' + (r.nearR-r.radius).toFixed(2) + ' mm inside of, so it ' +
+                  'is not twice the radius above.';
+        }
+        html += lw
+          ? ' Outer and inner add and remove one full ' + lw.toFixed(2) +
+            ' mm line width -- derived from the file header, not measured.'
+          : ' This file declares no line width, so the outer and inner wall ' +
+            'diameters cannot be derived.';
+      }
+      html += '</div>';
+      hint = 'Click elsewhere to move the measurement.';
+    }
+  }
+  body.innerHTML = html;
+  measureSetHint(hint);
+}
+
+// ---- interaction -----------------------------------------------------------
+
+function measureAddPoint(clientX, clientY){
+  const hit = measurePick(clientX, clientY);
+  if(!hit){ measureSetHint('Nothing there -- click on the toolpath itself.'); return; }
+  if(measureMode === 'ring'){
+    measurePts = [hit.point];
+    measureRingInfo = measureRing(hit.point);
+  } else {
+    if(measurePts.length >= 2) measurePts = [];
+    measurePts.push(hit.point);
+  }
+  measureRedraw();
+  measureRenderCard();
+}
+
+function measureClear(){
+  measurePts = [];
+  measureRingInfo = null;
+  measureRedraw();
+  measureRenderCard();
+}
+
+// Hover is throttled to one pick per frame: pointermove fires far faster than
+// the overlay needs rebuilding, and each rebuild allocates geometry.
+function measureQueueHover(x, y){
+  if(!measureOn) return;
+  measureHoverX = x; measureHoverY = y;
+  if(measureHoverRAF) return;
+  measureHoverRAF = requestAnimationFrame(function(){
+    measureHoverRAF = 0;
+    if(!measureOn) return;
+    const hit = measurePick(measureHoverX, measureHoverY);
+    const p = hit ? hit.point : null;
+    if(!p && !measureHoverPt) return;                                    // still nothing
+    if(p && measureHoverPt && p.distanceToSquared(measureHoverPt) < 1e-6) return;
+    measureHoverPt = p;
+    measureRedraw();
+  });
+}
+
+function measureBindListeners(){
+  if(measureListenersBound) return;
+  measureListenersBound = true;
+  const canvas = renderer.domElement;
+
+  // A press that turns into an orbit must not drop a point, so the point lands
+  // on pointerup and only when the pointer barely moved. Orbit, pan and zoom
+  // all keep working untouched while the tool is active -- nothing here ever
+  // takes controls.enabled away, which is what makes this tool safe to leave on.
+  canvas.addEventListener('pointerdown', function(e){
+    if(!measureOn || e.button !== 0) return;
+    measureDownOK = true; measureDownX = e.clientX; measureDownY = e.clientY;
+  });
+  canvas.addEventListener('pointerup', function(e){
+    if(!measureOn || !measureDownOK || e.button !== 0) return;
+    measureDownOK = false;
+    if(Math.abs(e.clientX-measureDownX) > MEASURE_CLICK_PX ||
+       Math.abs(e.clientY-measureDownY) > MEASURE_CLICK_PX) return;   // that was an orbit
+    measureAddPoint(e.clientX, e.clientY);
+  });
+  canvas.addEventListener('pointermove', function(e){ measureQueueHover(e.clientX, e.clientY); });
+  canvas.addEventListener('pointerleave', function(){
+    measureDownOK = false;
+    if(!measureOn || !measureHoverPt) return;
+    measureHoverPt = null;
+    measureRedraw();
+  });
+}
+
+function measureSetOn(on){
+  if(measureOn === on) return;
+  measureOn = on;
+  document.getElementById('tool-measure').setAttribute('aria-pressed', on ? 'true' : 'false');
+  document.getElementById('measure-card').style.display = on ? '' : 'none';
+  renderer.domElement.style.cursor = on ? 'crosshair' : '';
+  if(on){
+    measureBindListeners();
+    if(!msGrid) measureBuildGrid();
+  } else {
+    measurePts = [];
+    measureHoverPt = null;
+    measureRingInfo = null;
+  }
+  measureRedraw();
+  measureRenderCard();
+}
+
+// A new file invalidates everything the tool knows: the pick grid was built
+// from the old path, and a measurement taken on it means nothing here.
+function measureReload(){
+  msGrid = null; msX = msY = msZ = msSeg = null;
+  measurePts = [];
+  measureHoverPt = null;
+  measureRingInfo = null;
+  measureSyncAppMode();
+  if(measureOn) measureBuildGrid();
+  measureRedraw();
+  measureRenderCard();
+}
+
+// The rail is an instrument of the G-code viewer, so it follows the mode as
+// well as the file. Called on load and from designer.js's mode switch.
+// Without the mode half, the rail stayed on the canvas in Design mode -- one
+// click away from measuring the loaded G-code while the canvas is showing the
+// blue draft preview of a shape that has since been edited.
+function measureSyncAppMode(){
+  const rail = document.getElementById('tool-rail');
+  const show = viewerModeActive() && !!extArr;
+  if(rail) rail.style.display = show ? '' : 'none';
+  if(!show && measureOn) measureSetOn(false);
+}
+window.__measureAppMode = measureSyncAppMode;
+
+document.getElementById('tool-measure').addEventListener('click', function(){
+  measureSetOn(!measureOn);
+});
+document.getElementById('measure-close').addEventListener('click', function(){
+  measureSetOn(false);
+});
+document.getElementById('measure-clear').addEventListener('click', measureClear);
+document.querySelectorAll('.measure-mode').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    const m = btn.getAttribute('data-mmode');
+    if(m === measureMode) return;
+    measureMode = m;
+    document.querySelectorAll('.measure-mode').forEach(function(b){
+      const on = (b === btn);
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    measureClear();   // the two modes mean different things by "the points"
+  });
+});
+
+window.addEventListener('keydown', function(e){
+  if(e.ctrlKey || e.metaKey || e.altKey) return;
+  if(typingInField(e)) return;
+  if(e.key === 'm' || e.key === 'M'){
+    const rail = document.getElementById('tool-rail');
+    if(!rail || rail.style.display === 'none') return;   // nothing loaded to measure
+    // Same trap the playback shortcuts fell into: the rail is revealed once on
+    // load and never hidden, so it says "a file exists", not "the viewer is on
+    // screen". Measuring from Design mode would report distances off the
+    // loaded G-code while the canvas is showing the blue draft preview of a
+    // shape that has since been edited -- a number describing something other
+    // than what the user is looking at.
+    if(!viewerModeActive()) return;
+    measureSetOn(!measureOn);
+    e.preventDefault();
+  } else if(e.key === 'Escape' && measureOn){
+    // First Esc drops the measurement, second closes the tool, so an accidental
+    // pick is cheap to undo without losing the tool you are in the middle of.
+    if(measurePts.length) measureClear(); else measureSetOn(false);
+  }
+});
+
+// Test/automation hook: measure at a known machine coordinate instead of a
+// screen click, so the arithmetic can be checked against a model whose real
+// dimensions are known without having to land a pixel-perfect click. Snaps to
+// the nearest toolpath point exactly as a click does.
+window.__measureAt = function(px, py, pz){
+  if(!msGrid) measureBuildGrid();
+  if(!msX) return null;
+  // Same printer -> world transform parseGcode uses, negation included
+  // (wz = cy - printerY). This hook exists to check measurement arithmetic
+  // against known dimensions, so it has to land on the same point a click
+  // would; the un-negated form snapped to the mirror-image point instead.
+  const wx = px - BED_X/2, wy = pz, wz = BED_Y/2 - py;
+  const drawn = measureDrawnSegs();
+  let best = -1, bestD = Infinity;
+  for(let i = 0; i < msX.length; i++){
+    if(msSeg[i] >= drawn) continue;
+    const dx = msX[i]-wx, dy = msY[i]-wy, dz = msZ[i]-wz;
+    const d = dx*dx + dy*dy + dz*dz;
+    if(d < bestD){ bestD = d; best = i; }
+  }
+  if(best < 0) return null;
+  const p = new THREE.Vector3(msX[best], msY[best], msZ[best]);
+  if(measureMode === 'ring'){
+    measurePts = [p];
+    measureRingInfo = measureRing(p);
+  } else {
+    if(measurePts.length >= 2) measurePts = [];
+    measurePts.push(p);
+  }
+  measureRedraw();
+  measureRenderCard();
+  return window.__measureState();
+};
+
+// Test/automation hook, same shape as __previewState / __viewFlags.
+window.__measureState = function(){
+  return {
+    on: measureOn,
+    mode: measureMode,
+    points: measurePts.map(function(p){
+      // Printer coords, same inverse as measureFmtPt: printerY = cy - worldZ.
+      return [+(p.x+BED_X/2).toFixed(3), +(BED_Y/2-p.z).toFixed(3), +p.y.toFixed(3)];
+    }),
+    samples: msX ? msX.length : 0,
+    cells: msGrid ? msGrid.size : 0,
+    ring: measureRingInfo ? {
+      radius: +measureRingInfo.radius.toFixed(3),
+      diameter: +(measureRingInfo.nearR + measureRingInfo.farR).toFixed(3),
+      band: +measureRingInfo.band.toFixed(3),
+      count: measureRingInfo.count,
+      coverage: measureRingInfo.coverage,
+      outerMin: +measureRingInfo.outerMin.toFixed(3),
+      outerMax: +measureRingInfo.outerMax.toFixed(3),
+      gapDeg: +(measureRingInfo.gap*180/Math.PI).toFixed(2)
+    } : null
+  };
+};
+
+// ---- orientation / view cube -----------------------------------------------
+// Bambu-Studio-style gizmo: a small cube in the corner that mirrors the main
+// camera's orientation and whose faces snap the camera to a standard view
+// when clicked.
+//
+// It gets its OWN canvas, renderer, scene and camera rather than sharing the
+// main renderer through a scissored viewport. A scissor pass would still
+// leave the gizmo's pointer handling entangled with the main canvas's -- any
+// hit-test would have to happen in the same event stream OrbitControls reads,
+// which is exactly the kind of "is this click for the model or for the cube"
+// ambiguity this widget cannot afford. A separate DOM element sidesteps that
+// completely: it sits on top in z-order, so every pointer event inside its
+// 96x96 box belongs to it and never reaches OrbitControls underneath.
+const navCanvas = document.getElementById('navcube');
+const navRenderer = new THREE.WebGLRenderer({ canvas: navCanvas, alpha:true, antialias:true });
+navRenderer.setPixelRatio(Math.min(devicePixelRatio,2));
+navRenderer.setSize(132, 132, false);   // false: leave the CSS size (style.css #navcube) alone
+
+const navScene = new THREE.Scene();
+const navCamera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
+// Distance is what decides how much of the 132px frame the cube fills, and so
+// how big the baked face labels end up. At fov 30 the visible height here is
+// 2*d*tan(15deg) = 0.536*d. The cube's own corner-to-corner diagonal is
+// 1.6*sqrt(3) = 2.77 (d must stay above ~5.17 for that alone), but the axis
+// triad added below sticks out further: TRIAD_ORIGIN ~= (-0.95,-0.95,-0.95)
+// is 0.95*sqrt(3) = 1.645 from the origin, and its label sprites poke out to
+// roughly 1.68 including their own footprint -- both past the cube's own
+// 0.8*sqrt(3) = 1.386. Using 2*1.68 = 3.36 as the worst-case extent in place
+// of 2.77, d must stay above 3.36/0.536 = ~6.27 or the triad clips. 6.9 keeps
+// ~10% margin on that while the frame grew to 132px (from 112, in step) so
+// the baked face labels stay at ~13.4 CSS px -- just above the ~13px
+// legibility floor this was tuned to (see the face-texture comment below).
+const NAV_CAM_DIST = 6.9;
+
+// Face order MUST match THREE.BoxGeometry's material-group order:
+// [+X, -X, +Y, -Y, +Z, -Z]. Directions describe the face's outward normal in
+// world space. Labels describe the PRINTER's axes (world Y = printer Z,
+// world Z = NEGATED printer Y -- see the coordinate-mapping note near the top
+// of this file), because every number this app reports is in printer
+// coordinates.
+//
+// Front/back: parseGcode() maps printer Y to world Z via `az = cy - y`
+// (cy = BED_Y/2), so printer Y=0 -- the origin corner, the edge the operator
+// stands at -- sits at POSITIVE world Z, and printer Y=BED_Y sits at negative
+// world Z. Front is therefore world +Z and Back world -Z. Both were the other
+// way round while the mapping was un-negated; the negation swapped them, so
+// clicking Front used to walk the camera round to the back of the machine.
+//
+// Top/bottom carry a tiny epsilon off the exact +/-Y axis. Camera.up is
+// never touched anywhere in this app (OrbitControls bakes object.up into an
+// internal quaternion the FIRST time update() runs and never recomputes it),
+// so a dead-on top-down view would put the view direction exactly parallel
+// to that fixed up vector -- a degenerate camera.lookAt with an undefined
+// roll. The epsilon keeps Top/Bottom visually indistinguishable from a true
+// top-down view while staying just off the singularity.
+const NAV_EPS = 0.02;
+const NAV_FACES = [
+  { key:'right',  label:'Right',  dir:new THREE.Vector3( 1, 0, 0) },
+  { key:'left',   label:'Left',   dir:new THREE.Vector3(-1, 0, 0) },
+  // The epsilon's sign picks which way is up on screen in a top-down view.
+  // A camera offset toward world -Z (i.e. +NAV_EPS on the dir's Z, since the
+  // camera sits along +dir) makes screen-up land on world -Z, which under the
+  // negated mapping is printer +Y -- the BACK of the bed at the top of the
+  // view, how every slicer (and anyone standing at the machine) reads it.
+  // It was -NAV_EPS while world +Z meant printer +Y; the negation flipped
+  // which sign gets that, so leaving it would have shown the bed upside down.
+  //
+  // `spin` rotates the baked label, NOT the camera, and is now unnecessary:
+  // BoxGeometry's +Y/-Y face UVs put the texture's "up" toward world -Z,
+  // which is exactly where screen-up now lands, so the labels read the right
+  // way up unrotated. (They were spun by PI when screen-up was world +Z,
+  // without which "Top" read as "doL".)
+  { key:'top',    label:'Top',    dir:new THREE.Vector3( 0, 1, NAV_EPS).normalize() },
+  { key:'bottom', label:'Bottom', dir:new THREE.Vector3( 0,-1, NAV_EPS).normalize() },
+  // Front/Back swapped POSITION in this array, not just their `dir` vectors:
+  // slot 4 is BoxGeometry's +Z material group and slot 5 its -Z, so the label
+  // baked into each slot has to be the one whose outward normal that slot
+  // carries. Swapping only the vectors would have painted "Back" on the front
+  // face while still flying the camera to the right place.
+  { key:'front',  label:'Front',  dir:new THREE.Vector3( 0, 0, 1) },
+  { key:'back',   label:'Back',   dir:new THREE.Vector3( 0, 0,-1) },
+];
+
+// Face textures are drawn with the 2D canvas API -- no external font/image
+// files, per the no-build-step / no-new-dependency rule. Two variants per
+// face (idle + hover) are baked up front and swapped wholesale on hover
+// rather than tinted at render time, so the hover colour is exactly --accent
+// with no blending artifacts against the label text.
+function navFaceTexture(label, hovered, spin){
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const g = c.getContext('2d');
+  // Idle faces sit in the cool-slate palette; hover uses --accent (#2f6bff)
+  // and NOTHING else may use that highlight -- --accent-purple/--ok/--warn/
+  // --danger/--measure are reserved elsewhere.
+  //
+  // The idle fill was #343b42, chosen against the old #1c1f22 canvas. The
+  // canvas is now #2b3036, which left the cube barely a shade off its own
+  // background -- a widget for reading orientation that you first had to find.
+  // Lifted well clear of it instead.
+  g.fillStyle = hovered ? '#2f6bff' : '#4a535e';
+  g.fillRect(0, 0, S, S);
+  g.strokeStyle = hovered ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)';
+  g.lineWidth = 8;
+  g.strokeRect(4, 4, S-8, S-8);
+  g.fillStyle = '#ffffff';
+  // 60px of a 256px texture on a face that projects to ~57px (at the 132px
+  // frame / NAV_CAM_DIST=6.9 pairing -- widened for the axis triad, see the
+  // comment on NAV_CAM_DIST) lands the label at ~13.4 CSS px, matching the
+  // icon-legibility floor set in style.css.
+  g.font = '700 60px Inter, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  // Applied to the glyph only -- the fill and border are rotationally
+  // symmetric, so spinning them would be a no-op. See `spin` in NAV_FACES.
+  if(spin){
+    g.translate(S/2, S/2);
+    g.rotate(spin);
+    g.translate(-S/2, -S/2);
+  }
+  g.fillText(label, S/2, S/2);
+  const tex = new THREE.CanvasTexture(c);
+  if(THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const navTexIdle = NAV_FACES.map(f => navFaceTexture(f.label, false, f.spin));
+const navTexHover = NAV_FACES.map(f => navFaceTexture(f.label, true, f.spin));
+// MeshBasicMaterial (unlit): a gizmo's faces must show their true assigned
+// colour regardless of viewing angle, not get shaded darker/lighter by a
+// light direction the user has no control over.
+const navMats = NAV_FACES.map((f,i) => new THREE.MeshBasicMaterial({ map:navTexIdle[i] }));
+const navGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
+const navCube = new THREE.Mesh(navGeo, navMats);
+navCube.add(new THREE.LineSegments(new THREE.EdgesGeometry(navGeo),
+  new THREE.LineBasicMaterial({ color:0x14171a })));   // dark seam between faces, decorative only
+navScene.add(navCube);
+
+// ---- axis triad -------------------------------------------------------
+// Small XYZ indicator anchored just outside the cube corner that stands for
+// the printer's origin (smallest X, Y and Z), RGB = XYZ per the universal
+// convention. All three arrows therefore point inward across the cube, the
+// way a machine's axes leave its origin. Added to navScene directly (NOT as
+// a child of navCube) so navPickIndex's intersectObject(navCube, false)
+// never sees it -- face picking below is unaffected by its presence.
+//
+// The labels are PRINTER axes, matching every other number this app
+// reports, NOT Three.js world axes. Per the coordinate-mapping note near
+// the top of this file: printer X -> world X, printer Y -> world -Z
+// (NEGATED), printer Z (up) -> world Y. So the red line (world +X) reads
+// "X", the green line (world -Z) reads "Y", and the blue line (world +Y)
+// reads "Z". The green line pointed at world +Z while the mapping was
+// un-negated; leaving it there would make the widget lie about which way
+// the machine actually moves. Printer Y smallest is world Z largest, which
+// is why the anchor sits at +Z.
+const TRIAD_ORIGIN = new THREE.Vector3(-0.95, -0.95, 0.95);   // just outside the 0.8 half-extent cube
+const TRIAD_LEN = 0.9;
+const TRIAD_LABEL_GAP = 0.18;   // label sprite sits this far past the line tip, clear of it
+const TRIAD_AXES = [
+  { dir:new THREE.Vector3(1,0,0), color:'#e8483f', label:'X' },   // printer X -> world +X
+  { dir:new THREE.Vector3(0,0,-1), color:'#4cc264', label:'Y' },  // printer Y -> world -Z (negated)
+  { dir:new THREE.Vector3(0,1,0), color:'#4a90e8', label:'Z' },   // printer Z (up) -> world +Y
+];
+
+// Canvas-drawn sprite, same no-external-font/image reasoning as
+// navFaceTexture above. Drawn at 128px and scaled down via sprite.scale
+// (0.5) rather than drawn small, so the GPU supersamples instead of
+// rasterising an already-jagged glyph.
+function navAxisLabelSprite(text, color){
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = color;
+  g.font = '700 88px Inter, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(text, S/2, S/2 + 4);
+  const tex = new THREE.CanvasTexture(c);
+  if(THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex }));
+  sprite.scale.set(0.5, 0.5, 1);
+  return sprite;
+}
+
+for(const axis of TRIAD_AXES){
+  const end = TRIAD_ORIGIN.clone().addScaledVector(axis.dir, TRIAD_LEN);
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([TRIAD_ORIGIN, end]),
+    new THREE.LineBasicMaterial({ color:axis.color }));
+  navScene.add(line);
+  const label = navAxisLabelSprite(axis.label, axis.color);
+  label.position.copy(TRIAD_ORIGIN).addScaledVector(axis.dir, TRIAD_LEN + TRIAD_LABEL_GAP);
+  navScene.add(label);
+}
+
+let navHoverIdx = -1;
+let navLastView = null;
+let navAnimHandle = 0;
+
+const navRaycaster = new THREE.Raycaster();
+const navNDC = new THREE.Vector2();
+
+function navPickIndex(clientX, clientY){
+  const rect = navCanvas.getBoundingClientRect();
+  navNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  navNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  navRaycaster.setFromCamera(navNDC, navCamera);
+  // recursive MUST be false: intersectObject's default is recursive=true, which
+  // also tests the decorative edge LineSegments child added below. Line
+  // raycasting uses a fixed world-space pick threshold (Raycaster.params.Line
+  // .threshold, default 1) meant for full-size scene geometry -- on this 1.6
+  // unit cube that threshold is bigger than the cube itself, so the edges
+  // reported a bogus near-camera "hit" (no .face) on almost every ray and
+  // permanently shadowed the real box hit, making every click silently miss.
+  const hit = navRaycaster.intersectObject(navCube, false)[0];
+  return (hit && hit.face) ? hit.face.materialIndex : -1;
+}
+
+function navApplyHover(){
+  for(let i = 0; i < navMats.length; i++){
+    navMats[i].map = (i === navHoverIdx) ? navTexHover[i] : navTexIdle[i];
+    navMats[i].needsUpdate = true;
+  }
+}
+
+function navRenderCube(){
+  navRenderer.render(navScene, navCamera);
+}
+
+// Mirrors the main camera's orientation into the gizmo: keep the cube fixed
+// and unrotated at the origin, and instead move the gizmo's OWN camera to
+// the same direction (from the target) that the main camera sits at. Called
+// from the main render() via the window.__* guard pattern (see the comment
+// on window.__measureSync above) so it tracks orbit/zoom/resize for free,
+// with no extra render loop of its own.
+function navSyncCamera(){
+  const dir = camera.position.clone().sub(controls.target);
+  if(dir.lengthSq() < 1e-8) dir.set(0, 0, 1);   // degenerate camera-at-target guard
+  dir.normalize().multiplyScalar(NAV_CAM_DIST);
+  navCamera.position.copy(dir);
+  navCamera.up.copy(camera.up);
+  navCamera.lookAt(0, 0, 0);
+  navRenderCube();
+}
+window.__navCubeSync = navSyncCamera;
+
+// Animates the MAIN camera to an orthogonal view along `dir`, preserving the
+// current distance from controls.target (so zoom level survives a view
+// snap). `instant` skips the animation -- used by the automation hook below
+// so tests don't have to wait out a tween -- and reduced-motion users get
+// the same instant jump for the real click path.
+function navAnimateTo(toPos, instant){
+  cancelAnimationFrame(navAnimHandle);
+  const reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  if(instant || reduced){
+    camera.position.copy(toPos);
+    controls.update();
+    render();
+    return;
+  }
+  const fromPos = camera.position.clone();
+  const DUR = 350;
+  const t0 = performance.now();
+  function step(now){
+    const p = Math.min(1, (now - t0) / DUR);
+    const e = p < 0.5 ? 2*p*p : 1 - Math.pow(-2*p+2, 2)/2;   // ease-in-out quad
+    camera.position.lerpVectors(fromPos, toPos, e);
+    controls.update();
+    render();
+    if(p < 1) navAnimHandle = requestAnimationFrame(step);
+  }
+  navAnimHandle = requestAnimationFrame(step);
+}
+
+function navGoToFace(idx, instant){
+  const f = NAV_FACES[idx];
+  if(!f) return;
+  navLastView = f.key;
+  // Asking for a named view is asking the camera to STOP there, so auto-spin
+  // has to yield. Without this the click looked like it did nothing at all:
+  // OrbitControls applies autoRotate inside update(), which the tween below
+  // calls every frame, so the rotation cancelled each lerp step -- and
+  // spinLoop's own rAF loop kept turning the camera long after the tween
+  // finished. The checkbox is cleared too, so the control still reports the
+  // truth about what the camera is doing.
+  if(controls.autoRotate){
+    controls.autoRotate = false;
+    const spin = document.getElementById('t-spin');
+    if(spin) spin.checked = false;
+  }
+  const dist = camera.position.distanceTo(controls.target);
+  const toPos = controls.target.clone().add(f.dir.clone().multiplyScalar(dist));
+  navAnimateTo(toPos, instant);
+}
+
+// ---- drag-to-orbit ------------------------------------------------------
+// Press-and-drag on the cube orbits the MAIN camera, Fusion/Bambu-style.
+// A click is just a drag that never crossed the movement threshold, so
+// pointerdown starts tracking, pointermove rotates once past the threshold,
+// and pointerup either snapped a face (no movement) or ends the drag
+// (movement happened) -- never both for the same gesture.
+let navDragButtonDown = false;   // button 0 is currently held on this canvas
+let navDragMoved = false;        // this press has crossed the click/drag threshold
+let navDragging = false;         // exposed on __navCubeState: true for the duration of an actual drag
+let navDragCount = 0;            // exposed on __navCubeState: gestures that became a drag
+let navDragLastX = 0, navDragLastY = 0;
+let navDragStartX = 0, navDragStartY = 0;
+const NAV_DRAG_THRESHOLD = 3;    // px of movement before a press counts as a drag, not a click
+const NAV_DRAG_K = 0.008;        // rad of camera rotation per px of pointer movement
+
+// Rotates the MAIN camera about controls.target by a pixel delta. Shared by
+// the real pointermove handler below and the __navCubeDrag test hook so
+// both exercise identical math. THREE.Spherical's phi is measured from the
+// +Y axis, which is "up" in this app's world space, so clamping it to
+// [0.02, PI-0.02] keeps the orbit just off the poles -- the same singularity
+// NAV_EPS sidesteps for the Top/Bottom face snap above.
+function navOrbitBy(dx, dy){
+  const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+  sph.theta -= dx * NAV_DRAG_K;
+  sph.phi = Math.max(0.02, Math.min(Math.PI - 0.02, sph.phi - dy * NAV_DRAG_K));
+  camera.position.setFromSpherical(sph).add(controls.target);
+  controls.update();
+  render();   // re-syncs the cube for free, same as navAnimateTo's step()
+}
+
+navCanvas.addEventListener('pointerdown', function(e){
+  if(e.button !== 0) return;
+  // Best-effort: capture keeps the drag alive if the pointer leaves the
+  // canvas mid-gesture, but its absence must not skip the state setup below
+  // -- an environment where capture throws (seen from synthetic/automated
+  // pointer events, which have no browser-tracked "active pointer" to
+  // capture) would otherwise silently break dragging entirely.
+  try { navCanvas.setPointerCapture(e.pointerId); } catch(err){ /* no active pointer to capture */ }
+  navDragButtonDown = true;
+  navDragMoved = false;
+  navDragStartX = navDragLastX = e.clientX;
+  navDragStartY = navDragLastY = e.clientY;
+  cancelAnimationFrame(navAnimHandle);
+  // A press is a request for a specific orientation, same as a face-snap
+  // click -- auto-spin has to yield for the same reason given in the
+  // comment inside navGoToFace above, so it does not fight the drag.
+  if(controls.autoRotate){
+    controls.autoRotate = false;
+    const spin = document.getElementById('t-spin');
+    if(spin) spin.checked = false;
+  }
+});
+navCanvas.addEventListener('pointermove', function(e){
+  if(navDragButtonDown){
+    const dx = e.clientX - navDragLastX, dy = e.clientY - navDragLastY;
+    navDragLastX = e.clientX; navDragLastY = e.clientY;
+    if(!navDragMoved){
+      const totalX = e.clientX - navDragStartX, totalY = e.clientY - navDragStartY;
+      if(Math.hypot(totalX, totalY) > NAV_DRAG_THRESHOLD){
+        navDragMoved = true;
+        navDragging = true;
+        navDragCount++;
+        navCanvas.style.cursor = 'grabbing';
+      }
+    }
+    if(navDragMoved) navOrbitBy(dx, dy);
+    return;
+  }
+  const idx = navPickIndex(e.clientX, e.clientY);
+  if(idx !== navHoverIdx){
+    navHoverIdx = idx;
+    navApplyHover();
+    // 'grab', not 'default': the whole canvas is drag-enabled now, not just
+    // the pickable faces, so even a non-face hover gets the grab affordance.
+    navCanvas.style.cursor = idx >= 0 ? 'pointer' : 'grab';
+    navRenderCube();
+  }
+});
+function navEndDrag(e){
+  if(!navDragButtonDown) return;
+  navDragButtonDown = false;
+  navDragging = false;
+  navCanvas.style.cursor = 'grab';
+  if(e && e.pointerId !== undefined){
+    try { navCanvas.releasePointerCapture(e.pointerId); } catch(err){ /* already released */ }
+  }
+}
+navCanvas.addEventListener('pointerup', function(e){
+  if(e.button !== 0) return;
+  const wasDrag = navDragMoved;
+  navDragMoved = false;
+  navEndDrag(e);
+  // Only a press that never crossed the drag threshold snaps a face -- a
+  // real drag already did its job by orbiting the camera, and actioning a
+  // face on top of that would fight the orientation the drag just set.
+  if(!wasDrag){
+    const idx = navPickIndex(e.clientX, e.clientY);
+    if(idx >= 0) navGoToFace(idx);
+  }
+});
+navCanvas.addEventListener('pointercancel', function(e){ navDragMoved = false; navEndDrag(e); });
+window.addEventListener('blur', function(){ navDragMoved = false; navEndDrag(); });
+navCanvas.addEventListener('pointerleave', function(){
+  if(navHoverIdx !== -1){
+    navHoverIdx = -1;
+    navApplyHover();
+    if(!navDragButtonDown) navCanvas.style.cursor = 'grab';
+    navRenderCube();
+  }
+});
+
+navSyncCamera();   // first frame -- render() already ran once, before this section existed
+
+// Test/automation hooks, same shape as __measureState / __measureAt.
+window.__navCubeState = function(){
+  return {
+    faces: NAV_FACES.map(f => f.key),
+    hovered: (navHoverIdx >= 0 && NAV_FACES[navHoverIdx]) ? NAV_FACES[navHoverIdx].key : null,
+    lastView: navLastView,
+    dragging: navDragging,
+    dragCount: navDragCount
+  };
+};
+window.__navCubeClick = function(key){
+  const idx = NAV_FACES.findIndex(f => f.key === key);
+  if(idx < 0) return null;
+  navGoToFace(idx, true);   // instant: automation shouldn't have to wait out the tween
+  return window.__navCubeState();
+};
+// Synthetic drag for automation: applies navOrbitBy's math directly rather
+// than dispatching real pointer events, since pointer capture + a movement
+// threshold are awkward to drive from a test harness. Counts as one drag
+// gesture, matching what a real press-move-release does.
+window.__navCubeDrag = function(dx, dy){
+  navDragging = true;
+  navDragCount++;
+  navOrbitBy(dx, dy);
+  navDragging = false;
+  return window.__navCubeState();
 };

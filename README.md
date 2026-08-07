@@ -287,6 +287,20 @@ then open **http://localhost:8777/viewer/index.html**. `serve.py` is pure
 standard library — it serves the project statically on port 8777 and adds a tiny
 JSON API (`GET /api/filaments`, `POST /api/generate`).
 
+**Picking up where you left off:** the design you were working on is kept in the
+browser's local storage, so it survives a reload or a closed tab. On load, if
+that stored design differs from a fresh one, the app asks rather than silently
+reinstating it — **Continue previous session** restores it, **Start new design**
+resets to defaults. Coming back days later and unknowingly inheriting a
+half-finished vase is a good way to generate G-code you didn't mean to, so the
+choice is explicit. Two things "Start new" deliberately does *not* touch: your
+imported printers (a `.cfg` you had to find and import is an asset, not session
+scratch) and the printer you have selected — silently putting a Bambu user back
+on the default Trident would hand them a design carrying another machine's
+limits. The reset also goes on the undo stack, so **Ctrl+Z** brings the old
+design straight back. Nothing is asked on a first visit, or when the stored
+design is identical to a fresh one.
+
 A **Design a vase** panel sits at the top of the sidebar. Pick a shape
 (circle / star / square), set radius, height, layer height, waves, twist, base
 layers, brim, squish and print speed, and choose a filament (populated from your
@@ -324,7 +338,7 @@ exceed Z max are rejected with a clear error in the status line.
 ## Asymmetric shaping (app only)
 
 Beyond the symmetric wave/silhouette curves, the app has a **3D control cage**
-for asymmetric deformation: switch the silhouette editor to **Unsymmetrical**
+for asymmetric deformation: switch the silhouette editor to **Freeform (3D)**
 mode and drag any of a 5-row x 8-column grid of handles directly in the 3D
 view to bulge or pinch specific angular regions at specific heights (each
 handle scales local radius, clamped to `[0.5, 1.5]x`). Combine with a **spine
@@ -508,6 +522,45 @@ layers** shades alternating turns light/dark so each layer reads as a distinct r
 and the **Line thickness** slider sets the rendered line width — *thinner* shows
 more separation on dense prints, thicker is bolder for sparse ones. Zooming in also
 separates the turns.
+
+**Orientation cube:** a small cube in the bottom-left corner of the viewport mirrors
+the camera's orientation, and clicking a face snaps the view to it — Top, Bottom,
+Front, Back, Left, Right — keeping your current zoom. Labels are the *printer's*
+axes, not the renderer's (the scene's Y is the machine's Z), so "Front" is the
+Y=0 edge of the bed, the side you stand at. It has its own canvas rather than
+sharing the main one, so clicking it can never be mistaken for an orbit drag.
+
+**Measuring the model:** a tool rail sits on the right edge of the canvas, beside
+the panel — the panel is where you change what gets printed, the rail is where you
+inspect what's already there. Click **Measure** (or press **M**) for two modes:
+
+- **Distance** — click two points for the straight-line span between them, broken
+  out into ΔX / ΔY / ΔZ and the horizontal (XY) component.
+- **Diameter** — click one point on the wall for the radius out to it and the
+  diameter straight across the model at that height.
+
+Picks snap to the toolpath, so clicking the same spot twice gives the same number,
+and dragging still orbits — a point is only placed if the pointer didn't move.
+**Esc** clears the measurement, **Esc** again closes the tool.
+
+Two things it's careful about, both worth knowing before you cut a lid to fit:
+
+- Every figure is the **toolpath centreline**, not the outside of the printed wall.
+  The bead straddles that line, so the real outer wall stands half a line width
+  further out. The card shows the derived outer/inner diameters next to the
+  measured one and labels them derived rather than folding the correction in
+  silently.
+- The diameter is measured across the section's **outer wall**, traced in 72
+  angular sectors. That matters on anything solid or infilled — a nearest-point
+  search across from the pick will happily grab an infill line near the middle and
+  report 36 mm across a part that's 64 mm across. The card also prints how many
+  sectors it found a wall in and the range of outer radii, so a section that isn't
+  round says so instead of implying a single honest diameter exists.
+
+The reading is only ever taken from the part of the print that's currently drawn,
+so scrubbing the timeline back and measuring won't quietly report geometry that
+isn't on screen. `viewer/dev_smoke.html?selftest=1` checks the arithmetic against
+a model whose true dimensions are known from its own G-code.
 
 ## Key options (`python generate.py --help`)
 
