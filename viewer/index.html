@@ -125,7 +125,7 @@
       <button id="toggle-hints" class="hint-toggle" type="button" aria-pressed="true"
         title="Show/hide help text under controls">Hints</button>
       <button id="guide-btn" class="hint-toggle" type="button"
-        title="How to use" aria-label="How to use">?</button>
+        title="Open the how-to-use guide" aria-label="How to use">How to use</button>
     </div>
     <div class="group" id="design-group">
       <h2>Design a vase</h2>
@@ -848,6 +848,22 @@
 
       <div class="guide-slide" data-slide="0">
         <h3>Read this first</h3>
+        <div class="guide-fig" aria-hidden="true">
+          <svg viewBox="0 0 360 136" width="100%" height="136" preserveAspectRatio="xMidYMid meet">
+            <rect x="30" y="104" width="300" height="7" rx="2" fill="var(--surface)" stroke="var(--line)"/>
+            <path d="M150 44 L170 44 L163 70 L157 70 Z" fill="var(--ink-muted)"/>
+            <rect x="152" y="70" width="6" height="8" fill="var(--ink)"/>
+            <rect x="196" y="46" width="20" height="30" rx="3" fill="var(--surface)" stroke="var(--ink-muted)"/>
+            <text x="206" y="40" font-size="9" fill="var(--ink-muted)" text-anchor="middle">probe</text>
+            <path d="M60 90 Q 110 78 160 90 T 260 90 T 330 86" fill="none" stroke="var(--accent)" stroke-width="2"/>
+            <g class="gf-reveal">
+              <line x1="206" y1="76" x2="206" y2="90" stroke="var(--accent)" stroke-width="1.5"/>
+              <line x1="200" y1="90" x2="212" y2="90" stroke="var(--accent)" stroke-width="1.5"/>
+              <text x="222" y="88" font-size="10" fill="var(--ink)">0.95 mm clearance</text>
+            </g>
+          </svg>
+          <div class="gf-caption gf-reveal-late">Measured after a probe strike &#8212; not a published spec.</div>
+        </div>
         <ul>
           <li>This tool generates non-planar toolpaths directly &#8212; it is not a slicer
             post-processor.</li>
@@ -862,6 +878,18 @@
 
       <div class="guide-slide" data-slide="1">
         <h3>Fastest start</h3>
+        <div class="guide-fig" style="--x1:20px; --y1:96px; --x2:250px; --y2:20px; --x3:250px; --y3:58px;">
+          <div class="guide-fig-inner">
+            <div class="gf-row"><span>Preset</span><b>01 gentle wave vase</b></div>
+            <div class="gf-row"><span>Printer</span><b>Voron Trident</b></div>
+            <div class="gf-row" style="justify-content:flex-end;background:none;border:none;padding:0">
+              <span class="gf-btn">Generate</span>
+            </div>
+            <div class="gf-row gf-reveal-late" style="margin-top:4px"><span>Result</span><b>safe [OK] &#8212; 1.2 m filament</b></div>
+          </div>
+          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
+        </div>
         <ul>
           <li>Pick a preset from the preset bar at the top of Design.</li>
           <li>Press <b>Generate &amp; preview</b>.</li>
@@ -872,6 +900,21 @@
 
       <div class="guide-slide" data-slide="2">
         <h3>The four steps</h3>
+        <div class="guide-fig" style="--x1:16px; --y1:82px; --x2:44px; --y2:24px; --x3:250px; --y3:24px;">
+          <div class="guide-fig-inner">
+            <div class="gf-tabs">
+              <span class="gf-tab" style="color:var(--ink);border-bottom-color:var(--accent)">Model</span>
+              <span class="gf-tab">Texture</span>
+              <span class="gf-tab">Print</span>
+              <span class="gf-tab">Generate</span>
+            </div>
+            <div class="gf-row"><span>Shape, size, bottom</span><b>Model</b></div>
+            <div class="gf-row gf-reveal"><span>Patterns, blobs, fabric</span><b>Texture</b></div>
+            <div class="gf-row gf-reveal-late"><span>Speed, temps, printer</span><b>Print</b></div>
+          </div>
+          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
+        </div>
         <ul>
           <li><b>1. Model</b> &#8212; pick a shape and its size, or import your own STL.</li>
           <li><b>2. Texture</b> &#8212; shape the Z-wave and silhouette curves, add a surface
@@ -883,6 +926,22 @@
 
       <div class="guide-slide" data-slide="3">
         <h3>Shaping</h3>
+        <div class="guide-fig" style="--x1:30px; --y1:100px; --x2:120px; --y2:74px; --x3:120px; --y3:34px;">
+          <svg viewBox="0 0 360 136" width="100%" height="136" preserveAspectRatio="xMidYMid meet">
+            <rect x="14" y="14" width="200" height="92" rx="6" fill="var(--surface)" stroke="var(--line)"/>
+            <text x="22" y="120" font-size="9" fill="var(--ink-muted)">bottom</text>
+            <text x="186" y="120" font-size="9" fill="var(--ink-muted)">top</text>
+            <path d="M24 84 L74 80 L124 76 L174 72 L204 70" fill="none" stroke="var(--ink-muted)" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <path class="gf-reveal" d="M24 84 L74 70 L124 38 L174 60 L204 68" fill="none" stroke="var(--accent)" stroke-width="2"/>
+            <circle class="gf-reveal" cx="124" cy="38" r="4" fill="var(--accent)"/>
+            <path d="M262 108 L262 40 Q 262 28 286 28 Q 310 28 310 40 L310 108 Z" fill="none" stroke="var(--ink-muted)" stroke-width="1.5" stroke-dasharray="3 3"/>
+            <path class="gf-reveal-late" d="M262 108 L262 66 Q 250 44 286 28 Q 322 44 310 66 L310 108 Z" fill="none" stroke="var(--accent)" stroke-width="2"/>
+            <rect class="gf-reveal-late" x="258" y="106" width="56" height="5" rx="2" fill="var(--accent)" opacity="0.5"/>
+            <text x="286" y="128" font-size="9" fill="var(--ink-muted)" text-anchor="middle">solid bottom</text>
+          </svg>
+          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
+        </div>
         <ul>
           <li>Two curve editors: <b>Wave amplitude over height</b> and <b>Silhouette</b> (radius
             scale). In both, the left edge is the bottom of the print, the right edge the top.</li>
@@ -896,6 +955,24 @@
 
       <div class="guide-slide" data-slide="4">
         <h3>Textures</h3>
+        <div class="guide-fig" style="--x1:20px; --y1:98px; --x2:250px; --y2:20px; --x3:250px; --y3:46px;">
+          <div class="guide-fig-inner">
+            <div class="gf-row"><span>Texture</span><b>ripple</b></div>
+            <div class="gf-row gf-reveal"><span>or</span><b>loop fabric</b></div>
+            <svg viewBox="0 0 336 56" width="100%" height="56" style="margin-top:4px">
+              <path d="M6 14 Q 26 4 46 14 T 86 14 T 126 14 T 166 14 T 206 14 T 246 14 T 286 14 T 326 14"
+                    fill="none" stroke="var(--ink-muted)" stroke-width="1.5"/>
+              <path d="M6 26 Q 26 16 46 26 T 86 26 T 126 26 T 166 26 T 206 26 T 246 26 T 286 26 T 326 26"
+                    fill="none" stroke="var(--ink-muted)" stroke-width="1.5"/>
+              <g class="gf-reveal-late" stroke="var(--accent)" stroke-width="1.5" fill="none">
+                <path d="M6 42 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0"/>
+                <path d="M6 50 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0"/>
+              </g>
+            </svg>
+          </div>
+          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
+        </div>
         <ul>
           <li>Seven radial wave patterns (v-wave, h-wave, ripple, diamond, bubbles, pleats,
             hammered), plus blobs, plus loop fabric.</li>
@@ -908,6 +985,18 @@
 
       <div class="guide-slide" data-slide="5">
         <h3>After generating</h3>
+        <div class="guide-fig" style="--x1:40px; --y1:104px; --x2:130px; --y2:104px; --x3:280px; --y3:104px;">
+          <svg viewBox="0 0 360 136" width="100%" height="136" preserveAspectRatio="xMidYMid meet">
+            <path d="M140 96 L140 52 Q 140 40 168 40 Q 196 40 196 52 L196 96 Z" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+            <path class="gf-reveal" d="M140 96 L140 70 Q 140 66 168 66 Q 196 66 196 70 L196 96 Z" fill="var(--accent)" opacity="0.30"/>
+            <path class="gf-reveal-late" d="M140 96 L140 52 Q 140 40 168 40 Q 196 40 196 52 L196 96 Z" fill="var(--accent)" opacity="0.30"/>
+            <rect x="40" y="102" width="280" height="4" rx="2" fill="var(--surface)" stroke="var(--line)"/>
+            <rect class="gf-reveal-late" x="40" y="102" width="240" height="4" rx="2" fill="var(--accent)"/>
+            <text x="180" y="128" font-size="9" fill="var(--ink-muted)" text-anchor="middle">drag the timeline to replay the print</text>
+          </svg>
+          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
+        </div>
         <ul>
           <li>The viewer: a playback timeline, colour modes (plain / height / overhang), the
             measure tool, and the orientation cube.</li>

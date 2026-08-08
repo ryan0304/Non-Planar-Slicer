@@ -465,6 +465,29 @@
     check('closing the guide sets trident-guide-seen',
           seenAfterClose === '1', 'got ' + seenAfterClose);
 
+    // Every slide carries an animated figure -- the guide is meant to SHOW the
+    // control being described, with a cursor moving to it, not just describe it
+    // in prose. A slide that loses its figure silently regresses to a wall of
+    // text, which is what this replaced.
+    var guideSlides = w.document.querySelectorAll('#guide-modal .guide-slide');
+    var slidesWithFig = 0;
+    Array.prototype.forEach.call(guideSlides, function(sl){
+      if(sl.querySelector('.guide-fig')) slidesWithFig++;
+    });
+    check('every guide slide has an illustration',
+          guideSlides.length > 0 && slidesWithFig === guideSlides.length,
+          slidesWithFig + ' of ' + guideSlides.length);
+
+    // The figures are decoration and must never be the only carrier of meaning:
+    // each one is aria-hidden or purely presentational, and the prose beside it
+    // says the same thing. Assert the trigger keeps an accessible name even
+    // though it now shows a word rather than a glyph.
+    var gBtn = w.document.getElementById('guide-btn');
+    check('the guide trigger reads as words and keeps an accessible name',
+          /how to use/i.test((gBtn.textContent || '').trim()) &&
+          !!(gBtn.getAttribute('aria-label') || '').trim(),
+          'text ' + JSON.stringify((gBtn.textContent || '').trim()));
+
     // Leave the page as we found it.
     try {
       if(hadPrevGuideSeen){
