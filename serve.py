@@ -801,6 +801,27 @@ def generate_design(body):
     point_edit_issue = None
     fan_overhang_issue = None
     loop_base_issue = None
+    # Point Mask and Point Protection are GATES, not deformations: they scale
+    # how strongly FFD / Smooth / Radial Push act at each point (see
+    # point_edit.py). On their own there is nothing to scale, so
+    # apply_point_edits returns the path untouched -- byte-identical output for
+    # a modifier the user switched on and configured. The panel lets them be
+    # enabled independently, so say so rather than letting it look applied.
+    point_gate_issue = None
+    if ((point_mask is not None or point_protection is not None)
+            and point_ffd is None and point_smooth is None
+            and point_radial_push is None):
+        _gates = []
+        if point_mask is not None:
+            _gates.append("Point Mask")
+        if point_protection is not None:
+            _gates.append("Point Protection")
+        point_gate_issue = (
+            " and ".join(_gates)
+            + (" only scale" if len(_gates) > 1 else " only scales")
+            + " how strongly a deforming modifier acts - with no FFD, Smooth "
+            "or Radial Push enabled there is nothing to scale, so the wall was "
+            "generated unchanged.")
     if loop_spec is not None:
         # Loop fabric replaces the wall entirely (knitted rows of vertical
         # loop stitches) — z-waves/patterns don't apply; the silhouette does.
@@ -885,6 +906,8 @@ def generate_design(body):
             "or wave count." % (peak_slope, QUALITY_SLOPE_LIMIT))
     if point_edit_issue:
         issues_extra.append(point_edit_issue)
+    if point_gate_issue:
+        issues_extra.append(point_gate_issue)
     if fan_overhang_issue:
         issues_extra.append(fan_overhang_issue)
     if loop_base_issue:
@@ -1105,6 +1128,20 @@ def generate_mesh_texture_design(body):
         issues_extra.append(
             "point edit modifiers only apply to parametric wall designs "
             "(not STL mode) - the STL texture wall was generated without them.")
+    # build_profile_spiral takes neither base_style nor skirt_loops: it always
+    # paves the disks as the Archimedean spiral and never lays a skirt. Both
+    # were being read off the panel, sent, and dropped without a word -- the
+    # same silent-drop this function already reports for the cage and the point
+    # edit modifiers, just missed. Report the ones actually asked for.
+    _mesh_dropped = []
+    if str(body.get("base_style", "spiral")) == "concentric" and base_layers > 0:
+        _mesh_dropped.append("concentric base style (the spiral disk was used)")
+    if int(body.get("skirt", 0) or 0) > 0:
+        _mesh_dropped.append("the skirt")
+    if _mesh_dropped:
+        issues_extra.append(
+            "STL mode cannot vary the base fill or lay a skirt - "
+            + ", ".join(_mesh_dropped) + " was not printed.")
 
     stats = {
         "wave_slope": round(peak_slope, 3),
