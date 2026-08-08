@@ -509,19 +509,28 @@ function parseGcode(text){
       // the nav cube) must use this same negated form.
       const ax=x-cx, ay=z, az=cy-y;
       const bx=nx-cx, by=nz, bz=cy-ny;
+      const len=Math.hypot(nx-x,ny-y,nz-z);
+      const speed=curF/60;                       // mm/s
+      // Peak Z-rate deliberately mirrors trident_gcode/analyze.py's max_z_rate
+      // (see analyze.py around line 216: `if dist > 0 and speed > 0: zr = ...`).
+      // That is computed over EVERY move -- travel included -- not just
+      // extruding ones, because a fast Z-lift on a travel move stresses the Z
+      // axis exactly as much as one made while extruding. analyze.py's number
+      // is the authoritative safety report the server prints; scoping this to
+      // extruding-only (as it used to be) made the viewer under-report the
+      // same file's peak Z-rate by 4x. Keep this outside the extruding branch
+      // below so the two panels cannot drift apart again.
+      if(len>0 && speed>0){ const zr=speed*Math.abs(nz-z)/len; if(zr>maxZrate)maxZrate=zr; }
       if(extruding){
         ext.push(ax,ay,az, bx,by,bz);
         extCol.push(nz, nz);            // store z; convert to colour after
         extrudeCount++;
-        const len=Math.hypot(nx-x,ny-y,nz-z);
-        const speed=curF/60;                       // mm/s
         // volumetric flow = filament volume extruded / time = e*area*speed/len
         const flow=(len>0 && relE)? e*FIL_AREA*speed/len : 0;
         segSpeed.push(speed); segFlow.push(flow);
         // skip pre-M106 extrudes (fan-off adhesion window) so they don't pin minFan to 0
         if(fanEverOn){ if(curFan<minFan) minFan=curFan; if(curFan>maxFan) maxFan=curFan; }
         if(relE) fil+=e;
-        if(len>0){ const zr=speed*Math.abs(nz-z)/len; if(zr>maxZrate)maxZrate=zr; }
         minz=Math.min(minz,z,nz); maxz=Math.max(maxz,z,nz);
         minx=Math.min(minx,nx);maxx=Math.max(maxx,nx);miny=Math.min(miny,ny);maxy=Math.max(maxy,ny);
       } else {
@@ -536,12 +545,13 @@ function parseGcode(text){
   const extFlat = new Float32Array(ext);
   const trvFlat = new Float32Array(trv);
 
-  // Compute risk flags (O(n) grid hash).
-  const riskFlags = computeRiskFlags(extFlat, nExtSeg);
-  const riskyCount = riskFlags.reduce((a,v)=>a+v, 0);
-
-  // Compute per-segment overhang angles once (cached on the loaded data).
-  const overhang = computeOverhang(extFlat, nExtSeg);
+  // NOTE: risk flags (computeRiskFlags) and overhang angles (computeOverhang)
+  // are deliberately NOT computed here. Both are O(extrude segments) grid-hash
+  // passes as heavy as this parse loop, and load() below stages them as
+  // separate "Analyzing supports..." / "Computing overhangs..." steps with a
+  // yield to the browser in between so a big file's tab doesn't freeze with
+  // zero feedback. Callers must run those two passes themselves and merge the
+  // results into this object -- see load().
 
   // Compute estimated print time.
   const estTimeSec = computeEstTime(extFlat, trvFlat, segSpeed, nExtSeg);
@@ -559,7 +569,9 @@ function parseGcode(text){
   const fanSeen = extrudeCount > 0 && isFinite(minFan);
 
   return {ext:extFlat,extCol,trv:trvFlat,segSpeed,segFlow,meta,minz,maxz,minx,maxx,miny,maxy,
-          fil,extrudeCount,travelCount,maxZrate,riskFlags,riskyCount,overhang,estTime,estTimeSec,segT,
+          fil,extrudeCount,travelCount,maxZrate,
+          riskFlags:null,riskyCount:null,overhang:null,   // filled in by load() -- see NOTE above
+          estTime,estTimeSec,segT,
           minFan: fanSeen ? minFan : null, maxFan: fanSeen ? maxFan : null};
 }
 
@@ -734,6 +746,24 @@ function showGcodeTitle(name){
   gcodeTitleEl.style.display = 'block';
 }
 
+// The Z-rate ceiling comes from the SELECTED PRINTER's own declared limit,
+// never a literal in this file -- CLAUDE.md's "No machine limit may be a
+// module constant" invariant names this exact spot: a bare 25.1 (the Voron
+// Trident's max_z_velocity) here would call a file "ok" on some other
+// printer's Z axis and "! " on the Trident's, regardless of what that other
+// printer can actually take. The agent wiring up the printer-select UI
+// publishes the active profile's limit on window.__printerLimits with the
+// shape { key, name, max_z_velocity }, refreshed on load and on every printer
+// change; that global is read here defensively (it depends on an async
+// fetch, so it may be absent or incomplete at the instant this runs). Returns
+// a finite number, or null if no grounded limit is available -- callers must
+// withhold the ok/danger verdict in the null case rather than guess.
+function currentMaxZVelocity(){
+  const lim = window.__printerLimits;
+  const v = lim && lim.max_z_velocity;
+  return (typeof v === 'number' && isFinite(v)) ? v : null;
+}
+
 function showStats(name,d){
   document.getElementById('stats-group').style.display='block';
   document.getElementById('overlay').style.display='none';
@@ -746,8 +776,19 @@ function showStats(name,d){
   set('s-foot',`${(d.maxx-d.minx).toFixed(0)}x${(d.maxy-d.miny).toFixed(0)} mm`);
   set('s-fil',d.fil>0?(d.fil/1000).toFixed(2)+' m':'n/a');
   const zr=d.maxZrate;
-  set('s-zrate',zr.toFixed(1)+' mm/s'+(zr>25.1?' !':' ok'));
-  document.getElementById('s-zrate').classList.toggle('state-danger', zr>25.1);
+  const zLimit=currentMaxZVelocity();
+  const zrateEl=document.getElementById('s-zrate');
+  if(zLimit!=null){
+    set('s-zrate',zr.toFixed(1)+' mm/s'+(zr>zLimit?' !':' ok'));
+    zrateEl.classList.toggle('state-danger', zr>zLimit);
+  } else {
+    // No grounded limit available -- show the measured rate but withhold the
+    // verdict rather than inventing or falling back to a ceiling. A verdict
+    // that isn't backed by the selected printer's own declared limit is
+    // worse than none (CLAUDE.md).
+    set('s-zrate',zr.toFixed(1)+' mm/s (limit unknown)');
+    zrateEl.classList.remove('state-danger');
+  }
   set('s-time', d.estTime || '--');
   set('s-risk', d.riskyCount != null ? d.riskyCount.toLocaleString() : '--');
   document.getElementById('s-risk').classList.toggle('state-warn', !!d.riskyCount);
@@ -895,23 +936,121 @@ function sparkSeek(e){
 
 let lastData=null;
 let cuts=[0];   // extrude-segment indices at each spiral-turn boundary (+ the end)
-function load(name,text){
-  lastData=parseGcode(text);
-  cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
-  buildGeometry(lastData); showStats(name,lastData);
-  measureReload();                       // new model: any old measurement is meaningless
-  document.getElementById('tl-wrap').style.display='';
-  // Widens --overlay-bottom (style.css) so the nav cube and its neighbours
-  // clear the now-visible machine-readout strip instead of floating 92px
-  // above empty canvas, which is what happened before this class existed.
-  wrap.classList.add('has-timeline');
-  document.getElementById('telemetry-card').style.display='';
-  stopPlay(); setProgress(1);            // start fully drawn
-  fitView();                             // frame the camera on the model
-  // Build the sparkline after layout settles (offsetWidth needs a rendered frame).
-  requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(1); });
-  // A file was loaded (dropped, picked, or generated) - show the viewer mode.
-  if(window.setAppMode) window.setAppMode('viewer');
+
+// ---- staged load overlay ---------------------------------------------------
+// load() below runs several O(extrude segments) passes back to back
+// (parseGcode -> computeRiskFlags -> computeOverhang -> buildGeometry). On a
+// large file each one can take seconds, and with nothing on screen to say so
+// a frozen tab looks exactly like a crash. This overlay names the current
+// stage; loadYield() below hands control back to the browser between stages
+// so that label actually paints before the next heavy pass blocks the thread.
+// Built as a plain DOM node with inline styles (same pattern as
+// showGcodeTitle's #gcode-title) rather than a stylesheet class -- viewer.js
+// does not own style.css. Colours are hand-picked to track --surface/--ink
+// without using the CSS custom properties themselves (and deliberately avoid
+// --ok/--warn/--danger/--accent-purple, which are reserved to other subsystems).
+let loadOverlayEl = null, loadOverlayStageEl = null, loadOverlayFileEl = null;
+function showLoadOverlay(name){
+  if(!loadOverlayEl){
+    loadOverlayEl = document.createElement('div');
+    loadOverlayEl.id = 'load-overlay';
+    loadOverlayEl.style.cssText =
+      'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;' +
+      'justify-content:center;gap:6px;background:rgba(23,25,27,0.82);' +
+      'color:#e8eaed;font-family:sans-serif;z-index:8;pointer-events:none;text-align:center;';
+    loadOverlayStageEl = document.createElement('div');
+    loadOverlayStageEl.id = 'load-overlay-stage';
+    loadOverlayStageEl.style.cssText = 'font-size:14px;font-weight:600;';
+    loadOverlayFileEl = document.createElement('div');
+    loadOverlayFileEl.id = 'load-overlay-file';
+    loadOverlayFileEl.style.cssText =
+      'font-size:12px;font-weight:400;opacity:0.72;max-width:70%;overflow:hidden;' +
+      'text-overflow:ellipsis;white-space:nowrap;';
+    loadOverlayEl.appendChild(loadOverlayStageEl);
+    loadOverlayEl.appendChild(loadOverlayFileEl);
+    wrap.appendChild(loadOverlayEl);
+  }
+  loadOverlayFileEl.textContent = name;
+  loadOverlayEl.style.display = 'flex';
+}
+function setLoadStage(text){
+  if(loadOverlayStageEl) loadOverlayStageEl.textContent = text;
+}
+function hideLoadOverlay(){
+  if(loadOverlayEl) loadOverlayEl.style.display = 'none';
+}
+// Yield to the browser and guarantee at least one paint has happened before
+// resuming. A single requestAnimationFrame callback runs BEFORE that frame's
+// paint, so it alone does not guarantee the label update is on screen yet --
+// the standard double-rAF idiom does: the first rAF fires at the start of the
+// next frame (paint follows), and the second rAF (scheduled from inside the
+// first) cannot fire until the frame after that, i.e. after the paint has
+// happened.
+//
+// Measured while testing this: Chrome can suspend rAF ENTIRELY for a hidden
+// or backgrounded tab (a user alt-tabbing away mid-load, or an occluded
+// window), and a pure double-rAF wait then never resolves -- the load just
+// hangs forever instead of freezing for seconds, which is worse than the bug
+// this was meant to fix. A setTimeout fallback races it: on a visible tab it
+// never fires (the rAFs win in well under 200ms), so the paint guarantee
+// above still holds; on a hidden tab it guarantees forward progress anyway,
+// just without that guarantee -- which is fine, because there is nothing to
+// paint for the user to see until the tab is visible again regardless.
+function loadYield(){
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => { if(!done){ done = true; resolve(); } };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 200);
+  });
+}
+
+async function load(name,text){
+  showLoadOverlay(name);
+  try {
+    // Cheap upfront count for the parse-stage label; a single split() is
+    // negligible next to the per-line regex work parseGcode does below.
+    const totalLines = text.split('\n').length;
+    setLoadStage(`Parsing G-code... (${totalLines.toLocaleString()} lines)`);
+    await loadYield();
+    const parsed = parseGcode(text);      // heavy: O(lines)
+
+    setLoadStage(`Analyzing supports... (${parsed.extrudeCount.toLocaleString()} segments)`);
+    await loadYield();
+    const riskFlags = computeRiskFlags(parsed.ext, parsed.extrudeCount);   // heavy: O(segments)
+    let riskyCount = 0;
+    for(let i=0;i<riskFlags.length;i++) riskyCount += riskFlags[i];
+
+    setLoadStage('Computing overhangs...');
+    await loadYield();
+    const overhang = computeOverhang(parsed.ext, parsed.extrudeCount);    // heavy: O(segments)
+
+    setLoadStage('Building view...');
+    await loadYield();
+    parsed.riskFlags = riskFlags;
+    parsed.riskyCount = riskyCount;
+    parsed.overhang = overhang;
+    lastData = parsed;
+    cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
+    buildGeometry(lastData); showStats(name,lastData);   // heavy: O(segments)
+    measureReload();                       // new model: any old measurement is meaningless
+    document.getElementById('tl-wrap').style.display='';
+    // Widens --overlay-bottom (style.css) so the nav cube and its neighbours
+    // clear the now-visible machine-readout strip instead of floating 92px
+    // above empty canvas, which is what happened before this class existed.
+    wrap.classList.add('has-timeline');
+    document.getElementById('telemetry-card').style.display='';
+    stopPlay(); setProgress(1);            // start fully drawn
+    fitView();                             // frame the camera on the model
+    // Build the sparkline after layout settles (offsetWidth needs a rendered frame).
+    requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(1); });
+    // A file was loaded (dropped, picked, or generated) - show the viewer mode.
+    if(window.setAppMode) window.setAppMode('viewer');
+  } finally {
+    // Always clears, success or failure -- a stuck overlay would be worse
+    // than the freeze it replaces (looks like a hang forever, not just once).
+    hideLoadOverlay();
+  }
 }
 
 // Detect spiral-turn boundaries by unwrapping the path's angle about its centre.

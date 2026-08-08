@@ -34,6 +34,8 @@ import math
 import os
 import sys
 import tempfile
+import threading
+import time
 from collections import OrderedDict
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -44,8 +46,10 @@ from trident_gcode.printer_import import parse as parse_printer_config, PrinterI
 from trident_gcode.printer_validate import validate_raw, validate_profile_dict
 from trident_gcode.blobs import BlobSpec, LoopSpec
 from trident_gcode.paths import SpiralSpec, circle, star, superellipse
-from trident_gcode.generators import build_continuous_spiral, build_profile_spiral
+from trident_gcode.generators import build_continuous_spiral, build_profile_spiral, build_surface_spiral
+from trident_gcode.generators.surface_spiral import _archimedean
 from trident_gcode.generators.loop_fabric import build_loop_fabric
+from trident_gcode import surface as surf
 from trident_gcode.analyze import analyze_gcode, format_report
 from trident_gcode.mesh import load_stl, mesh_bounds, analyze_vase_compatibility
 from trident_gcode.profile_stack import stack_from_mesh, stack_from_shape, contour_normals
@@ -757,7 +761,41 @@ def generate_design(body):
     if bed_temp is not None:
         writer_kwargs["bed_temp"] = bed_temp
 
+    # Fail fast on a height that cannot fit whatever the waves do.
+    #
+    # The authoritative check is build_continuous_spiral's (continuous_spiral.py,
+    # "Print top Z ... exceeds Z max"), and it stays exactly where it is -- but it
+    # runs only after the whole spiral path has been generated. A height of 9000mm
+    # at 0.3mm layers is 30,000 layers x 240 points, so the user waited 31 seconds
+    # (measured) to be told a number that was impossible before any work started.
+    #
+    # This is deliberately a LOWER bound, not a second opinion. Every wave point
+    # sits within amp_ceiling of the nominal height, so the path's top point is at
+    # least (height - amp_cap); the base offset and any loop excursion only push it
+    # higher. A design that fails this bound therefore cannot possibly pass the real
+    # check, and one that passes here still faces the real check unchanged. It can
+    # never reject something the generator would have accepted -- which is the only
+    # way a fast pre-check is safe to add in front of a safety check.
+    _amp_cap = amp_ceiling(profile)
+    if height - _amp_cap > profile.z_max:
+        raise ValueError(
+            "Print height %.1f exceeds Z max %.1f. Reduce height or layer count."
+            % (height, profile.z_max))
+
     writer = GcodeWriter(**writer_kwargs)
+
+    # Progress side-channel (publish-only, for /api/generate_stream). Set only
+    # when the streaming endpoint attached a dict via body["_progress"]; when
+    # that key is absent (the plain /api/generate path, or any direct caller)
+    # this block is a no-op and behaviour is identical to before it existed.
+    # writer._lines grows monotonically as generation proceeds, so another
+    # thread can read len(writer._lines) / total for a live fraction without
+    # this function doing any extra work or changing anything it computes.
+    _progress = body.get("_progress")
+    if _progress is not None:
+        _progress["writer"] = writer
+        _progress["total"] = 240 * math.ceil(height / max(layer_height, 1e-6)) + 27623
+        _progress["stage"] = "toolpath"
 
     # z_amp=1.0 so the envelope's return value IS the absolute mm of amplitude
     # (exactly how calibrate.py's z-amp ladder drives it). z_amp_ramp=0 so the
@@ -878,11 +916,17 @@ def generate_design(body):
     gcode_text = writer.text()
 
     # Re-check the generated G-code against the machine (independent verification).
+    if _progress is not None:
+        _progress["stage"] = "verify"
+        # gcode_text.count("\n") is exact and cheap relative to writing the
+        # temp file and re-parsing it below -- gives analyze_gcode's progress
+        # counter a denominator so the bar can advance during this stage too.
+        _progress["verify_total"] = gcode_text.count("\n")
     fd, tmp_path = tempfile.mkstemp(suffix=".gcode")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(gcode_text)
-        analysis = analyze_gcode(tmp_path, profile)
+        analysis = analyze_gcode(tmp_path, profile, _progress=_progress)
         report_text = format_report(analysis, profile)
     finally:
         try:
@@ -956,6 +1000,331 @@ def _clean_shape(s):
 
 
 # --------------------------------------------------------------------------
+# Core: mode=surface -- non-planar conformal shell over a height field
+# (dome/ripple/saddle/waves, or draped over an uploaded STL).
+# --------------------------------------------------------------------------
+
+# A surface spiral's point count scales with (footprint area) / (line_width *
+# resolution) -- the Archimedean spiral fills the disk with turns spaced
+# line_width apart, each turn stepped ~resolution mm apart, so total path
+# length is roughly area / line_width and point count is that length /
+# resolution. Verified against examples/surf_dome.gcode (radius ~39.7mm,
+# line_width 0.45mm, resolution 0.4mm, 1 shell, 27924 actual extrude moves):
+# this formula predicts ~27573, well within a small margin. Every point is
+# then walked AGAIN by the probe-slope check below (each with its own ring of
+# field samples), so the budget must be checked before either runs, not after
+# either one hangs.
+_SURFACE_MAX_POINTS = 2_000_000
+
+
+def _check_surface_budget(radius, line_width, resolution, shells):
+    """Reject a surface design whose point count would blow up, with a clear
+    reason, before any generation or slope-checking work is done."""
+    if resolution <= 0:
+        raise ValueError("surface resolution must be positive")
+    if line_width <= 0:
+        raise ValueError("line width must be positive")
+    approx_points = math.pi * radius * radius / (line_width * resolution)
+    total = approx_points * max(shells, 1)
+    if total > _SURFACE_MAX_POINTS:
+        raise ValueError(
+            "surface design is too large: an estimated %d points (radius "
+            "%.1f mm / line_width %.3f mm x %d shells) exceeds the export "
+            "limit of %d. Reduce the radius or shell count."
+            % (int(total), radius, line_width, shells, _SURFACE_MAX_POINTS))
+
+
+def _check_probe_slope(profile, field, base_pts, z_offset, shells, layer_height):
+    """Refuse a conformal shell whose local slope the trailing probe cannot clear.
+
+    Unlike the parametric vase's wave amplitude (bounded machine-wide by
+    profile.z_amp_max / amp_ceiling() -- a small wiggle riding a big cylinder),
+    a surface spiral's Z *is* the height field: it can rise and fall by many mm
+    over a short XY run. The inductive probe rides at a fixed offset from the
+    nozzle (profile.probe_dx, profile.probe_dy), body bottom profile.probe_clearance
+    above the nozzle tip, keep-out radius profile.probe_radius. Descending a
+    dome (or any steep field), the probe can pass directly over material well
+    above the nozzle's own current height -- a physical collision risk during
+    printing, not just during bed leveling.
+
+    Every millimetre figure used here (probe_dx/dy, probe_clearance,
+    probe_radius) comes from the selected PrinterProfile, never a literal, so
+    a probe-less printer (has_probe=False) is skipped entirely and a printer
+    with a different clearance gets a correctly-scaled ceiling of its own --
+    never the Trident's.
+
+    DELIBERATELY CONSERVATIVE: this assumes material exists wherever the
+    height field is *defined* near the probe's swept centre, not only where
+    the spiral has actually already deposited a bead by that point in the
+    toolpath. That can only over-reject (flag something a print-order-aware
+    model would pass) -- it can never under-reject, because "assume the whole
+    neighbourhood is already printed" is a superset of whatever is actually
+    there at any real moment in time.
+
+    GUESS, NOT PRINT-TESTED: unlike z_amp_max (revised down after an actual
+    probe strike on this machine), this specific slope-rejection threshold has
+    not itself been validated by a real print. A pass here means "consistent
+    with the same geometry that governs the physical probe", not "proven safe".
+
+    Refuses (raises ValueError) rather than warning-and-continuing -- that is
+    the explicit, deliberate choice for this check.
+    """
+    if not profile.has_probe or profile.probe_radius <= 0:
+        return
+    p_rad = profile.probe_radius
+    p_dx, p_dy = profile.probe_dx, profile.probe_dy
+    p_clear = profile.probe_clearance
+
+    # Sample the neighbourhood the probe body sweeps using the SPIRAL'S OWN
+    # sample points, not a hand-picked ring: base_pts already tile the whole
+    # disk at the print's real resolution (turns spaced line_width apart,
+    # stepped ~resolution mm along each turn), so reusing them is both denser
+    # and cheaper than evaluating field() again at made-up offsets. This
+    # matters for fields with fast ANGULAR variation (saddle flips sign every
+    # 90 degrees) -- an earlier version of this check sampled a coarse 2-ring,
+    # 8-angle pattern around the probe centre and missed a saddle peak that
+    # analyze_gcode's own independent re-check then caught for real (probe
+    # collision, not merely a slope warning). Bucketing the spiral's own
+    # points into PCELL-sized cells and keeping each cell's max field value
+    # mirrors analyze.py's probe keep-out grid (PCELL coarse cells, worst-
+    # value-per-cell, a p_cells x p_cells window with a circular distance
+    # test -- see analyze.py around line 131-136 and 305-322) -- except keyed
+    # on the height FIELD (defined disk-wide, independent of print order)
+    # rather than "material already printed by this point in time", which is
+    # exactly the deliberate over-conservatism this check requires.
+    PCELL = 4.0
+    cell_max: dict = {}
+    fvals = [0.0] * len(base_pts)
+    for i, (x, y) in enumerate(base_pts):
+        fv = field(x, y)
+        fvals[i] = fv
+        key = (round(x / PCELL), round(y / PCELL))
+        if fv > cell_max.get(key, -1e30):
+            cell_max[key] = fv
+
+    p_cells = int(math.ceil(p_rad / PCELL)) + 1
+    reach2 = (p_rad + PCELL * 0.71) ** 2
+
+    # Evaluated at the top shell (the last one printed, i.e. tallest nozzle
+    # path) per the spec this check implements.
+    top_offset = max(0, shells - 1) * layer_height
+    for (x, y), fv in zip(base_pts, fvals):
+        nozzle_z = z_offset + fv + top_offset
+        limit = nozzle_z + p_clear
+        pcx, pcy = x + p_dx, y + p_dy
+        gx, gy = round(pcx / PCELL), round(pcy / PCELL)
+        worst = -1e30
+        for cxx in range(gx - p_cells, gx + p_cells + 1):
+            for cyy in range(gy - p_cells, gy + p_cells + 1):
+                cval = cell_max.get((cxx, cyy))
+                if cval is None or cval <= worst:
+                    continue
+                ddx = cxx * PCELL - pcx
+                ddy = cyy * PCELL - pcy
+                if ddx * ddx + ddy * ddy <= reach2:
+                    worst = cval
+        if worst <= -1e29:
+            continue  # no sampled material anywhere near the probe centre
+        material_z = z_offset + worst
+        if material_z > limit:
+            radius_here = math.hypot(x, y)
+            overshoot = material_z - limit
+            slope = overshoot / p_rad
+            raise ValueError(
+                "Surface too steep for this printer's probe: at radius "
+                "%.1f mm from the surface centre, the trailing probe (offset "
+                "%.1f/%.1f mm, %.1f mm keep-out radius, %.2f mm body "
+                "clearance) would ride %.2f mm above its clearance limit -- "
+                "local slope ~%.2f mm/mm across the probe's reach. Reduce "
+                "amplitude, shrink the affected radius, or choose a "
+                "shallower surface."
+                % (radius_here, p_dx, p_dy, p_rad, p_clear, overshoot, slope))
+
+
+def generate_surface_design(body):
+    """mode=surface -- non-planar conformal shell over a height field.
+
+    Mirrors generate_design's structure (profile resolution via _get_profile,
+    writer construction, the progress side-channel, analyze_gcode
+    re-verification, and the same gcode/report/issues/stats/filename return
+    shape) but drives build_surface_spiral instead of build_continuous_spiral.
+    See generate.py's ``--surface`` CLI wiring (around line 378) for the
+    reference this mirrors.
+    """
+    surface_name = str(body.get("surface", "dome"))
+    valid_surfaces = surf.PARAMETRIC | {"stl"}
+    if surface_name not in valid_surfaces:
+        raise ValueError(
+            "unknown surface '%s', expected one of %s"
+            % (surface_name, sorted(valid_surfaces)))
+
+    layer_height = float(body.get("layer_height", 0.30))
+    if layer_height <= 0:
+        raise ValueError("layer_height must be positive")
+    line_width = body.get("line_width", None)
+    print_speed = float(body.get("print_speed", 40.0))
+    filament = body.get("filament", None)
+
+    surface_amp = float(body.get("surface_amp", 5.0))
+    surface_wavelength = float(body.get("surface_wavelength", 20.0))
+    surface_shells = max(1, min(int(body.get("surface_shells", 1)), 20))
+    radius = float(body.get("radius", 32.0))
+    if radius <= 0:
+        raise ValueError("radius must be positive")
+    surface_scale = max(0.01, min(float(body.get("surface_scale", 1.0)), 100.0))
+
+    profile = _get_profile(body)
+
+    # Sane-range clamps (never trust the client), resolved against THIS
+    # printer -- surface_amp is bounded by the machine's own Z travel
+    # (profile.z_max), not by z_amp_max: unlike the vase's wave amplitude,
+    # this is the field's total excursion, not a dip below already-printed
+    # material, so it is z_max (top-of-print ceiling, also re-checked inside
+    # build_surface_spiral) and the probe-slope check below -- not
+    # amp_ceiling() -- that bound this generator's safety.
+    surface_amp = max(0.0, min(surface_amp, profile.z_max))
+    surface_wavelength = max(1.0, min(surface_wavelength, 1000.0))
+
+    nozzle = profile.nozzle_diameter
+    lw = round(nozzle * 1.125, 3) if line_width is None else float(line_width)
+    if lw <= 0:
+        raise ValueError("line width must be positive")
+
+    writer_kwargs = dict(
+        profile=profile,
+        line_width=lw,
+        layer_height=layer_height,
+        print_speed=print_speed,
+        first_layer_speed=18.0,
+    )
+    if filament:
+        from trident_gcode.orca import FilamentSettings
+        try:
+            fs = FilamentSettings.from_orca(str(filament))
+        except KeyError as e:
+            raise KeyError(str(e))
+        writer_kwargs.update(fs.writer_kwargs())
+
+    # Applied AFTER the filament merge, same reasoning as generate_design: the
+    # user's explicit override must win over the filament's own default.
+    nozzle_temp = _parse_nozzle_temp(body, profile)
+    if nozzle_temp is not None:
+        writer_kwargs["nozzle_temp"] = nozzle_temp
+    bed_temp = _parse_bed_temp(body, profile)
+    if bed_temp is not None:
+        writer_kwargs["bed_temp"] = bed_temp
+
+    # Resolve the height field. STL comes from the shared mesh cache the
+    # mesh_texture path also uses; radius then comes from the mesh's own
+    # footprint (surface_from_stl) exactly like generate.py's CLI wiring --
+    # a user-supplied radius is not meaningful for a draped mesh and is
+    # discarded in favour of the mesh's real extent.
+    if surface_name == "stl":
+        mesh_id = body.get("mesh_id")
+        if not mesh_id:
+            raise ValueError("mesh_id is required for surface=stl")
+        entry = _mesh_cache.get(mesh_id)
+        if entry is None:
+            raise KeyError(
+                "mesh_id not found (upload may have expired) - re-upload the STL")
+        field, radius = surf.surface_from_stl(entry["tris"], scale=surface_scale)
+    else:
+        field = surf.make_parametric(surface_name, surface_amp, radius, surface_wavelength)
+
+    resolution = 0.4  # build_surface_spiral's own default; not client-exposed
+    _check_surface_budget(radius, lw, resolution, surface_shells)
+
+    writer = GcodeWriter(**writer_kwargs)
+
+    # Replicate build_surface_spiral's own base-points / z-offset computation
+    # (surface_spiral.py) so the probe-slope pre-check below runs over the
+    # SAME sample points and Z the real generator will use.
+    base_pts = _archimedean(radius, writer.line_width, resolution)
+    if len(base_pts) < 2:
+        raise ValueError("surface too small for the given line width")
+    first_layer_z = writer.layer_height
+    fmin = min(field(x, y) for (x, y) in base_pts)
+    z_offset = first_layer_z - fmin
+
+    _check_probe_slope(profile, field, base_pts, z_offset, surface_shells, writer.layer_height)
+
+    # Progress side-channel (publish-only, for /api/generate_stream) -- same
+    # publish-only pattern as generate_design: a no-op unless the streaming
+    # endpoint attached a dict via body["_progress"].
+    _progress = body.get("_progress")
+    if _progress is not None:
+        _progress["writer"] = writer
+        _progress["total"] = int(len(base_pts) * surface_shells) + 200
+        _progress["stage"] = "toolpath"
+
+    report = build_surface_spiral(
+        writer, field, radius,
+        shells=surface_shells,
+        resolution=resolution,
+        first_layer_z=first_layer_z,
+    )
+
+    gcode_text = writer.text()
+
+    # Re-check the generated G-code against the machine (independent
+    # verification), same as generate_design.
+    if _progress is not None:
+        _progress["stage"] = "verify"
+        _progress["verify_total"] = gcode_text.count("\n")
+    fd, tmp_path = tempfile.mkstemp(suffix=".gcode")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(gcode_text)
+        analysis = analyze_gcode(tmp_path, profile, _progress=_progress)
+        report_text = format_report(analysis, profile)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    issues_extra = []
+    if profile.has_probe and profile.probe_radius > 0:
+        issues_extra.append(
+            "Probe-slope check passed (probe offset %.1f/%.1f mm, clearance "
+            "%.2f mm, keep-out radius %.1f mm). GUESS, NOT PRINT-TESTED: this "
+            "ceiling is derived from probe geometry, not from an actual probe "
+            "strike the way z_amp_max was -- treat a pass as consistent with "
+            "the probe's geometry, not as a proven-safe claim."
+            % (profile.probe_dx, profile.probe_dy, profile.probe_clearance,
+               profile.probe_radius))
+
+    stats = {
+        "moves": analysis.moves,
+        "extrude_moves": analysis.extrude_moves,
+        "height_mm": round(analysis.height, 1),
+        "footprint_mm": [round(analysis.footprint[0], 1), round(analysis.footprint[1], 1)],
+        "filament_m": round(analysis.filament_mm / 1000.0, 2),
+        "est_time_s": round(analysis.est_time_s, 1),
+        "max_z_rate": round(analysis.max_z_rate, 1),
+        "max_flow": round(analysis.max_flow, 1),
+        "probe_hits": analysis.probe_hits,
+        "unsupported_moves": analysis.unsupported_moves,
+        "top_z_mm": report.get("top_z_mm"),
+        "shells": report.get("shells"),
+        "footprint_radius_mm": report.get("footprint_radius_mm"),
+        "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
+        "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
+    }
+
+    filename = "design_surface_%s_%dmm.gcode" % (
+        _clean_shape(surface_name), int(round(report.get("top_z_mm") or 0)))
+
+    return {
+        "gcode": gcode_text,
+        "report": report_text,
+        "issues": list(analysis.issues) + issues_extra,
+        "stats": stats,
+        "filename": filename,
+    }
+
+
+# --------------------------------------------------------------------------
 # Core: mesh_texture mode -- contour stack from an uploaded STL + profile spiral.
 # --------------------------------------------------------------------------
 def generate_mesh_texture_design(body):
@@ -998,6 +1367,28 @@ def generate_mesh_texture_design(body):
 
     z_waves = int(body.get("z_waves", 5))
     z_twist = float(body.get("z_twist", 0.0))
+    xy_twist = float(body.get("xy_twist", 0.0))
+
+    # Symmetry-breaking: leaning spine + elliptical cross-section. Same
+    # clamps as generate_design()'s copy of this block -- ovality and the
+    # spine are affine transforms (scale / translate) applied to the wall
+    # point AFTER it is computed, so they need no assumption that the
+    # underlying contour is star-convex and apply cleanly to a mesh-derived
+    # contour stack (see build_profile_spiral).
+    spine_mm = max(0.0, min(float(body.get("spine_mm", 0.0)), 20.0))
+    spine_deg = float(body.get("spine_deg", 0.0))
+    ovality = max(-0.4, min(float(body.get("ovality", 0.0)), 0.4))
+    spine_offset = None
+    if spine_mm > 0.0:
+        _sc = math.cos(math.radians(spine_deg))
+        _ss = math.sin(math.radians(spine_deg))
+        spine_offset = lambda t: (t * spine_mm * _sc, t * spine_mm * _ss)
+
+    # Asymmetric control cage: reuses _parse_cage (identical [0.5, 1.5] clamp
+    # to the parametric path). build_profile_spiral applies it as a per-point
+    # radial scale about the origin, sampled at the ring-index angle -- no
+    # star-convexity assumption needed (unlike base_fill's disk paver).
+    cage = _parse_cage(body.get("cage"))
 
     # Resolved before amp_fn below: the amplitude ceiling is derived from the
     # selected machine's own z_amp_max (amp_ceiling()), so the profile must be
@@ -1018,6 +1409,16 @@ def generate_mesh_texture_design(body):
 
     contours = stack_from_mesh(tris, layer_height, points_per_turn)
     heights = [layer_height * (i + 0.5) for i in range(len(contours))]
+
+    # Point Edit Modifier stack (FFD / Smooth / Radial Push, gated by Mask /
+    # Protection): _point_edits_on_contours already applies the whole stack
+    # to an arbitrary contour stack for the STL export path -- reused as-is
+    # here, with the SAME clamps (_parse_point_* helpers), so the mesh
+    # G-code path can never accept a looser edit than the parametric wall or
+    # the STL export. Returns the contours unchanged (still 2-tuple (x, y))
+    # when no deforming modifier is active; otherwise 3-tuple (x, y, z)
+    # rings that build_profile_spiral below reads as a per-point Z override.
+    contours = _point_edits_on_contours(body, contours, heights, points_per_turn)
 
     # Line width: default like generate.py (~1.125x a 0.4 nozzle, rounded).
     nozzle = profile.nozzle_diameter
@@ -1053,7 +1454,20 @@ def generate_mesh_texture_design(body):
 
     writer = GcodeWriter(**writer_kwargs)
 
-    mesh_radius = max(math.hypot(x, y) for c in contours for (x, y) in c) if contours else None
+    # Progress side-channel (publish-only, for /api/generate_stream) -- same
+    # mechanism and same no-op-when-absent guarantee as generate_design()'s
+    # copy of this block above. contours is already built at this point, so
+    # the wall-line estimate uses the real layer count instead of guessing it.
+    _progress = body.get("_progress")
+    if _progress is not None:
+        _progress["writer"] = writer
+        _progress["total"] = points_per_turn * max(len(contours), 1) + 27623
+        _progress["stage"] = "toolpath"
+
+    # pt[0]/pt[1] rather than unpacking (x, y) directly: point edits above
+    # may have widened each ring's points to 3-tuple (x, y, z).
+    mesh_radius = (max(math.hypot(pt[0], pt[1]) for c in contours for pt in c)
+                   if contours else None)
     blob_spec = _parse_blob_spec(body, radius=mesh_radius)
     loop_spec = _parse_loop_spec(body, profile, radius=mesh_radius)
     overhang_flow_k = max(0.0, min(float(body.get("overhang_flow_k", 0.0)), 1.0))
@@ -1077,6 +1491,10 @@ def generate_mesh_texture_design(body):
         r_fade_in=pattern_fade_in,
         r_fade_out=pattern_fade_out,
         r_alternate=pattern_alternate,
+        xy_twist_turns=xy_twist,
+        cage=cage,
+        ovality=ovality,
+        spine_offset=spine_offset,
         first_layer_squish=squish,
         first_layer_spacing_factor=spacing_factor,
         base_layers=base_layers,
@@ -1092,11 +1510,17 @@ def generate_mesh_texture_design(body):
 
     gcode_text = writer.text()
 
+    if _progress is not None:
+        _progress["stage"] = "verify"
+        # Same denominator as generate_design()'s copy of this block: exact,
+        # cheap, and gives analyze_gcode's progress counter something to
+        # divide by so the bar can advance during verification too.
+        _progress["verify_total"] = gcode_text.count("\n")
     fd, tmp_path = tempfile.mkstemp(suffix=".gcode")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(gcode_text)
-        analysis = analyze_gcode(tmp_path, profile)
+        analysis = analyze_gcode(tmp_path, profile, _progress=_progress)
         report_text = format_report(analysis, profile)
     finally:
         try:
@@ -1105,7 +1529,10 @@ def generate_mesh_texture_design(body):
             pass
 
     # Empirical print-quality check: peak wall slope = amp*waves/(radius*sil).
-    bottom_radius = max(math.hypot(x, y) for (x, y) in contours[0]) if contours else 1.0
+    # pt[0]/pt[1] rather than unpacking (x, y): the bottom ring may be a
+    # 3-tuple (x, y, z) after point edits above.
+    bottom_radius = (max(math.hypot(pt[0], pt[1]) for pt in contours[0])
+                      if contours else 1.0)
     peak_slope = 0.0
     for k in range(51):
         t = k / 50.0
@@ -1117,22 +1544,35 @@ def generate_mesh_texture_design(body):
             "Peak wave slope %.2f exceeds the empirically printable ~%.2f "
             "(amp*waves/radius) - upper waves may collapse; reduce amplitude "
             "or wave count." % (peak_slope, QUALITY_SLOPE_LIMIT))
-    # STL contour-stack mode uses build_profile_spiral, which has no cage input,
-    # so a cage sent from the live preview is silently ignored here. Tell the user.
-    if _parse_cage(body.get("cage")) is not None:
+    # Point Mask and Point Protection are GATES, not deformations (see
+    # point_edit.py): they scale how strongly FFD / Smooth / Radial Push act
+    # at each point. On their own there is nothing to scale, so
+    # apply_point_edits (inside _point_edits_on_contours above) returns the
+    # contours untouched -- byte-identical output for a modifier the user
+    # switched on and configured. Same message generate_design() gives for
+    # the parametric wall, so the STL path doesn't look like it silently did
+    # nothing.
+    (_pe_mask, _pe_protection, _pe_ffd,
+     _pe_smooth, _pe_radial_push) = _parse_point_edit_specs(body)
+    if ((_pe_mask is not None or _pe_protection is not None)
+            and _pe_ffd is None and _pe_smooth is None
+            and _pe_radial_push is None):
+        _gates = []
+        if _pe_mask is not None:
+            _gates.append("Point Mask")
+        if _pe_protection is not None:
+            _gates.append("Point Protection")
         issues_extra.append(
-            "cage deformation only applies to parametric designs "
-            "(not loops fabric / STL mode) - the STL texture wall was "
-            "generated without the cage.")
-    if _point_edit_active(body):
-        issues_extra.append(
-            "point edit modifiers only apply to parametric wall designs "
-            "(not STL mode) - the STL texture wall was generated without them.")
+            " and ".join(_gates)
+            + (" only scale" if len(_gates) > 1 else " only scales")
+            + " how strongly a deforming modifier acts - with no FFD, Smooth "
+            "or Radial Push enabled there is nothing to scale, so the wall "
+            "was generated unchanged.")
     # build_profile_spiral takes neither base_style nor skirt_loops: it always
-    # paves the disks as the Archimedean spiral and never lays a skirt. Both
-    # were being read off the panel, sent, and dropped without a word -- the
-    # same silent-drop this function already reports for the cage and the point
-    # edit modifiers, just missed. Report the ones actually asked for.
+    # paves the disks as the Archimedean spiral and never lays a skirt (both
+    # rely on a star-convex theta->radius function, which a mesh-derived
+    # contour cannot guarantee -- see base_fill.py's module docstring). Report
+    # the ones actually asked for.
     _mesh_dropped = []
     if str(body.get("base_style", "spiral")) == "concentric" and base_layers > 0:
         _mesh_dropped.append("concentric base style (the spiral disk was used)")
@@ -1182,9 +1622,14 @@ def generate_mesh_texture_design(body):
 def _export_contours_mesh_texture(body):
     """Contour stack for mode=mesh_texture: sliced STL + radial texture only.
 
-    Cage deformation does not apply here (mirrors generate_mesh_texture_design,
-    which only ever built the wall from stack_from_mesh + radial texture --
-    the cage grid is a parametric-only feature).
+    xy_twist / cage / ovality / spine and the Point Edit stack do NOT apply
+    here, unlike generate_mesh_texture_design (the G-code path), which now
+    wires all of them through build_profile_spiral. This export path stops
+    at stack_from_mesh + radial texture, so a solid STL exported from an
+    xy_twist/cage/ovality/spine'd mesh design will not match the G-code
+    preview -- a real gap, not mirrored intentionally; left alone here
+    because solid-export parity for those knobs needs its own contour-stack
+    plumbing and is out of scope for this pass.
     """
     mesh_id = body.get("mesh_id")
     if not mesh_id:
@@ -1452,6 +1897,13 @@ def _printer_entry_json(key, profile, custom, meta=None):
         "loop_up_max": cap,
         "max_nozzle_temp": min(320.0, float(profile.max_nozzle_temp)),
         "max_bed_temp": float(profile.max_bed_temp),
+        # max_z_velocity: the viewer's Print Stats panel flags the peak Z-rate
+        # of a loaded file, and it used to compare against a bare 25.1 literal
+        # in viewer.js -- the Trident's own limit, applied to every printer.
+        # That is the module-constant machine limit CLAUDE.md forbids: it would
+        # pass a file at 20 mm/s on a machine declaring 10. Served from the
+        # profile so the client never carries a ceiling of its own.
+        "max_z_velocity": float(profile.max_z_velocity),
         "custom": bool(custom),
         "source_format": meta.get("source_format") if custom else None,
         "warnings": len(warnings) if custom else 0,
@@ -1585,6 +2037,52 @@ def _read_json_body(handler):
         return None
 
 
+def _progress_fraction(progress, floor):
+    """Honest 0..0.99 progress estimate for /api/generate_stream.
+
+    `progress` is the dict generate_design()/generate_mesh_texture_design()
+    publish into (see the "Progress side-channel" comments there): "writer",
+    "total" and "stage" appear only once generation has actually started, so
+    before that this returns `floor` unchanged rather than guessing.
+
+    Generation has two phases and each owns a slice of the bar instead of
+    the second one being a dead zone at the end:
+      - "toolpath" (building the G-code)  -> maps into [0.00, 0.45]
+      - "verify"   (analyze_gcode's independent re-check of what toolpath
+        just built) -> maps into [0.45, 0.99], driven by analyze_gcode's own
+        "analyzed" line counter (see trident_gcode/analyze.py's _progress
+        parameter) against "verify_total" (the exact line count of the
+        G-code being re-checked, published just before analyze_gcode is
+        called).
+    The 0.45 split point is an estimate from a single measurement (one
+    design took ~2.4s to build toolpath and ~4.7s to verify it) -- the real
+    ratio depends on the design and the printer profile, it is not derived
+    from anything exact. Treat it as a reasonable guess, not a promise.
+
+    Two honesty rules enforced here, per CLAUDE.md ("this project cares a lot
+    about not lying to the user"): the result never exceeds 0.99 -- an
+    in-progress print must never look done -- and it never drops below
+    `floor`, so a caller that always passes its own last-reported value gets
+    a monotonic sequence even though both "total" and "verify_total" are
+    estimates/line-counts a fast-moving stage can overshoot or that a slow
+    poll can catch mid-update.
+    """
+    writer = progress.get("writer")
+    total = progress.get("total")
+    if writer is None or not total:
+        return floor
+    TOOLPATH_SPLIT = 0.45
+    if progress.get("stage") == "verify":
+        verify_total = progress.get("verify_total")
+        analyzed = progress.get("analyzed", 0)
+        verify_frac = min(analyzed / float(verify_total), 1.0) if verify_total else 0.0
+        frac = TOOLPATH_SPLIT + verify_frac * (0.99 - TOOLPATH_SPLIT)
+    else:
+        toolpath_frac = min(len(writer._lines) / float(total), 1.0)
+        frac = toolpath_frac * TOOLPATH_SPLIT
+    return max(floor, min(frac, 0.99))
+
+
 # --------------------------------------------------------------------------
 # HTTP handler: static files + JSON API.
 # --------------------------------------------------------------------------
@@ -1609,6 +2107,19 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _write_ndjson_line(self, obj):
+        """Write one NDJSON progress/result line and flush immediately.
+
+        Without the explicit flush, a client sees nothing until the whole
+        response completes (buffering happens either here or in the socket
+        layer) -- for a 100+ second generate that defeats the entire point of
+        streaming. Caller is responsible for catching the disconnect errors
+        this can raise (BrokenPipeError / ConnectionAbortedError / OSError)
+        if the client has gone away.
+        """
+        self.wfile.write((json.dumps(obj) + "\n").encode("utf-8"))
+        self.wfile.flush()
 
     def send_head(self):
         """Static-file hook shared by GET and HEAD. Hidden paths are refused.
@@ -2074,6 +2585,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/printer/delete":
             self._handle_printer_delete()
             return
+        if path == "/api/generate_stream":
+            self._handle_generate_stream()
+            return
         if path != "/api/generate":
             self.send_error(404, "Not Found")
             return
@@ -2095,6 +2609,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if mode == "mesh_texture":
                 result = generate_mesh_texture_design(body)
+            elif mode == "surface":
+                result = generate_surface_design(body)
             else:
                 result = generate_design(body)
         except KeyError as e:
@@ -2111,6 +2627,115 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         self._send_json(result)
+
+    def _handle_generate_stream(self):
+        """POST /api/generate_stream -- NDJSON progress, then a final result.
+
+        Same request body, same shared JSON boundary, same _session
+        injection, and the exact same dispatch (generate_mesh_texture_design
+        / generate_design) as /api/generate above -- this is deliberately
+        NOT a parallel copy of that endpoint's validation. The only thing
+        added is: generation runs on a worker thread while this (request)
+        thread polls the "_progress" side channel those functions publish
+        into and streams a line whenever the estimated fraction has moved.
+
+        Wire format, one JSON object per "\\n"-terminated line:
+            {"type":"progress","stage":"toolpath","frac":0.42}
+            {"type":"done","result":{...same dict /api/generate returns...}}
+          or, on failure, in place of "done":
+            {"type":"error","error":"...","status":400}
+        """
+        body = _read_json_body(self)
+        if body is None:
+            return
+
+        if isinstance(body, dict):
+            # Both server-owned, never read from client JSON: _session for
+            # the same isolation reason as /api/generate, and _progress is
+            # unconditionally overwritten here so a client cannot hand in
+            # its own dict and have this code publish a live GcodeWriter
+            # reference into something it controls.
+            body["_session"] = _session_id(self)
+            body["_progress"] = {}
+
+        mode = str(body.get("mode", "parametric"))
+        progress = body.get("_progress") if isinstance(body, dict) else None
+
+        outcome = {}
+
+        def _worker():
+            try:
+                if mode == "mesh_texture":
+                    outcome["result"] = generate_mesh_texture_design(body)
+                elif mode == "surface":
+                    outcome["result"] = generate_surface_design(body)
+                else:
+                    outcome["result"] = generate_design(body)
+            except KeyError as e:
+                # Unknown filament profile / mesh_id -- same mapping as
+                # /api/generate.
+                outcome["error"] = str(e).strip('"').strip("'")
+                outcome["status"] = 400
+            except ValueError as e:
+                outcome["error"] = str(e)
+                outcome["status"] = 400
+            except Exception as e:
+                outcome["error"] = "Generation failed: %s" % e
+                outcome["status"] = 500
+
+        worker = threading.Thread(target=_worker, name="generate_stream", daemon=True)
+        worker.start()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        last_frac = 0.0
+        last_emit = 0.0
+        client_gone = False
+        # Poll every 50ms so the worker finishing is noticed promptly, but
+        # only ever WRITE a line every ~200ms -- polling fast and emitting
+        # slow is what keeps this from spamming a line per iteration while
+        # still closing the response quickly once generation is done.
+        while worker.is_alive():
+            worker.join(timeout=0.05)
+            if client_gone or progress is None:
+                continue
+            now = time.monotonic()
+            if now - last_emit < 0.2:
+                continue
+            frac = _progress_fraction(progress, last_frac)
+            if frac <= last_frac:
+                continue
+            last_frac = frac
+            last_emit = now
+            stage = progress.get("stage") or "toolpath"
+            try:
+                self._write_ndjson_line(
+                    {"type": "progress", "stage": stage, "frac": round(frac, 4)})
+            except (BrokenPipeError, ConnectionAbortedError, OSError):
+                # Client went away. The worker cannot be safely interrupted
+                # mid-write, so let it run to completion in the background;
+                # just stop trying to talk to a socket that no longer exists.
+                client_gone = True
+
+        worker.join()
+        if client_gone:
+            return
+
+        if "error" in outcome:
+            try:
+                self._write_ndjson_line(
+                    {"type": "error", "error": outcome["error"], "status": outcome["status"]})
+            except (BrokenPipeError, ConnectionAbortedError, OSError):
+                pass
+            return
+
+        try:
+            self._write_ndjson_line({"type": "done", "result": outcome["result"]})
+        except (BrokenPipeError, ConnectionAbortedError, OSError):
+            pass
 
     def _handle_export_stl(self):
         # Shared boundary, same reason as /api/generate above.

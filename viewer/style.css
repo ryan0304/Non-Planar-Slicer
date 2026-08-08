@@ -47,6 +47,16 @@
   --measure-hover:#67e8f9;
   --measure-dim:rgba(34,211,238,.14);
 
+  /* Busy-state system (spinner / status line / the Generate progress bar).
+     Deliberately its OWN token, not a reuse of --ok/--warn/--danger (those
+     are reserved for safety states -- a slow STL upload or printer-config
+     parse is not one) or --accent-purple (Point Edit Modifiers only).
+     Aliased to --accent because "this is happening" already reads as blue
+     everywhere else in the UI; giving busy states a fifth colour would be
+     one more thing for a glance to parse for no safety benefit. */
+  --busy: var(--accent);
+  --busy-track: var(--surface-raised);
+
   --font-ui: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 
@@ -475,6 +485,13 @@ label.radio-inline { cursor:pointer; }
   border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
 .drow select { width:116px; padding-right:24px; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
+/* Typed value is past the SELECTED PRINTER's ceiling for this field, so the
+   design is using the clamped number rather than what is on screen. --warn is
+   correct here rather than borrowed: the reserved-token note at the top of
+   this file lists "clamp events" among the safety states it covers. Cleared
+   on commit, when the field snaps to the clamped value. */
+.drow input[type=number].out-of-range { border-color:var(--warn); }
+.drow input[type=number].out-of-range:focus { border-color:var(--warn); }
 .colormode-select { width:110px; }
 
 /* Controls whose own content needs more room than the default 92/116px track.
@@ -715,6 +732,7 @@ label.radio-inline { cursor:pointer; }
 .import-drop { border:1.5px dashed var(--line); border-radius:var(--radius-lg); padding:28px 14px; text-align:center;
   color:var(--ink-muted); font-size:12.5px; margin-top:8px; cursor:pointer; transition:.15s; }
 .import-drop:hover, .import-drop.drag-over { border-color:var(--accent); color:var(--ink); background:var(--surface-raised); }
+#stl-status { margin-top:var(--sp-2); }
 .mesh-info .drow > span:first-child { flex:0 0 auto; }
 .mesh-name { color:var(--ink); font-size:11.5px; text-align:right; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; max-width:170px; }
@@ -733,6 +751,28 @@ label.radio-inline { cursor:pointer; }
 .mesh-check-notes:empty { display:none; }
 .mesh-check-notes li { margin-bottom:3px; }
 
+/* =========================================================================
+   Busy-state system -- the ONE shared spinner + status-line treatment for
+   every "this network call takes a moment" spot in designer.js (STL
+   upload, printer import/save/edit/export/delete, the printers/filaments
+   dropdowns on load). Driven by the beginBusy() helper in designer.js so
+   every call site looks and reads the same way instead of improvising.
+   The Generate flow below is the one exception: it gets a real progress
+   bar instead, because it is the one wait long enough to earn one.
+   ========================================================================= */
+.busy-spin { display:inline-block; flex:none; width:11px; height:11px; border-radius:50%;
+  border:2px solid var(--busy-track); border-top-color:var(--busy);
+  animation:busy-spin .7s linear infinite; }
+@keyframes busy-spin { to { transform:rotate(360deg); } }
+
+.busy-line { display:inline-flex; align-items:center; gap:6px; font-size:11.5px;
+  color:var(--ink-muted); }
+/* Settled states drop the spinner (removed from the DOM by endBusy) and
+   just recolor the text -- done reads as normal ink, failed stays legible
+   but distinguishes itself by weight, not by borrowing --danger's red. */
+.busy-line.busy-line-done { color:var(--ink); }
+.busy-line.busy-line-fail { color:var(--ink); font-weight:600; }
+
 /* ---- generate / download controls (inside step-generate) ---- */
 .gen-status { font-size:11.5px; margin-top:7px; min-height:14px; color:var(--ink-muted); }
 .gen-status.err { color:var(--danger); }
@@ -740,6 +780,16 @@ label.radio-inline { cursor:pointer; }
 .gen-report { margin-top:8px; max-height:200px; overflow:auto; font-size:10.5px; line-height:1.35;
   background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px;
   white-space:pre; color:var(--ink); display:none; }
+
+/* Real progress bar for /api/generate_stream -- the one operation slow
+   enough (up to ~15s) to earn something bigger than an inline spinner.
+   Width is only ever driven up to 99% by "progress" lines; it is hidden
+   (never snapped to 100%) the instant a "done"/"error" line lands, so it
+   can never visibly claim completion before the work is actually over. */
+.gen-progress { margin-top:7px; height:6px; border-radius:999px; background:var(--busy-track);
+  overflow:hidden; display:none; }
+.gen-progress-fill { height:100%; width:0%; background:var(--busy);
+  transition:width .15s ease-out; }
 
 /* stale gcode: design changed since last generate — unmistakable warn state */
 .btn.stale { outline:2px solid var(--warn); outline-offset:2px; }
@@ -814,7 +864,7 @@ label.radio-inline { cursor:pointer; }
 .pm-meta { margin-top:var(--sp-2); padding-top:var(--sp-2); border-top:1px solid var(--line); }
 .pm-meta-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .pm-meta-source { font-size:11px; color:var(--ink-muted); }
-.pm-meta-actions { display:flex; gap:var(--sp-3); margin-top:4px; }
+.pm-meta-actions { display:flex; align-items:center; gap:var(--sp-3); margin-top:4px; }
 .pm-link { background:none; border:none; padding:0; margin:0; font-size:11px; font-weight:600;
   color:var(--accent-hover); cursor:pointer; font-family:var(--font-ui); }
 .pm-link:hover { text-decoration:underline; }
@@ -836,14 +886,19 @@ label.radio-inline { cursor:pointer; }
   padding:var(--sp-3) var(--sp-6); border-bottom:1px solid var(--line); flex:none; }
 .pm-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
 .pm-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4) var(--sp-6); }
-.pm-modal-footer { display:flex; justify-content:flex-end; gap:8px;
+.pm-modal-footer { display:flex; align-items:center; justify-content:flex-end; gap:8px;
   padding:var(--sp-3) var(--sp-6); border-top:1px solid var(--line); flex:none; }
+/* Save's busy-line lives in the same flex row as Cancel/Back/Save -- push
+   it to the far left so it reads as "what's happening" beside the buttons
+   that are momentarily disabled, not squeezed between them. */
+.pm-modal-footer .busy-line { margin-right:auto; }
 @media (max-width: 560px) {
   .pm-modal-header, .pm-modal-footer { padding-left:var(--sp-4); padding-right:var(--sp-4); }
   .pm-modal-body { padding-left:var(--sp-4); padding-right:var(--sp-4); }
 }
 
 .pm-drop { margin-bottom:0; }
+#pm-drop-status { margin-top:var(--sp-2); }
 /* .hint.tight-top pulls a caption up by 2px, which is right under a form row
    but wrong under the drop zone: that has a visible dashed border, and the
    -2px dragged the text into it (measured gap: -2px, i.e. overlapping).

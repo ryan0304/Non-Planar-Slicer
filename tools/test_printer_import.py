@@ -1624,6 +1624,85 @@ def test_regression():
           result.stdout[-800:] + result.stderr[-800:])
 
 
+def _write_tall_wall_gcode(path: Path, n_layers: int, layer_height: float = 0.15) -> None:
+    """A thin single-wall 'tube': the SAME tiny XY square, revisited once per
+    layer, height n_layers * layer_height. This is exactly the shape named in
+    analyze.py's own comment -- 'a tall single-wall print that revisits the
+    same column every turn' -- and every layer after the first lands in the
+    unsupported-extrusion detector's spatial hash at the SAME (x/CELL, y/CELL)
+    XY cell as every layer before it.
+    """
+    lines = ["G28", "G90", "M83"]
+    z = 0.0
+    for _ in range(n_layers):
+        z += layer_height
+        lines.append(f"G1 Z{z:.3f} F600")
+        lines.append("G1 X10.0 Y10.0 F1200")           # travel to the corner
+        lines.append("G1 X10.5 Y10.0 E0.02 F1200")
+        lines.append("G1 X10.5 Y10.5 E0.02 F1200")
+        lines.append("G1 X10.0 Y10.5 E0.02 F1200")
+        lines.append("G1 X10.0 Y10.0 E0.02 F1200")      # close the loop
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def test_unsupported_grid_query_is_bounded():
+    """Counter-example for the quadratic-time hole in the unsupported-
+    extrusion spatial hash (trident_gcode/analyze.py, analyze_gcode).
+
+    The hash used to be keyed by XY cell only, with each cell holding a SET of
+    (x, y, z) points -- de-duplicated, per the old comment, so it 'can't grow
+    an unbounded point list.' That claim was false: the stored tuple includes
+    round(z, 1), so a tall single-wall print that revisits the same XY column
+    every layer adds a genuinely NEW point to that column's set on every
+    layer, and the query for each new move walked the ENTIRE set for its cell
+    -- O(moves x layers) overall. Measured on a real vase: 45 us/line at 75k
+    lines, 271 us/line at 388k lines (CLAUDE.md: print-tested claims need a
+    print, but a wall-clock-vs-line-count blowup like that is not in dispute).
+
+    The fix buckets the hash by Z as well as XY, so a query only ever visits
+    the (small, geometry-bounded) Z buckets that its 0.2..2.0mm support window
+    can actually land in -- independent of how many layers came before.
+
+    This asserts the STRUCTURAL invariant behind that fix, not a wall-clock
+    time: analyze_gcode(..., _instrument=...) reports how many spatial-hash
+    points a query touched, summed over every unsupported-extrusion lookup.
+    On a wall 4x as tall (4x the layers, all landing in the same XY cell), the
+    average points touched PER QUERY must stay close to flat. Under the old
+    keyed-by-XY-only scheme it would instead grow roughly linearly with layer
+    count (bounded XY-cell reuse, unbounded per-cell Z growth) -- so a 4x-taller
+    wall would touch roughly 4x as many points per query, not ~1x. A
+    structural point-count assertion is used here instead of timing the run,
+    because wall-clock assertions are flaky across machines and load; this one
+    depends only on how many points a query actually visits.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        base_path = os.path.join(td, "tall_wall_base.gcode")
+        tall_path = os.path.join(td, "tall_wall_4x.gcode")
+        base_layers = 200
+        _write_tall_wall_gcode(Path(base_path), base_layers)
+        _write_tall_wall_gcode(Path(tall_path), base_layers * 4)
+
+        inst_base: dict = {}
+        analyze_gcode(base_path, _instrument=inst_base)
+        inst_tall: dict = {}
+        analyze_gcode(tall_path, _instrument=inst_tall)
+
+        check(inst_base.get("queries", 0) > 0 and inst_tall.get("queries", 0) > 0,
+              "unsupported_grid: both synthetic walls actually exercised the detector",
+              f"base={inst_base} tall={inst_tall}")
+
+        avg_base = inst_base["points_scanned"] / inst_base["queries"]
+        avg_tall = inst_tall["points_scanned"] / inst_tall["queries"]
+        # Generous margin (2x) around the ideal ~1x -- a quadratic
+        # reintroduction would show ~4x on a 4x-taller wall, not ~1x.
+        check(avg_tall < avg_base * 2.0 + 1.0,
+              "unsupported_grid: avg points scanned per query stays roughly flat "
+              "on a 4x-taller wall (bounded), not ~4x (quadratic)",
+              f"avg_base={avg_base:.2f} avg_tall={avg_tall:.2f} "
+              f"raw: base={inst_base} tall={inst_tall}")
+
+
 def test_nozzle_temp_ceiling_comes_from_the_profile():
     """The nozzle-temp override must be bounded by the SELECTED profile.
 
@@ -2089,6 +2168,107 @@ def test_inapplicable_controls_are_reported():
               str(combo["issues"]))
 
 
+def test_surface_probe_slope_check():
+    """serve.py's _check_probe_slope (mode=surface) must REFUSE a conformal
+    shell too steep for the printer's trailing inductive probe to clear, and
+    it must do that in a way that is driven entirely by the selected
+    PrinterProfile -- never a millimetre literal in serve.py.
+
+    This is the counter-example CLAUDE.md asks for every validator rule: a
+    conformal (non-planar surface-following) shell's Z follows the height
+    field's LOCAL SLOPE directly, unlike the parametric vase's wave amplitude
+    (bounded machine-wide by z_amp_max / amp_ceiling()). Without this check,
+    a steep dome or saddle can send the trailing probe -- offset from the
+    nozzle by (probe_dx, probe_dy), body bottom probe_clearance above the tip
+    -- straight through already-printed material.
+
+    Also regression-covers a real bug found while writing this check: an
+    earlier version sampled a coarse fixed ring (2 radii x 8 angles) around
+    the probe centre and MISSED a saddle peak between samples -- it passed a
+    design that analyze_gcode's own independent, order-aware probe keep-out
+    then flagged for real (12+ actual collisions). The fix reuses the
+    spiral's own dense sample points (the exact points build_surface_spiral
+    will print) bucketed into analyze.py-style PCELL cells, so the "steep
+    saddle" case below is the regression guard for that gap.
+    """
+    import serve
+    from trident_gcode import surface as surf
+    from trident_gcode.generators.surface_spiral import _archimedean
+    from dataclasses import replace
+
+    def field_and_pts(shape, amp, radius, wavelength=20.0, line_width=0.45,
+                       resolution=0.4, layer_height=0.30):
+        field = surf.make_parametric(shape, amp, radius, wavelength)
+        base_pts = _archimedean(radius, line_width, resolution)
+        fmin = min(field(x, y) for (x, y) in base_pts)
+        z_offset = layer_height - fmin
+        return field, base_pts, z_offset
+
+    def passes(profile, shape, amp, radius, shells=1, layer_height=0.30):
+        field, base_pts, z_offset = field_and_pts(shape, amp, radius, layer_height=layer_height)
+        try:
+            serve._check_probe_slope(profile, field, base_pts, z_offset, shells, layer_height)
+            return True, ""
+        except ValueError as e:
+            return False, str(e)
+
+    # 1. A steep dome (amp=4.0mm over a 30mm radius) is refused on the
+    #    Trident's real probe geometry (dx=3, dy=29, clearance=3.8, radius=8).
+    ok, msg = passes(TRIDENT, "dome", 4.0, 30.0)
+    check(not ok and "steep" in msg.lower() and "probe" in msg.lower(),
+          "probe-slope: a steep dome (amp=4.0/r=30) is refused", msg)
+
+    # 2. The same shape, shallower, passes -- proves this is a real slope
+    #    check and not something that rejects unconditionally.
+    ok, msg = passes(TRIDENT, "dome", 3.5, 30.0)
+    check(ok, "probe-slope: reducing amplitude (3.5mm) makes the same dome pass", msg)
+
+    # 3. Regression for the ring-sampling gap: a saddle (amp=3.0, r=30) whose
+    #    danger is concentrated at specific ANGLES (it flips sign every 90
+    #    degrees) must also be refused. An earlier ring-sampled version of
+    #    this check missed it; analyze_gcode's own causal check independently
+    #    finds real probe collisions in the same G-code (see report).
+    ok, msg = passes(TRIDENT, "saddle", 3.0, 30.0)
+    check(not ok, "probe-slope: a steep saddle (angularly-varying danger) is refused", msg)
+    ok, msg = passes(TRIDENT, "saddle", 1.5, 30.0)
+    check(ok, "probe-slope: reducing the same saddle's amplitude (1.5mm) makes it pass", msg)
+
+    # 4. The exact geometry behind examples/surf_dome.gcode (amp=4.0,
+    #    radius~39.7, one shell) must still pass -- it is a real, if
+    #    coincidental, safe design (the dome's tall centre falls just
+    #    outside the probe's 21-37mm reach at this radius) and this check
+    #    must not regress into over-rejecting it.
+    ok, msg = passes(TRIDENT, "dome", 4.0, 39.7)
+    check(ok, "probe-slope: the surf_dome.gcode-equivalent design still passes", msg)
+
+    # 5. Profile-driven, not hardcoded: a probe-less printer (Bambu) must
+    #    skip the check entirely and accept the SAME design the Trident
+    #    refuses -- proves the ceiling is not a serve.py millimetre literal.
+    bambu = PRINTER_PROFILES["bambu_a1"]
+    check(not bambu.has_probe, "probe-slope: sanity -- bambu_a1 has no probe")
+    ok, msg = passes(bambu, "dome", 4.0, 30.0)
+    check(ok, "probe-slope: the same steep dome passes on a probe-less printer (Bambu)", msg)
+
+    # 6. Profile-driven threshold: tightening probe_clearance on a COPY of
+    #    the Trident profile must make the SAME design fail sooner (or stay
+    #    failed), and loosening it must let it pass -- the ceiling tracks
+    #    the profile field, not a constant.
+    tight = replace(TRIDENT, probe_clearance=1.0)
+    ok, _ = passes(tight, "dome", 4.0, 30.0)
+    check(not ok, "probe-slope: a tighter probe_clearance (1.0mm) still refuses the steep dome")
+
+    loose = replace(TRIDENT, probe_clearance=10.0)
+    ok, _ = passes(loose, "dome", 4.0, 30.0)
+    check(ok, "probe-slope: a looser probe_clearance (10.0mm) accepts the same steep dome")
+
+    # 7. No probe at all (probe_radius == 0 on an otherwise has_probe=True
+    #    profile) must also skip the check rather than dividing by zero or
+    #    otherwise misbehaving.
+    no_radius = replace(TRIDENT, probe_radius=0.0)
+    ok, msg = passes(no_radius, "dome", 4.0, 30.0)
+    check(ok, "probe-slope: probe_radius=0 skips the check even with has_probe=True", msg)
+
+
 def main() -> int:
     test_klipper_trident()
     test_orca_machine()
@@ -2137,6 +2317,8 @@ def main() -> int:
     test_key_traversal_guard()
 
     test_regression()
+    test_unsupported_grid_query_is_bounded()
+    test_surface_probe_slope_check()
 
     if _FAILURES:
         print(f"\n{len(_FAILURES)} FAILURE(S):")

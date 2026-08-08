@@ -165,6 +165,7 @@
             <button id="printer-edit-btn" class="pm-link" type="button">Edit</button>
             <button id="printer-export-btn" class="pm-link" type="button">Export</button>
             <button id="printer-delete-btn" class="pm-link pm-link-danger" type="button">Delete</button>
+            <div id="printer-meta-status" class="busy-line" style="display:none"></div>
           </div>
         </div>
         <button id="printer-add-btn" class="btn btn-block mb-add-btn" type="button">+ Add custom printer</button>
@@ -239,6 +240,7 @@
             Drop an STL file here<br>or click to browse
             <input type="file" id="stl-file" accept=".stl" hidden>
           </div>
+          <div id="stl-status" class="busy-line" style="display:none"></div>
 
           <div id="mesh-info" class="mesh-info" style="display:none">
             <div class="drow"><span>Mesh</span><span id="mesh-name" class="mesh-name">-</span></div>
@@ -497,6 +499,10 @@
             directly.</div>
           <button id="gen-btn" class="btn btn-primary btn-block mt-2">Generate &amp; preview</button>
           <div id="gen-status" class="gen-status"></div>
+          <div id="gen-progress" class="gen-progress" role="progressbar" aria-valuemin="0"
+               aria-valuemax="100" aria-valuenow="0" aria-label="Generate progress">
+            <div id="gen-progress-fill" class="gen-progress-fill"></div>
+          </div>
           <pre id="gen-report" class="gen-report"></pre>
           <button id="dl-btn" class="btn btn-block mt-2" style="display:none">Download .gcode</button>
         </div>
@@ -700,6 +706,7 @@
           Drop a printer config, or click to choose
           <input type="file" id="pm-file" accept=".cfg,.json,.ini,.txt" hidden>
         </div>
+        <div id="pm-drop-status" class="busy-line" style="display:none"></div>
         <div class="hint tight-top">Supported formats: Klipper <code>printer.cfg</code>,
           OrcaSlicer / Bambu Studio machine <code>.json</code>, PrusaSlicer / SuperSlicer
           <code>.ini</code>, or a previously exported Trident printer <code>.json</code>.</div>
@@ -791,6 +798,7 @@
 
     </div>
     <div class="pm-modal-footer">
+      <div id="pm-save-status" class="busy-line" style="display:none"></div>
       <button id="pm-cancel-btn" class="btn" type="button">Cancel</button>
       <button id="pm-back-btn" class="btn" type="button" style="display:none">Back</button>
       <button id="pm-save-btn" class="btn btn-primary" type="button" disabled>Next</button>

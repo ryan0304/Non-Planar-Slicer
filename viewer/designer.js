@@ -99,6 +99,53 @@
     return s;
   }
 
+  // ---- shared busy-state helper -------------------------------------------
+  // One small system for every "this network call takes a moment" spot in
+  // this file: a disabled trigger control (when there is a single one) and
+  // a status line carrying a spinner. Before this helper existed, each of
+  // these was either completely silent or invented its own wording -- this
+  // is the one place that decides what "working" looks like, so every
+  // instance of it looks and reads the same way. The Generate flow is the
+  // one exception (it gets its own real progress bar -- see genBtn below).
+  //
+  // btn:      control to disable while busy. Nullable -- background loads
+  //           like the printers/filaments dropdowns have no single button
+  //           to disable.
+  // statusEl: element that receives the spinner + label. Nullable.
+  // label:    text shown while busy.
+  //
+  // Returns endBusy(finalText, isError), to be called exactly once when the
+  // operation settles. finalText may be omitted/null to just clear the busy
+  // state silently (e.g. when the caller is about to render its own richer
+  // UI, or the operation's result speaks for itself).
+  function beginBusy(btn, statusEl, label){
+    if(btn) btn.disabled = true;
+    if(statusEl){
+      statusEl.textContent = '';
+      statusEl.className = 'busy-line';
+      statusEl.style.display = '';
+      var spin = document.createElement('span');
+      spin.className = 'busy-spin';
+      spin.setAttribute('aria-hidden', 'true');
+      statusEl.appendChild(spin);
+      statusEl.appendChild(document.createTextNode(label || 'Working...'));
+    }
+    var settled = false;
+    return function endBusy(finalText, isError){
+      if(settled) return;
+      settled = true;
+      if(btn) btn.disabled = false;
+      if(!statusEl) return;
+      if(finalText == null){
+        statusEl.style.display = 'none';
+        statusEl.textContent = '';
+        return;
+      }
+      statusEl.textContent = finalText;
+      statusEl.className = 'busy-line busy-line-' + (isError ? 'fail' : 'done');
+    };
+  }
+
   // ---- central design state ----------------------------------------------
   var design = {
     printer: "trident",
@@ -845,6 +892,19 @@
         ((meta && meta.name) || 'selected printer') + ' probe keep-out';
     }
 
+    // Cross-agent contract (see CLAUDE.md: "no machine limit may be a
+    // module constant"): viewer.js needs the active printer's Z-velocity
+    // ceiling and previously hardcoded the Trident's 25.1 mm/s for every
+    // printer. Publish it here, in the one function every printer switch
+    // AND the initial /api/printers load both already funnel through, so
+    // it can never drift from whichever printer is actually selected.
+    window.__printerLimits = {
+      key: design.printer,
+      name: (meta && meta.name) || design.printer,
+      max_z_velocity: (meta && typeof meta.max_z_velocity === 'number' && isFinite(meta.max_z_velocity))
+        ? meta.max_z_velocity : 10.0 // conservative default, matches printer_validate.py's unknown-limit fallback
+    };
+
     return changed;
   }
 
@@ -1241,6 +1301,9 @@
     var dropZone = document.getElementById('pm-drop');
     var fileInput = document.getElementById('pm-file');
     var parseErrorEl = document.getElementById('pm-parse-error');
+    var dropStatusEl = document.getElementById('pm-drop-status');
+    var saveStatusEl = document.getElementById('pm-save-status');
+    var metaStatusEl = document.getElementById('printer-meta-status');
     var nameInput = document.getElementById('pm-name');
     var formatBadge = document.getElementById('pm-format-badge');
     var reportEl = document.getElementById('pm-report');
@@ -1275,6 +1338,7 @@
 
     var pmState = null;
     var pmSeq = 0;
+    var pmParseSeq = 0;   // guards /api/printer/parse the same way pmSeq guards /validate
     var pmDebounceTimer = null;
     var deleteConfirming = false;
 
@@ -1357,8 +1421,13 @@
         showParseError('File too large (max ' + PARSE_MAX_MB + ' MB).');
         return;
       }
+      // Sequence guard: two rapid drops must let only the LATER one win,
+      // same pattern as runRevalidate()'s pmSeq below.
+      var mySeq = ++pmParseSeq;
+      var end = beginBusy(null, dropStatusEl, 'Parsing ' + file.name + '...');
       var reader = new FileReader();
       reader.onload = function(e){
+        if(mySeq !== pmParseSeq) return; // superseded before the request even went out
         apiFetch('/api/printer/parse', {
           method: 'POST',
           headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
@@ -1366,6 +1435,8 @@
         }).then(function(r){
           return r.json().then(function(j){ return { status: r.status, body: j }; });
         }).then(function(res){
+          if(mySeq !== pmParseSeq) return; // a newer parse's response already won
+          end(null);
           if(res.status !== 200 || !res.body || !res.body.profile){
             showParseError((res.body && res.body.error) || 'Could not parse this file.');
             return;
@@ -1376,7 +1447,16 @@
           pmState.sourceFile = file.name;
           applyServerResult(res.body);
           enterReviewStage();
-        }).catch(function(err){ showParseError('Upload failed: ' + err); });
+        }).catch(function(err){
+          if(mySeq !== pmParseSeq) return;
+          end(null);
+          showParseError('Upload failed: ' + err);
+        });
+      };
+      reader.onerror = function(){
+        if(mySeq !== pmParseSeq) return;
+        end(null);
+        showParseError('Could not read file: ' + (reader.error ? reader.error.message : 'unknown error'));
       };
       reader.readAsArrayBuffer(file);
     }
@@ -2487,18 +2567,42 @@
   // Simple 2-way binding table: element id -> {field, type, show?}
   var NUM = 'number', INT = 'int', STR = 'string';
 
+  // Clamp to the field's own min/max. Those attributes are not decoration:
+  // applyPrinterCaps() rewrites them from the SELECTED PRINTER's profile, so
+  // they carry that machine's real ceilings. Without this the panel would
+  // hold, preview and SEND a value the server silently clamps -- typing 5 into
+  // a row height whose max is 0.7 drew a 5mm spike in the draft and put 5 in
+  // the request body. That is exactly what the comment above applyPrinterCaps
+  // forbids: the UI must never suggest a value the server would reject or
+  // clamp. The server clamp still stands behind this (it must -- a browser is
+  // not a safety device); this stops the UI lying about what will be printed.
+  //
+  // Only the value the DESIGN uses is clamped, not the text being typed, so an
+  // intermediate "0" on the way to "0.9" is not fought. The field snaps to the
+  // clamped number on commit (change/blur).
   function bindNumber(id, field, isInt){
     var el = document.getElementById(id);
     if(!el) return;
     el.value = design[field];
-    el.addEventListener('input', function(){
-      var v = parseFloat(el.value);
-      if(Number.isNaN(v)) return;
-      design[field] = isInt ? Math.round(v) : v;
+    function applyValue(commit){
+      var raw = parseFloat(el.value);
+      if(Number.isNaN(raw)) return;
+      var v = raw;
+      var lo = parseFloat(el.min), hi = parseFloat(el.max);
+      if(isFinite(lo)) v = Math.max(lo, v);
+      if(isFinite(hi)) v = Math.min(hi, v);
+      if(isInt) v = Math.round(v);
+      design[field] = v;
+      // --warn is reserved for safety states, and style.css names "clamp
+      // events" among them -- a value over this printer's ceiling is one.
+      el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
+      if(commit){ el.value = v; el.classList.remove('out-of-range'); }
       persistDesign();
       updateSlope();
       schedulePreview();
-    });
+    }
+    el.addEventListener('input', function(){ applyValue(false); });
+    el.addEventListener('change', function(){ applyValue(true); });
   }
   function bindSelect(id, field){
     var el = document.getElementById(id);
@@ -3182,32 +3286,42 @@
     });
   })();
 
-  // Blank = auto (selected filament's own temp); only a real value overrides.
-  (function(){
-    var el = document.getElementById('d-nozzletemp');
+  // Optional temperature override. Blank = auto (the selected filament's own
+  // temp); only a real value overrides, and 0 is a meaningful value for the
+  // bed (bed off), so blank-vs-zero must stay distinct -- see serve.py's
+  // _parse_bed_temp. Shared by both inputs so the melt-ceiling clamp below can
+  // never drift between them.
+  //
+  // The clamp reads the element's own max, which applyPrinterCaps() sets from
+  // the selected printer's max_nozzle_temp / max_bed_temp (already reconciled
+  // server-side against the 320C absolute backstop). Previously these stored
+  // whatever was typed, so the panel could show and send 400C to a printer
+  // declaring 260C and let the server quietly cut it back.
+  function bindOptionalTemp(id, field){
+    var el = document.getElementById(id);
     if(!el) return;
-    if(design.nozzle_temp != null) el.value = design.nozzle_temp;
-    el.addEventListener('input', function(){
-      var v = parseFloat(el.value);
-      design.nozzle_temp = (el.value === '' || Number.isNaN(v)) ? null : v;
+    if(design[field] != null) el.value = design[field];
+    function applyTemp(commit){
+      var raw = parseFloat(el.value);
+      if(el.value === '' || Number.isNaN(raw)){
+        design[field] = null;
+        el.classList.remove('out-of-range');
+      } else {
+        var v = raw;
+        var lo = parseFloat(el.min), hi = parseFloat(el.max);
+        if(isFinite(lo)) v = Math.max(lo, v);
+        if(isFinite(hi)) v = Math.min(hi, v);
+        design[field] = v;
+        el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
+        if(commit){ el.value = v; el.classList.remove('out-of-range'); }
+      }
       persistDesign();
-    });
-  })();
-
-  // Blank = auto (selected filament's own bed temp); only a real value
-  // overrides. Unlike nozzle temp, 0 is a meaningful override here (bed off)
-  // -- this input never treats 0 as "no value", it stores exactly what was
-  // typed, same as every other numeric field. See serve.py _parse_bed_temp.
-  (function(){
-    var el = document.getElementById('d-bedtemp');
-    if(!el) return;
-    if(design.bed_temp != null) el.value = design.bed_temp;
-    el.addEventListener('input', function(){
-      var v = parseFloat(el.value);
-      design.bed_temp = (el.value === '' || Number.isNaN(v)) ? null : v;
-      persistDesign();
-    });
-  })();
+    }
+    el.addEventListener('input', function(){ applyTemp(false); });
+    el.addEventListener('change', function(){ applyTemp(true); });
+  }
+  bindOptionalTemp('d-nozzletemp', 'nozzle_temp');
+  bindOptionalTemp('d-bedtemp', 'bed_temp');
 
   // Live "flow line width" readout mirroring serve.py: line_width = round(nozzle*1.125, 3),
   // or the explicit override. Purely informational; stale tracking is already handled
@@ -3827,6 +3941,11 @@
         alert('Could not load design: ' + err.message);
       }
     };
+    reader.onerror = function(){
+      // Without this, a failed read leaves onload never firing and the
+      // user staring at silence with no idea the load did nothing.
+      alert('Could not read file: ' + (reader.error ? reader.error.message : 'unknown error'));
+    };
     reader.readAsText(e.target.files[0]);
     e.target.value = '';
   });
@@ -3837,6 +3956,8 @@
 
   var stlDrop = document.getElementById('stl-drop');
   var stlFile = document.getElementById('stl-file');
+  var stlStatusEl = document.getElementById('stl-status');
+  var stlUploadSeq = 0;
 
   stlDrop.addEventListener('click', function(){ stlFile.click(); });
   stlFile.addEventListener('change', function(e){
@@ -3867,8 +3988,14 @@
       alert('File too large (max ' + MESH_MAX_MB + ' MB).');
       return;
     }
+    // Sequence guard, same pattern as printer-config parsing's
+    // runRevalidate() below: two rapid drops/picks must let only the LATER
+    // one win, not whichever response happens to land first.
+    var mySeq = ++stlUploadSeq;
+    var end = beginBusy(null, stlStatusEl, 'Uploading and analyzing mesh...');
     var reader = new FileReader();
     reader.onload = function(e){
+      if(mySeq !== stlUploadSeq) return; // superseded before the request even went out
       apiFetch('/api/upload_mesh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
@@ -3876,7 +4003,9 @@
       })
       .then(function(r){ return r.json(); })
       .then(function(data){
-        if(data.error){ alert('Upload failed: ' + data.error); return; }
+        if(mySeq !== stlUploadSeq) return; // a newer upload's response already won
+        if(data.error){ end('Upload failed: ' + data.error, true); return; }
+        end(null); // mesh-info panel below is the confirmation; no need to leave text behind
         meshState.mesh_id = data.mesh_id;
         meshState.filename = file.name;
         meshState.info = data;
@@ -3886,7 +4015,14 @@
         // the base/brim/skirt rows back.
         refreshShapeRows();
       })
-      .catch(function(err){ alert('Upload failed: ' + err); });
+      .catch(function(err){
+        if(mySeq !== stlUploadSeq) return;
+        end('Upload failed: ' + err, true);
+      });
+    };
+    reader.onerror = function(){
+      if(mySeq !== stlUploadSeq) return;
+      end('Could not read file: ' + (reader.error ? reader.error.message : 'unknown error'), true);
     };
     reader.readAsArrayBuffer(file);
   }
@@ -4161,44 +4297,192 @@
   // Generate click would send, without actually POSTing it.
   window.__designSnapshot = buildGenerateBody;
 
-  genBtn.addEventListener('click', function(){
-    var body = buildGenerateBody();
-    genBtn.disabled = true;
-    statusEl.className = ''; statusEl.textContent = 'generating...';
-    dlBtn.style.display = 'none';
+  // ---- generate (streamed progress, with a fallback to the one-shot path) --
+  // Human labels for the "stage" token /api/generate_stream sends. Anything
+  // not in this table (a future stage, or a typo server-side) still shows
+  // something reasonable rather than leaking the raw token to the user.
+  var GEN_STAGE_LABELS = { toolpath: 'Building toolpath', verify: 'Verifying against printer limits' };
+  function genStageLabel(stage){
+    return GEN_STAGE_LABELS[stage] || ('Working (' + stage + ')');
+  }
+
+  var genProgressEl = document.getElementById('gen-progress');
+  var genProgressFill = document.getElementById('gen-progress-fill');
+  function showGenProgress(frac, label){
+    var pct = Math.max(0, Math.min(99, Math.round(frac * 100))); // completion only via the 'done' line
+    // 'block', not '': .gen-progress carries `display:none` in style.css, so
+    // clearing the inline style falls back to that rule and the bar stays
+    // invisible for the whole generate -- which is exactly what it did.
+    if(genProgressEl){ genProgressEl.style.display = 'block'; genProgressEl.setAttribute('aria-valuenow', String(pct)); }
+    if(genProgressFill) genProgressFill.style.width = pct + '%';
+    statusEl.className = '';
+    statusEl.textContent = label + '... ' + pct + '%';
+  }
+  function hideGenProgress(){
+    if(genProgressEl) genProgressEl.style.display = 'none';
+    if(genProgressFill) genProgressFill.style.width = '0%';
+  }
+
+  // Applies a successful /api/generate result (the streaming path's "done"
+  // line and the legacy one-shot response carry the identical shape) to the
+  // UI. Shared so the two paths can never diverge in what "success" means.
+  //
+  // clickRev is designRev AS OF THE CLICK, not read live here -- see the
+  // capture at the bottom of this function's one caller. Nothing disables
+  // the design inputs while a generate is in flight, so if the user edits a
+  // parameter mid-request, stamping the LIVE designRev would mark G-code
+  // built from the OLD design as matching the NEW one: updateStaleBadge()
+  // would then hide the "outdated" warning while the loaded/downloadable
+  // G-code silently does not match what the panel shows. Given this
+  // project's stance on output matching the screen, that is exactly the
+  // failure CLAUDE.md's safety-first stance exists to prevent.
+  function applyGenerateResult(j, clickRev){
+    lastGcode = j.gcode; lastName = j.filename;
+    if(window.clearPreview) window.clearPreview();
+    if(window.loadGcode){ window.loadGcode(j.filename, j.gcode); }
+    if(window.setAppMode) window.setAppMode('viewer');
+    generatedRev = clickRev;          // the click-time revision, not the live one -- see above
+    updateStaleBadge();
+    reportEl.textContent = j.report || '';
+    reportEl.style.display = 'block';
+    dlBtn.style.display = 'block';
+    var nIssues = (j.issues||[]).length;
+    if(nIssues){
+      statusEl.className = 'err';
+      statusEl.textContent = nIssues + ' safety warning(s) - see report';
+    } else {
+      statusEl.className = 'ok';
+      statusEl.textContent = 'safe [OK] - ' + (j.stats ? (j.stats.filament_m + ' m, ' + j.filename) : j.filename);
+    }
+  }
+
+  // Original one-shot path. Used as a fallback when /api/generate_stream is
+  // unreachable (404 against an older server, a network error, or a
+  // response with no streaming body) -- indeterminate spinner only, since
+  // there is no progress signal to show a real bar for.
+  function runLegacyGenerate(body, clickRev){
+    statusEl.className = '';
+    statusEl.textContent = 'Generating (no progress available)...';
     apiFetch('/api/generate', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
     }).then(function(resp){
       return resp.json().then(function(j){ return {ok:resp.ok, j:j}; });
     }).then(function(res){
       genBtn.disabled = false;
+      hideGenProgress();
       if(!res.ok){
         statusEl.className = 'err';
         statusEl.textContent = res.j && res.j.error ? res.j.error : 'generation failed';
         return;
       }
-      var j = res.j;
-      lastGcode = j.gcode; lastName = j.filename;
-      if(window.clearPreview) window.clearPreview();
-      if(window.loadGcode){ window.loadGcode(j.filename, j.gcode); }
-      if(window.setAppMode) window.setAppMode('viewer');
-      generatedRev = designRev;         // loaded gcode now matches the design
-      updateStaleBadge();
-      reportEl.textContent = j.report || '';
-      reportEl.style.display = 'block';
-      dlBtn.style.display = 'block';
-      var nIssues = (j.issues||[]).length;
-      if(nIssues){
-        statusEl.className = 'err';
-        statusEl.textContent = nIssues + ' safety warning(s) - see report';
-      } else {
-        statusEl.className = 'ok';
-        statusEl.textContent = 'safe [OK] - ' + (j.stats ? (j.stats.filament_m + ' m, ' + j.filename) : j.filename);
-      }
+      applyGenerateResult(res.j, clickRev);
     }).catch(function(err){
       genBtn.disabled = false;
+      hideGenProgress();
       statusEl.className = 'err';
       statusEl.textContent = 'request failed: ' + err;
+    });
+  }
+
+  genBtn.addEventListener('click', function(){
+    var body = buildGenerateBody();
+    // Captured together, alongside body: both are frozen at click time so
+    // the eventual response can only ever be stamped against the design it
+    // was actually built from. See the comment in applyGenerateResult.
+    var clickRev = designRev;
+    genBtn.disabled = true;
+    statusEl.className = ''; statusEl.textContent = 'Starting...';
+    dlBtn.style.display = 'none';
+    hideGenProgress();
+
+    var usedStream = false;   // true once we've committed to reading the stream
+    var settled = false;      // true once a 'done'/'error' line (or legacy response) has landed
+    var lastFrac = 0;
+
+    apiFetch('/api/generate_stream', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    }).then(function(resp){
+      if(!resp.ok || !resp.body){
+        // Old server without this endpoint (404), or a response.body this
+        // browser/proxy doesn't support streaming -- fall back below rather
+        // than leaving Generate dead against an older deployment. The
+        // endpoint always answers 200 even for a generation failure (see
+        // its docstring), so a non-ok status here means something more
+        // fundamental than "the design was rejected."
+        throw new Error('stream unavailable');
+      }
+      usedStream = true;
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = ''; // carries a partial line across chunk boundaries
+
+      function handleLine(line){
+        line = line.trim();
+        if(!line) return;
+        var obj;
+        try { obj = JSON.parse(line); } catch(e){ return; }
+        if(obj.type === 'progress'){
+          var frac = (typeof obj.frac === 'number' && isFinite(obj.frac)) ? obj.frac : lastFrac;
+          if(frac < lastFrac) frac = lastFrac; // never let the bar go backwards
+          lastFrac = frac;
+          showGenProgress(frac, genStageLabel(obj.stage));
+        } else if(obj.type === 'done'){
+          settled = true;
+          genBtn.disabled = false;
+          hideGenProgress();
+          applyGenerateResult(obj.result, clickRev);
+        } else if(obj.type === 'error'){
+          // Status is 200 even here (see the endpoint's docstring) -- the
+          // failure lives entirely in this line's "type", never in HTTP
+          // status, so branching on resp.ok anywhere in this path would
+          // silently show a stale "generating..." forever.
+          settled = true;
+          genBtn.disabled = false;
+          hideGenProgress();
+          statusEl.className = 'err';
+          statusEl.textContent = obj.error || 'generation failed';
+        }
+      }
+
+      function pump(){
+        return reader.read().then(function(res){
+          if(res.done){
+            if(buf.trim()) handleLine(buf);
+            buf = '';
+            if(!settled){
+              // The connection closed without a 'done' or 'error' line --
+              // do not leave the button/bar stuck busy forever.
+              genBtn.disabled = false;
+              hideGenProgress();
+              statusEl.className = 'err';
+              statusEl.textContent = 'generation stream ended unexpectedly';
+            }
+            return;
+          }
+          buf += decoder.decode(res.value, {stream: true});
+          var lines = buf.split('\n');
+          buf = lines.pop(); // last (possibly partial) line waits for the next chunk
+          lines.forEach(handleLine);
+          if(settled){ try { reader.cancel(); } catch(e){} return; }
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function(err){
+      if(settled) return; // a real result already landed; a trailing network blip is moot
+      if(usedStream){
+        // Broke mid-stream after we'd already committed to it (network
+        // drop, malformed NDJSON) -- report it directly. Falling back to
+        // /api/generate here would double-submit the same generation job.
+        genBtn.disabled = false;
+        hideGenProgress();
+        statusEl.className = 'err';
+        statusEl.textContent = 'request failed: ' + err;
+        return;
+      }
+      // Never got a usable stream at all -- fall back so the app still
+      // works against an older server.
+      runLegacyGenerate(body, clickRev);
     });
   });
 
@@ -4219,6 +4503,12 @@
   var exportStlBtn = document.getElementById('export-stl-btn');
   if(exportStlBtn){
     exportStlBtn.addEventListener('click', function(){
+      // body is a click-time snapshot, same as Generate's -- but unlike
+      // Generate, this handler never stamps a "matches the current design"
+      // claim anywhere (no generatedRev-equivalent, no stale badge for
+      // STL), so there is nothing here for a mid-request edit to make
+      // dishonest: the download is simply whatever body says, and that was
+      // frozen the moment this click fired.
       var body = buildGenerateBody();
       exportStlBtn.disabled = true;
       statusEl.className = ''; statusEl.textContent = 'exporting STL...';
