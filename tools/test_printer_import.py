@@ -1359,6 +1359,83 @@ def test_non_finite_rejected():
         raised = True
     check(raised, "non-finite: json body parser rejects the bare NaN token")
 
+    # ...but the bare token was never the only door. `float()` also accepts the
+    # ordinary QUOTED string "nan"/"inf"/"-inf", which any client can send as a
+    # normal JSON string value, and an overflowing literal like 1e400 is already
+    # a float by the time parse_constant would have seen it. Both reached the
+    # emitted G-code: {"z_twist": "nan"} produced 16002 lines of
+    # `G1 X142.5000 Y117.5000 Znan Enan F2400` with issues == [], i.e. a file
+    # full of NaN that the tool called safe. Reject at the boundary, per
+    # CLAUDE.md -- never clamp, and never per-field (one forgotten field
+    # reopens it).
+    from serve import _reject_nonfinite_tree
+    poison = [
+        ("z_twist", {"z_twist": "nan"}),
+        ("radius", {"radius": "inf"}),
+        ("height", {"height": "-inf"}),
+        ("ovality", {"ovality": "NaN"}),
+        ("print_speed", {"print_speed": "Infinity"}),
+        ("amp_profile point", {"amp_profile": [[0, 0], [1, "nan"]]}),
+        ("width_profile point", {"width_profile": [[0, 1], [1, "inf"]]}),
+        ("radius_profile point", {"radius_profile": [[0, 1], [1, "nan"]]}),
+        ("cage cell", {"cage": [[1, 1], [1, "inf"]]}),
+        ("overflowed literal", {"radius": float("1e400")}),
+    ]
+    leaked = []
+    for label, body in poison:
+        try:
+            _reject_nonfinite_tree(body)
+            leaked.append(label)
+        except ValueError:
+            pass
+    check(not leaked, "non-finite: quoted 'nan'/'inf' strings are refused at the body boundary",
+          "accepted: " + str(leaked))
+
+    # The same walk must NOT eat ordinary text or honest numeric strings --
+    # a printer called "Infinity 3D" does not parse as a float at all.
+    survived = True
+    try:
+        _reject_nonfinite_tree({"printer": "Infinity 3D", "radius": "25", "shape": "circle"})
+    except ValueError:
+        survived = False
+    check(survived, "non-finite: ordinary text and numeric strings still pass the boundary")
+
+    # Machine-facing backstop, independent of serve.py having caught it first:
+    # GcodeWriter must refuse a non-finite Z, feedrate or E at the single choke
+    # point every emitted move goes through. Z used to pass because its two
+    # separate `>` / `<` tests are BOTH False for NaN (X/Y survived only because
+    # they happen to use one chained comparison); F and E were never checked at
+    # all, so a non-finite print_speed emitted 29441 `Fnan` moves.
+    from trident_gcode.gcode import GcodeWriter as _GW
+    _nan = float("nan")
+
+    def _fresh_writer():
+        return _GW(profile=TRIDENT, line_width=0.45, layer_height=0.3, bed_temp=60.0,
+                   nozzle_temp=210.0, material="PLA", print_speed=40.0,
+                   first_layer_speed=20.0)
+
+    # Z goes through the public travel(); feedrate and E are checked in _move,
+    # the single choke point every emitted move passes through, so they are
+    # exercised there directly -- that placement IS the guarantee being tested.
+    cx, cy = TRIDENT.bed_center
+    attempts = [
+        ("Z", lambda w: w.travel(cx, cy, _nan)),
+        ("feedrate", lambda w: w._move(cx, cy, 1.0, e=None, speed=_nan, comment=None)),
+        ("extrusion", lambda w: w._move(cx, cy, 1.0, e=_nan, speed=20.0, comment=None)),
+    ]
+    for label, attempt in attempts:
+        w = _fresh_writer()
+        raised_here = False
+        try:
+            attempt(w)
+        except ValueError:
+            raised_here = True
+        except (TypeError, AttributeError) as exc:
+            raised_here = "API drift: %s" % exc   # surface it, never hide it
+        check(raised_here is True,
+              f"non-finite: GcodeWriter refuses a non-finite {label} at the move choke point",
+              f"got {raised_here!r}")
+
 
 # ---------------------------------------------------------------------------
 # 6d. Every built-in profile must pass its OWN validator.
@@ -1921,6 +1998,97 @@ def test_base_follows_the_silhouette():
           f"junction XY travel = {ov_d:.3f} mm")
 
 
+# ---------------------------------------------------------------------------
+# 9. Controls that cannot apply must be REPORTED, never silently dropped.
+#
+# This is the recurring failure in this codebase: a control is shown, accepted,
+# and then quietly ignored. Bottom=Solid, loop fabric's base/brim/skirt and the
+# base ignoring the silhouette were all this shape. Two more found by audit:
+#
+#   * STL mode reads base_style and skirt off the panel and drops both --
+#     build_profile_spiral takes neither, so it always paves the spiral disk
+#     and never lays a skirt. Confirmed byte-identical output either way.
+#   * Point Mask and Point Protection are GATES; they scale how hard FFD /
+#     Smooth / Radial Push push. Enabled alone there is nothing to scale, so
+#     the wall comes out untouched -- again byte-identical.
+#
+# Both now say so in the report. These assertions check the message fires when
+# it should AND stays quiet when it should not: a warning on every design
+# teaches people to ignore warnings, which is worse than none.
+# ---------------------------------------------------------------------------
+def test_inapplicable_controls_are_reported():
+    import serve
+    from trident_gcode.mesh import load_stl
+
+    serve._mesh_cache_put("t_inapplicable", load_stl(str(ROOT / "examples" / "cylinder.stl")))
+
+    def mesh(**kw):
+        body = {"mode": "mesh_texture", "mesh_id": "t_inapplicable", "layer_height": 0.4,
+                "points_per_turn": 120, "printer": "trident", "base_layers": 3}
+        body.update(kw)
+        return serve.generate_mesh_texture_design(body)
+
+    def said(result, needle):
+        return any(needle in m for m in result["issues"])
+
+    plain = mesh()
+    check(not said(plain, "cannot vary the base fill"),
+          "inapplicable: a plain STL design raises no base-fill warning")
+
+    concentric = mesh(base_style="concentric")
+    check(said(concentric, "cannot vary the base fill"),
+          "inapplicable: STL mode reports that a concentric base style was dropped",
+          str(concentric["issues"]))
+    check(concentric["gcode"] == plain["gcode"],
+          "inapplicable: ...and the output really is unchanged, which is why it must say so")
+
+    skirted = mesh(skirt=5)
+    check(said(skirted, "cannot vary the base fill"),
+          "inapplicable: STL mode reports that the skirt was dropped",
+          str(skirted["issues"]))
+
+    # Base layers and the brim DO work in STL mode -- they must not be swept
+    # into the same warning, or the message becomes noise.
+    more_base = mesh(base_layers=4)
+    check(more_base["gcode"] != plain["gcode"],
+          "inapplicable: STL mode still honours base layers (not everything is dropped)")
+
+    def para(**kw):
+        body = {"shape": "circle", "radius": 25.0, "height": 20.0, "layer_height": 0.3,
+                "z_waves": 0, "printer": "trident", "base_layers": 2,
+                "amp_profile": [[0, 0], [1, 0]]}
+        body.update(kw)
+        return serve.generate_design(body)
+
+    GATE = "nothing to scale"
+    mask = {"channel": "rings", "scale_u": 8, "scale_v": 6}
+    protect = {"protect_top": 0.5, "protect_bottom": 0.3}
+
+    base_run = para()
+    check(not said(base_run, GATE), "inapplicable: a design with no point edits raises no gate warning")
+
+    mask_only = para(point_mask=mask)
+    check(said(mask_only, GATE),
+          "inapplicable: Point Mask alone is reported as having nothing to scale",
+          str(mask_only["issues"]))
+    check(mask_only["gcode"] == base_run["gcode"],
+          "inapplicable: ...and Point Mask alone really does leave the wall untouched")
+
+    check(said(para(point_protection=protect), GATE),
+          "inapplicable: Point Protection alone is reported too")
+
+    # A gate PLUS a deforming modifier is a real combination -- silence there.
+    ffd_cage = [[[0.0, 0.0, 0.0] for _ in range(3)] for _ in range(2)]
+    ffd_cage[1][1] = [2.0, 0.0, 0.0]
+    for label, kw in [("FFD", {"point_ffd": {"cage": ffd_cage, "strength": 1.0}}),
+                      ("Smooth", {"point_smooth": {"iterations": 2, "strength": 1.0}}),
+                      ("Radial Push", {"point_radial_push": {"amp_mm": 1.0, "strength": 1.0}})]:
+        combo = para(point_mask=mask, **kw)
+        check(not said(combo, GATE),
+              f"inapplicable: Point Mask + {label} is a real combination and stays quiet",
+              str(combo["issues"]))
+
+
 def main() -> int:
     test_klipper_trident()
     test_orca_machine()
@@ -1946,6 +2114,7 @@ def main() -> int:
     test_z_amp_max_default_is_not_another_machines_number()
     test_loop_fabric_base_is_reported()
     test_base_follows_the_silhouette()
+    test_inapplicable_controls_are_reported()
 
     with tempfile.TemporaryDirectory() as tmp:
         test_smoke(Path(tmp))

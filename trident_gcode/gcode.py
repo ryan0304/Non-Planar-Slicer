@@ -7,6 +7,7 @@ clamping so the Z axis is never asked to exceed ``max_z_velocity``.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .profile import PrinterProfile
@@ -287,6 +288,17 @@ class GcodeWriter:
         if e is not None:
             parts.append(f"E{e:.5f}")
             self._total_e += e
+        # Same NaN trap as _check_bounds' Z guard, on the two remaining numbers
+        # that reach the machine. A non-finite feedrate formats as "Fnan" and a
+        # non-finite extrusion as "Enan" -- neither is caught by any comparison
+        # (every comparison against NaN is False), and a non-finite print_speed
+        # used to produce tens of thousands of Fnan moves that the analyzer then
+        # reported as having no issues. Checked here, at the single choke point
+        # every emitted move passes through, so no caller can route around it.
+        if not math.isfinite(f):
+            raise ValueError(f"Move feedrate F={f!r} is not a finite number")
+        if e is not None and not math.isfinite(e):
+            raise ValueError(f"Move extrusion E={e!r} is not a finite number")
         parts.append(f"F{f:.0f}")
         line = " ".join(parts)
         if comment:
@@ -305,6 +317,15 @@ class GcodeWriter:
                 f"Move to X{x:.2f} Y{y:.2f} is outside the safe print area "
                 f"[{p.print_min_x}-{p.print_max_x}] x [{p.print_min_y}-{p.print_max_y}]"
             )
+        # A non-finite Z must be rejected the same way X/Y already are. X/Y use
+        # a single chained comparison (`lo <= v <= hi`), which is False for NaN
+        # and so correctly falls into the "outside safe area" branch above.
+        # This used to be two separate `>` / `<` tests instead -- both are
+        # ALSO False for NaN, so neither ever fired and a non-finite Z sailed
+        # through silently. This is the last guard between a bad number and
+        # the machine; it must not depend on serve.py having caught it first.
+        if not math.isfinite(z):
+            raise ValueError(f"Move to Z={z!r} is not a finite number")
         if z > p.z_max + 1e-6:
             raise ValueError(f"Move to Z{z:.2f} exceeds Z max {p.z_max}")
         if z < self.min_print_z - 1e-6:

@@ -801,6 +801,27 @@ def generate_design(body):
     point_edit_issue = None
     fan_overhang_issue = None
     loop_base_issue = None
+    # Point Mask and Point Protection are GATES, not deformations: they scale
+    # how strongly FFD / Smooth / Radial Push act at each point (see
+    # point_edit.py). On their own there is nothing to scale, so
+    # apply_point_edits returns the path untouched -- byte-identical output for
+    # a modifier the user switched on and configured. The panel lets them be
+    # enabled independently, so say so rather than letting it look applied.
+    point_gate_issue = None
+    if ((point_mask is not None or point_protection is not None)
+            and point_ffd is None and point_smooth is None
+            and point_radial_push is None):
+        _gates = []
+        if point_mask is not None:
+            _gates.append("Point Mask")
+        if point_protection is not None:
+            _gates.append("Point Protection")
+        point_gate_issue = (
+            " and ".join(_gates)
+            + (" only scale" if len(_gates) > 1 else " only scales")
+            + " how strongly a deforming modifier acts - with no FFD, Smooth "
+            "or Radial Push enabled there is nothing to scale, so the wall was "
+            "generated unchanged.")
     if loop_spec is not None:
         # Loop fabric replaces the wall entirely (knitted rows of vertical
         # loop stitches) — z-waves/patterns don't apply; the silhouette does.
@@ -885,6 +906,8 @@ def generate_design(body):
             "or wave count." % (peak_slope, QUALITY_SLOPE_LIMIT))
     if point_edit_issue:
         issues_extra.append(point_edit_issue)
+    if point_gate_issue:
+        issues_extra.append(point_gate_issue)
     if fan_overhang_issue:
         issues_extra.append(fan_overhang_issue)
     if loop_base_issue:
@@ -1105,6 +1128,20 @@ def generate_mesh_texture_design(body):
         issues_extra.append(
             "point edit modifiers only apply to parametric wall designs "
             "(not STL mode) - the STL texture wall was generated without them.")
+    # build_profile_spiral takes neither base_style nor skirt_loops: it always
+    # paves the disks as the Archimedean spiral and never lays a skirt. Both
+    # were being read off the panel, sent, and dropped without a word -- the
+    # same silent-drop this function already reports for the cage and the point
+    # edit modifiers, just missed. Report the ones actually asked for.
+    _mesh_dropped = []
+    if str(body.get("base_style", "spiral")) == "concentric" and base_layers > 0:
+        _mesh_dropped.append("concentric base style (the spiral disk was used)")
+    if int(body.get("skirt", 0) or 0) > 0:
+        _mesh_dropped.append("the skirt")
+    if _mesh_dropped:
+        issues_extra.append(
+            "STL mode cannot vary the base fill or lay a skirt - "
+            + ", ".join(_mesh_dropped) + " was not printed.")
 
     stats = {
         "wave_slope": round(peak_slope, 3),
@@ -1476,6 +1513,57 @@ def _reject_nonfinite(token):
     raise ValueError("non-finite number %s is not allowed" % token)
 
 
+def _reject_nonfinite_tree(value, path="body"):
+    """Walk a parsed JSON body and refuse every non-finite number in it.
+
+    ``parse_constant`` above only intercepts the BARE tokens NaN/Infinity, and
+    that is not the whole door. Two other ways in, both confirmed to reach the
+    emitted G-code before this existed:
+
+      * a quoted STRING -- ``{"z_twist": "nan"}``. Nothing exotic: ``float()``
+        accepts "nan"/"inf"/"-inf" happily, and nearly every numeric field is a
+        bare ``float(body.get(...))``. One such field produced 16002 lines of
+        ``G1 X142.5000 Y117.5000 Znan Enan F2400`` with ``issues == []``.
+      * a numeric literal that OVERFLOWS to inf on parse -- ``1e400`` -- which
+        is a float by the time parse_constant would have seen it.
+
+    Checked here, once, on the whole tree, rather than at each of the ~60
+    numeric reads: this is the boundary CLAUDE.md means by "reject non-finite
+    values at the boundary; never clamp them", and a per-field check is one
+    forgotten field away from reopening the hole.
+
+    Strings are only refused when ``float()`` itself yields a non-finite value,
+    i.e. exactly the tokens "nan"/"inf"/"-infinity" and friends. Ordinary text
+    is untouched -- a printer named "Infinity 3D" does not parse as a float at
+    all, so it passes through unharmed.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(
+                "%s is not a finite number (got %r)" % (path, value))
+        return value
+    if isinstance(value, str):
+        try:
+            as_float = float(value)
+        except (TypeError, ValueError):
+            return value          # ordinary text, not a number at all
+        if not math.isfinite(as_float):
+            raise ValueError(
+                "%s is not a finite number (got %r)" % (path, value))
+        return value
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _reject_nonfinite_tree(item, "%s.%s" % (path, key))
+        return value
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            _reject_nonfinite_tree(item, "%s[%d]" % (path, i))
+        return value
+    return value
+
+
 def _read_json_body(handler):
     """Read + parse a JSON request body. On malformed JSON, sends the 400
     itself and returns None -- callers must check for that sentinel."""
@@ -1485,9 +1573,15 @@ def _read_json_body(handler):
         length = 0
     raw = handler.rfile.read(length) if length else b""
     try:
-        return json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
-    except (ValueError, UnicodeDecodeError):
-        handler._send_json({"error": "Request body is not valid JSON."}, status=400)
+        body = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
+        # Second pass: quoted "nan"/"inf" strings and overflowed literals like
+        # 1e400 are already plain values by the time parse_constant has run.
+        return _reject_nonfinite_tree(body)
+    except (ValueError, UnicodeDecodeError) as exc:
+        # Name the offending field when we know it -- "body.amp_profile[1][1]
+        # is not a finite number" is actionable, "not valid JSON" is not.
+        detail = str(exc) if "finite" in str(exc) else "Request body is not valid JSON."
+        handler._send_json({"error": detail}, status=400)
         return None
 
 
@@ -1983,15 +2077,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path != "/api/generate":
             self.send_error(404, "Not Found")
             return
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-        except (TypeError, ValueError):
-            length = 0
-        raw = self.rfile.read(length) if length else b""
-        try:
-            body = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
-        except (ValueError, UnicodeDecodeError):
-            self._send_json({"error": "Request body is not valid JSON."}, status=400)
+        # Via _read_json_body, NOT a private copy of the parse: that helper is
+        # where the non-finite boundary check lives, and this endpoint having
+        # its own inline json.loads is exactly how a quoted "nan" reached the
+        # generator while the shared boundary looked like it was guarding it.
+        body = _read_json_body(self)
+        if body is None:
             return
 
         # Injected, never read from the client's JSON: _get_profile resolves
@@ -2022,15 +2113,9 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json(result)
 
     def _handle_export_stl(self):
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-        except (TypeError, ValueError):
-            length = 0
-        raw = self.rfile.read(length) if length else b""
-        try:
-            body = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
-        except (ValueError, UnicodeDecodeError):
-            self._send_json({"error": "Request body is not valid JSON."}, status=400)
+        # Shared boundary, same reason as /api/generate above.
+        body = _read_json_body(self)
+        if body is None:
             return
 
         try:

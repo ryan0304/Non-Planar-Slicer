@@ -3252,13 +3252,20 @@
   // request will not actually carry, or vice versa.
   function effectiveBaseSpec(){
     var lf = loopFabricActive();
+    // STL mode builds the wall with build_profile_spiral, which takes neither
+    // a base style nor a skirt: it always paves the disks as the Archimedean
+    // spiral and never lays a skirt. It DOES honour base layers and the brim,
+    // so only these two are dropped here. serve.py reports it if a request
+    // asks anyway -- this just stops our own UI from asking.
+    var mesh = !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
     return {
       base_layers: (design.bottom === 'open' || lf) ? 0 : Math.round(design.base_layers),
       // Bottom=Open zeroes ONLY base_layers -- the server still prints a brim
       // for an open-bottom design (serve.py:660 leaves brim alone). Keep that
       // exact asymmetry: brim is gated on loop-fabric alone.
       brim: lf ? 0 : Math.round(design.brim),
-      skirt: lf ? 0 : Math.round(design.skirt || 0)
+      skirt: (lf || mesh) ? 0 : Math.round(design.skirt || 0),
+      base_style_applies: !mesh
     };
   }
 
@@ -3277,8 +3284,13 @@
     var squishRow = document.getElementById('row-squish');
     var spacingRow = document.getElementById('row-spacing');
     if(baseRow) baseRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
+    // STL mode always paves the base as the Archimedean spiral and never lays
+    // a skirt (build_profile_spiral takes neither), so those two rows are
+    // inert there -- hide them rather than let the panel offer a choice the
+    // generator will drop. Base layers and brim DO work in STL mode.
+    var meshLoaded = !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
     var baseStyleRow = document.getElementById('row-basestyle');
-    if(baseStyleRow) baseStyleRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
+    if(baseStyleRow) baseStyleRow.style.display = (isOpen || isLoopFabric || meshLoaded) ? 'none' : '';
     if(squishRow) squishRow.style.display = isOpen ? 'none' : '';
     var flhHint = document.getElementById('flh-hint');
     if(flhHint) flhHint.style.display = isOpen ? 'none' : '';
@@ -3289,7 +3301,7 @@
     var brimRow = document.getElementById('row-brim');
     if(brimRow) brimRow.style.display = isLoopFabric ? 'none' : '';
     var skirtRow = document.getElementById('row-skirt');
-    if(skirtRow) skirtRow.style.display = isLoopFabric ? 'none' : '';
+    if(skirtRow) skirtRow.style.display = (isLoopFabric || meshLoaded) ? 'none' : '';
     var loopBaseHint = document.getElementById('loop-base-hint');
     if(loopBaseHint) loopBaseHint.style.display = isLoopFabric ? '' : 'none';
   }
@@ -3994,7 +4006,7 @@
       spine_mm: design.spine_mm || 0,
       spine_deg: design.spine_deg || 0,
       ovality: design.ovality || 0,
-      base_style: design.base_style || 'spiral',
+      base_style: baseSpec.base_style_applies ? (design.base_style || 'spiral') : 'spiral',
       skirt: baseSpec.skirt,
       first_layer_spacing_factor: design.spacing_factor,
       print_speed: design.print_speed,

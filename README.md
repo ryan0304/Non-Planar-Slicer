@@ -792,14 +792,16 @@ contour is treated as the outline). Preset `01_gentle_wave_vase` now ships with 
 > unshaped designs and the bed-fit rejection of an oversized base are all
 > machine-checked by the test suite; how the (now smaller) base adheres on a
 > real plate is not. Worth a short test print on a narrowing silhouette before
-> committing to a long job.
+> committing to a long job. `python calibrate.py` writes exactly that print --
+> `cal_base_adhesion.gcode` -- as a cheap way to test it before trusting the
+> base on something bigger.
 
 > ⚠️ **Always preview in the viewer first**, and for the first real print keep the
 > amplitude modest and watch the first few layers. These are unusual toolpaths.
 
 ## Calibration suite
 
-Three small, fast prints that help you dial in the key process variables before
+Small, fast prints that help you dial in the key process variables before
 committing to a long decorative print.  All use PLA temps (205 C / 60 C bed):
 
 ```bash
@@ -811,6 +813,7 @@ python calibrate.py     # writes into examples/cal/
 | `cal_first_layer.gcode` | 40 mm spiral disk, 1 layer, squish 0.75 | Live-Z offset |
 | `cal_flow_ladder.gcode` | Single-wall cylinder r=25, 30 mm tall, 5 x 6 mm flow bands (0.90 / 0.95 / 1.00 / 1.05 / 1.10) | Flow multiplier (`--flow`) |
 | `cal_zamp_ladder.gcode` | Single-wall cylinder r=25, 36 mm tall, 4 x 9 mm Z-amp bands (0 / 0.8 / 1.4 / 1.9 mm) | Maximum safe `--z-amp` |
+| `cal_base_adhesion.gcode` | Circle r=25, 15 mm tall, flaring 0.5x->1.0x radius (top-heavy), 2-layer base + 3-loop brim sized to the wall's own r=12.5 footprint | Whether the smaller (post-6332a6a) base still holds a flaring part down |
 
 Each file is checked by `analyze.py` (exit 0) and takes under 20 minutes.  A
 `; CAL BAND flow=X.XX` or `; CAL BAND z_amp=X.Xmm` comment is written at the

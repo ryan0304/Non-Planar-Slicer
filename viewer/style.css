@@ -1058,6 +1058,40 @@ body.hints-hidden .hint { display:none; }
 }
 
 /* =========================================================================
+   How-to-use guide -- six-slide onboarding modal. Auto-opens on a true first
+   visit (see guide.js for the exact conditions), reachable afterwards via
+   the "?" button beside #toggle-hints or the "?" key. Same neutral --accent
+   chrome as .sr-modal / .pm-modal -- neither --accent-purple (Point Edit
+   only) nor the --ok/--warn/--danger trio (safety states only) belongs here.
+   Height is capped and the body scrolls internally so this stays usable at
+   the ~640px-tall window this app is normally run in.
+   ========================================================================= */
+.guide-modal { position:fixed; inset:0; z-index:65; display:flex; align-items:center; justify-content:center; }
+.guide-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.62); }
+.guide-modal-card { position:relative; width:min(480px, 92vw); max-height:min(560px, 90vh);
+  display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--radius-lg); box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
+.guide-modal-header { display:flex; align-items:center; justify-content:space-between;
+  padding:var(--sp-3) var(--sp-4); border-bottom:1px solid var(--line); flex:none; }
+.guide-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+.guide-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4); }
+.guide-slide h3 { font-size:15px; margin:0 0 var(--sp-2); color:var(--ink); font-weight:600; }
+.guide-slide ul { margin:0; padding-left:18px; }
+.guide-slide li { font-size:12.5px; line-height:1.6; color:var(--ink); margin:0 0 6px; }
+.guide-slide li:last-child { margin-bottom:0; }
+.guide-slide b { color:var(--ink); }
+.guide-slide code { font-family:var(--font-mono); font-size:11.5px; background:var(--surface-raised);
+  border-radius:4px; padding:1px 4px; }
+.guide-modal-footer { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:var(--sp-3) var(--sp-4); border-top:1px solid var(--line); flex:none; }
+/* Dots are purely decorative progress -- aria-hidden on the wrapper in
+   index.html, real slide position is announced via the dialog content and
+   the Back/Next button labels (Skip/Done at the ends), not this. */
+.guide-dots { display:flex; gap:6px; align-items:center; }
+.guide-dot { width:6px; height:6px; border-radius:50%; background:var(--line); transition:background .15s; }
+.guide-dot.active { background:var(--accent); }
+
+/* =========================================================================
    Parameter help tooltips (Orca-style hover panel) -- one reused floating
    panel, positioned/flipped in JS (see designer.js). Plain --surface/--line
    chrome, matching .hint / .pm-report rather than a new visual language.
@@ -1081,3 +1115,99 @@ body.hints-hidden .hint { display:none; }
   margin-top:6px; word-break:break-word;
 }
 .param-tip-meta:first-of-type { margin-top:8px; }
+
+/* ---- How-to-use guide: animated figures ---------------------------------
+   Each slide carries a small mock of the real UI with a cursor that moves to
+   the control being described and "clicks" it, then the result appears. The
+   mocks are HTML+CSS rather than screenshots so they follow the theme and stay
+   crisp at any zoom, and cost no network round-trip.
+
+   One shared 6s timeline drives every figure. A figure only supplies four
+   custom properties -- the two cursor waypoints -- so adding a slide does not
+   mean writing another keyframe set. Frames reference var() values resolved on
+   the figure element itself, which is what makes one keyframe block reusable.
+
+   Colour note: these use --accent and the neutral surface tokens only.
+   --accent-purple belongs to Point Edit Modifiers and --ok/--warn/--danger to
+   safety states; a decorative figure must not borrow either, or it dilutes a
+   signal the user needs to trust elsewhere. */
+.guide-fig {
+  position:relative; height:136px; margin:0 0 var(--sp-3); overflow:hidden;
+  background:var(--surface-raised); border:1px solid var(--line);
+  border-radius:var(--radius-lg);
+}
+.guide-fig-inner { position:absolute; inset:0; padding:10px 12px; }
+
+/* mock UI atoms */
+.gf-row {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  height:21px; margin-bottom:5px; padding:0 8px; font-size:10.5px;
+  color:var(--ink-muted); background:var(--surface);
+  border:1px solid var(--line); border-radius:6px;
+}
+.gf-row b { color:var(--ink); font-weight:600; }
+.gf-btn {
+  display:inline-flex; align-items:center; height:19px; padding:0 9px;
+  border-radius:6px; background:var(--accent); color:var(--ink-on-accent);
+  font-size:10px; font-weight:600;
+}
+.gf-tab {
+  flex:1 1 0; text-align:center; font-size:10px; padding:3px 0;
+  color:var(--ink-muted); border-bottom:2px solid transparent;
+}
+.gf-tabs { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:7px; }
+.gf-caption {
+  position:absolute; left:12px; right:12px; bottom:8px; font-size:10px;
+  color:var(--ink-muted); text-align:center;
+}
+
+/* the pointer + its click ripple */
+.guide-cursor {
+  position:absolute; top:0; left:0; width:13px; height:19px; z-index:4;
+  pointer-events:none; animation:gf-move 6s ease-in-out infinite;
+}
+.guide-cursor svg { display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,.55)); }
+.gf-ping {
+  position:absolute; width:20px; height:20px; margin:-4px 0 0 -4px; z-index:3;
+  border:2px solid var(--accent); border-radius:50%; opacity:0; pointer-events:none;
+}
+.gf-ping-1 { animation:gf-ping1 6s ease-out infinite; }
+.gf-ping-2 { animation:gf-ping2 6s ease-out infinite; }
+
+/* things the click reveals or changes */
+.gf-reveal { opacity:0; animation:gf-reveal 6s ease-out infinite; }
+.gf-reveal-late { opacity:0; animation:gf-reveal-late 6s ease-out infinite; }
+.gf-highlight {
+  position:absolute; border:1.5px solid var(--accent); border-radius:6px;
+  opacity:0; animation:gf-reveal 6s ease-out infinite;
+}
+
+@keyframes gf-move {
+  0%,   12% { transform:translate(var(--x1), var(--y1)); }
+  30%,  40% { transform:translate(var(--x2), var(--y2)); }
+  58%, 100% { transform:translate(var(--x3, var(--x2)), var(--y3, var(--y2))); }
+}
+@keyframes gf-ping1 {
+  0%, 29%  { opacity:0; transform:translate(var(--x2), var(--y2)) scale(.4); }
+  34%      { opacity:.9; transform:translate(var(--x2), var(--y2)) scale(1); }
+  44%,100% { opacity:0; transform:translate(var(--x2), var(--y2)) scale(1.5); }
+}
+@keyframes gf-ping2 {
+  0%, 57%  { opacity:0; transform:translate(var(--x3, var(--x2)), var(--y3, var(--y2))) scale(.4); }
+  62%      { opacity:.9; transform:translate(var(--x3, var(--x2)), var(--y3, var(--y2))) scale(1); }
+  72%,100% { opacity:0; transform:translate(var(--x3, var(--x2)), var(--y3, var(--y2))) scale(1.5); }
+}
+@keyframes gf-reveal      { 0%, 33% { opacity:0; } 42%, 100% { opacity:1; } }
+@keyframes gf-reveal-late { 0%, 61% { opacity:0; } 70%, 100% { opacity:1; } }
+
+/* Motion is decoration here, never the message: every figure still reads
+   correctly frozen at its end state, so an OS-level reduced-motion preference
+   simply stops the loop rather than hiding anything. */
+@media (prefers-reduced-motion: reduce) {
+  .guide-cursor, .gf-ping-1, .gf-ping-2, .gf-reveal, .gf-reveal-late, .gf-highlight {
+    animation:none;
+  }
+  .guide-cursor { transform:translate(var(--x3, var(--x2)), var(--y3, var(--y2))); }
+  .gf-reveal, .gf-reveal-late, .gf-highlight { opacity:1; }
+  .gf-ping-1, .gf-ping-2 { opacity:0; }
+}
