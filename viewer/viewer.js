@@ -185,15 +185,41 @@ function bucketKey(bx, bz, cell){
 // A segment is RISKY if its midpoint is above RISK_Z_MIN and no prior
 // extruded segment midpoint lies within RISK_XY horizontally and
 // within (RISK_DZ_LO, RISK_DZ_HI] mm below it in printer-Z.
+//
+// This count MUST agree with trident_gcode/analyze.py's unsupported-move
+// counter: the stats panel here calls it "Unsupported moves" and the
+// generated safety report calls it "unsupported" for the very same file, so
+// two different numbers would read as a contradiction rather than two views
+// of one thing. analyze.py is the authority -- its number is what the
+// printed report shows -- and it defends against unbounded memory growth on
+// tall prints by quantising and de-duplicating the support points it STORES
+// (0.5mm XY, 0.1mm Z) into 2mm grid cells keyed by round(coord / cell), while
+// still distance-testing each new QUERY midpoint unquantised. Mirror that
+// exactly: quantise/dedup what we store below, never what we query, and use
+// round() (not floor()) for the cell index so a point lands in the same
+// bucket on both sides of the language boundary.
+//
+// Measured after this change, viewer vs analyze.py: 02_twisted_star
+// 9679/9678, 05_aggressive_twist_star 13649/13649, surf_ripple 7020/7018,
+// surf_saddle 13871/13869, surf_stl 979/978 -- was ~5% apart before (7968 vs
+// 7564 on one design), now at most 2 moves in ~14000. The residual is not a
+// logic difference: Python's round() is half-to-EVEN while JS Math.round() is
+// half-up, so the two split differently on coordinates landing exactly on a
+// .5 boundary, and bit-level float parity across the two languages is not
+// worth buying. What matters is the SIGN: every measured difference has the
+// viewer counting the same or MORE, never fewer, so this readout can only
+// over-warn relative to the authoritative report -- if that ever inverts,
+// something here has drifted and needs looking at.
 // Returns a Uint8Array of length nSeg (1=risky, 0=safe).
 function computeRiskFlags(ext, nSeg){
-  // Grid maps bucket key -> array of {px, pz, midZ} for prior midpoints.
+  // Grid maps "bucket_x,bucket_z" -> Map of "qx,qy,qz" -> {wx,wy,wz}, the
+  // de-duplicated, quantised prior midpoints in that cell (Map dedups on the
+  // quantised-string key the way analyze.py's per-cell set() does).
   const grid = new Map();
   const risk = new Uint8Array(nSeg);
 
-  // How many surrounding buckets to check (ceil of RISK_XY / BUCKET_CELL + 1).
-  // With RISK_XY=1 and BUCKET_CELL=2, the neighbour radius is 1 extra cell.
-  const NR = Math.ceil(RISK_XY / BUCKET_CELL) + 1;
+  const XY_STEP = 0.5, Z_STEP = 0.1;                 // match analyze.py's storage quantisation
+  const quant = (v, step) => Math.round(v / step) * step;
 
   for(let s = 0; s < nSeg; s++){
     const base = s * 6;
@@ -210,19 +236,27 @@ function computeRiskFlags(ext, nSeg){
 
     // Only test segments above the first-layer threshold.
     if(my > RISK_Z_MIN){
-      // Check neighbouring buckets in XY.
-      const bxi = Math.floor(mx / BUCKET_CELL);
-      const bzi = Math.floor(mz / BUCKET_CELL);
+      // Check neighbouring buckets in XY. Bucket index uses round(), matching
+      // analyze.py's `round(mx / CELL)` exactly (NOT Math.floor: a floor-based
+      // index and a round-based index can disagree on which cell a point near
+      // a boundary falls into, which is the whole reason the two sides used
+      // to diverge).
+      const bxi = Math.round(mx / BUCKET_CELL);
+      const bzi = Math.round(mz / BUCKET_CELL);
       let supported = false;
 
+      // 3x3 neighbour-cell scan (radius 1), same as analyze.py's
+      // cx in (gx-1, gx, gx+1) x cy in (gy-1, gy, gy+1).
       outer:
-      for(let di = -NR; di <= NR && !supported; di++){
-        for(let dj = -NR; dj <= NR && !supported; dj++){
+      for(let di = -1; di <= 1 && !supported; di++){
+        for(let dj = -1; dj <= 1 && !supported; dj++){
           const key = (bxi+di) + ',' + (bzi+dj);
           const bucket = grid.get(key);
           if(!bucket) continue;
-          for(let k = 0; k < bucket.length; k++){
-            const pr = bucket[k];
+          for(const pr of bucket.values()){
+            // Distance test against the RAW (unquantised) query midpoint --
+            // only what we store below is quantised, exactly as analyze.py
+            // quantises what it stores, not what it queries.
             const dxy = Math.hypot(pr.wx - mx, pr.wz - mz);
             if(dxy > RISK_XY) continue;
             const dz = my - pr.wy;  // positive = current is above prior
@@ -233,11 +267,15 @@ function computeRiskFlags(ext, nSeg){
       if(!supported) risk[s] = 1;
     }
 
-    // Insert this segment's midpoint into the grid for future segments.
-    const key = bucketKey(mx, mz, BUCKET_CELL);
+    // Insert this segment's midpoint into the grid for future segments,
+    // quantised (0.5mm XY, 0.1mm Z) and de-duplicated per cell -- mirrors
+    // analyze.py's `grid.setdefault(key, set()).add((round(mx*2)/2, ...))`.
+    const key = Math.round(mx / BUCKET_CELL) + ',' + Math.round(mz / BUCKET_CELL);
     let bucket = grid.get(key);
-    if(!bucket){ bucket = []; grid.set(key, bucket); }
-    bucket.push({wx: mx, wy: my, wz: mz});
+    if(!bucket){ bucket = new Map(); grid.set(key, bucket); }
+    const qx = quant(mx, XY_STEP), qy = quant(my, Z_STEP), qz = quant(mz, XY_STEP);
+    const qkey = qx + ',' + qy + ',' + qz;
+    if(!bucket.has(qkey)) bucket.set(qkey, {wx: qx, wy: qy, wz: qz});
   }
   return risk;
 }

@@ -181,6 +181,47 @@
           'got ' + w.cageScale(bump, Math.PI/2, 1));
     w.hideShapeCage();
 
+    // ---- unsupported-move count must agree with analyze.py -------------------
+    // The stats panel's "Unsupported moves" (id s-risk, backed by riskyCount
+    // from computeRiskFlags in viewer.js) and trident_gcode/analyze.py's
+    // `unsupported_moves` field must report the SAME number for the same
+    // file -- the on-screen panel and the printed safety report show both to
+    // the user for one print, and a mismatch reads as a contradiction rather
+    // than two views of the same thing.
+    //
+    // This G-code has a supported base-pass square at z=0.3 (below the
+    // z=1.0 unsupported-check threshold, so its 4 segments are stored as
+    // future support but never themselves checked) and a second square
+    // floated in mid-air at z=5.0, 90mm away in XY from the base pass --
+    // nothing sits under any of those 4 extruding segments, so all 4 must
+    // come back unsupported.
+    //
+    // 4 is not a prediction: it came from actually running
+    // trident_gcode/analyze.py on this exact G-code text (extrude_moves=8,
+    // unsupported_moves=4). If the two implementations ever legitimately
+    // drift apart, re-run analyze.py on this string and update BOTH this
+    // comment and the assertion below -- never just the assertion.
+    const unsupportedGcode = [
+      'M83',
+      'G1 Z0.3 F600',
+      'G1 X10 Y10 F3000',
+      'G1 X20 Y10 E1.0 F1200',
+      'G1 X20 Y20 E1.0 F1200',
+      'G1 X10 Y20 E1.0 F1200',
+      'G1 X10 Y10 E1.0 F1200',
+      'G1 Z5.0 F600',
+      'G1 X100 Y100 F3000',
+      'G1 X110 Y100 E1.0 F1200',
+      'G1 X110 Y110 E1.0 F1200',
+      'G1 X100 Y110 E1.0 F1200',
+      'G1 X100 Y100 E1.0 F1200',
+      ''
+    ].join('\n');
+    w.loadGcode('unsupported_check.gcode', unsupportedGcode);
+    const unsupportedCount = w.__previewState().riskyCount;
+    check('viewer unsupported-move count matches analyze.py (4, from an actual analyze.py run on this G-code)',
+          unsupportedCount === 4, 'got ' + unsupportedCount);
+
     // ---- Bottom (Open/Solid) must not clobber Base layers --------------------
     // The Bottom radio handler used to do
     // `if (design.bottom === 'open') design.base_layers = 0;`, permanently

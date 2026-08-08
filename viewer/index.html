@@ -534,7 +534,10 @@
       <div class="stat"><span>Filament</span><span id="s-fil">&#8211;</span></div>
       <div class="stat"><span>Max Z-rate</span><span id="s-zrate" class="tm">&#8211;</span></div>
       <div class="stat"><span>Est. time</span><span id="s-time" class="tm">&#8211;</span></div>
-      <div class="stat"><span>Risky moves</span><span id="s-risk" class="tm">&#8211;</span></div>
+      <!-- Label reads "Unsupported moves" (matches analyze.py's safety-report
+           wording for the same metric); id/class stay s-risk for the self-test
+           and stylesheet, which key off the id, not the display text. -->
+      <div class="stat"><span>Unsupported moves</span><span id="s-risk" class="tm">&#8211;</span></div>
       </div>
     </div>
 
@@ -549,7 +552,9 @@
         </select></label>
       <label class="row"><span>X-ray view</span><input type="checkbox" id="t-xray"></label>
       <label class="row"><span>Emphasize layers</span><input type="checkbox" id="t-bands" checked></label>
-      <label class="row"><span>Highlight risky</span><input type="checkbox" id="t-risk"></label>
+      <!-- Label reads "Highlight unsupported" (see s-risk above); id/class
+           stay t-risk for the self-test and stylesheet. -->
+      <label class="row"><span>Highlight unsupported</span><input type="checkbox" id="t-risk"></label>
       <label class="row"><span>Show travels</span><input type="checkbox" id="t-travel" checked></label>
       <label class="row"><span>Show printer</span><input type="checkbox" id="t-printer" checked></label>
       <label class="row"><span>Show bed grid</span><span><input type="checkbox" id="t-bed" checked></span></label>

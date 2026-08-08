@@ -1359,6 +1359,83 @@ def test_non_finite_rejected():
         raised = True
     check(raised, "non-finite: json body parser rejects the bare NaN token")
 
+    # ...but the bare token was never the only door. `float()` also accepts the
+    # ordinary QUOTED string "nan"/"inf"/"-inf", which any client can send as a
+    # normal JSON string value, and an overflowing literal like 1e400 is already
+    # a float by the time parse_constant would have seen it. Both reached the
+    # emitted G-code: {"z_twist": "nan"} produced 16002 lines of
+    # `G1 X142.5000 Y117.5000 Znan Enan F2400` with issues == [], i.e. a file
+    # full of NaN that the tool called safe. Reject at the boundary, per
+    # CLAUDE.md -- never clamp, and never per-field (one forgotten field
+    # reopens it).
+    from serve import _reject_nonfinite_tree
+    poison = [
+        ("z_twist", {"z_twist": "nan"}),
+        ("radius", {"radius": "inf"}),
+        ("height", {"height": "-inf"}),
+        ("ovality", {"ovality": "NaN"}),
+        ("print_speed", {"print_speed": "Infinity"}),
+        ("amp_profile point", {"amp_profile": [[0, 0], [1, "nan"]]}),
+        ("width_profile point", {"width_profile": [[0, 1], [1, "inf"]]}),
+        ("radius_profile point", {"radius_profile": [[0, 1], [1, "nan"]]}),
+        ("cage cell", {"cage": [[1, 1], [1, "inf"]]}),
+        ("overflowed literal", {"radius": float("1e400")}),
+    ]
+    leaked = []
+    for label, body in poison:
+        try:
+            _reject_nonfinite_tree(body)
+            leaked.append(label)
+        except ValueError:
+            pass
+    check(not leaked, "non-finite: quoted 'nan'/'inf' strings are refused at the body boundary",
+          "accepted: " + str(leaked))
+
+    # The same walk must NOT eat ordinary text or honest numeric strings --
+    # a printer called "Infinity 3D" does not parse as a float at all.
+    survived = True
+    try:
+        _reject_nonfinite_tree({"printer": "Infinity 3D", "radius": "25", "shape": "circle"})
+    except ValueError:
+        survived = False
+    check(survived, "non-finite: ordinary text and numeric strings still pass the boundary")
+
+    # Machine-facing backstop, independent of serve.py having caught it first:
+    # GcodeWriter must refuse a non-finite Z, feedrate or E at the single choke
+    # point every emitted move goes through. Z used to pass because its two
+    # separate `>` / `<` tests are BOTH False for NaN (X/Y survived only because
+    # they happen to use one chained comparison); F and E were never checked at
+    # all, so a non-finite print_speed emitted 29441 `Fnan` moves.
+    from trident_gcode.gcode import GcodeWriter as _GW
+    _nan = float("nan")
+
+    def _fresh_writer():
+        return _GW(profile=TRIDENT, line_width=0.45, layer_height=0.3, bed_temp=60.0,
+                   nozzle_temp=210.0, material="PLA", print_speed=40.0,
+                   first_layer_speed=20.0)
+
+    # Z goes through the public travel(); feedrate and E are checked in _move,
+    # the single choke point every emitted move passes through, so they are
+    # exercised there directly -- that placement IS the guarantee being tested.
+    cx, cy = TRIDENT.bed_center
+    attempts = [
+        ("Z", lambda w: w.travel(cx, cy, _nan)),
+        ("feedrate", lambda w: w._move(cx, cy, 1.0, e=None, speed=_nan, comment=None)),
+        ("extrusion", lambda w: w._move(cx, cy, 1.0, e=_nan, speed=20.0, comment=None)),
+    ]
+    for label, attempt in attempts:
+        w = _fresh_writer()
+        raised_here = False
+        try:
+            attempt(w)
+        except ValueError:
+            raised_here = True
+        except (TypeError, AttributeError) as exc:
+            raised_here = "API drift: %s" % exc   # surface it, never hide it
+        check(raised_here is True,
+              f"non-finite: GcodeWriter refuses a non-finite {label} at the move choke point",
+              f"got {raised_here!r}")
+
 
 # ---------------------------------------------------------------------------
 # 6d. Every built-in profile must pass its OWN validator.
