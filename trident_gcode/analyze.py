@@ -47,7 +47,23 @@ class GcodeAnalysis:
 
 
 def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
-                  filament_diameter: float = 1.75) -> GcodeAnalysis:
+                  filament_diameter: float = 1.75,
+                  _instrument: dict | None = None,
+                  _progress: dict | None = None) -> GcodeAnalysis:
+    """_instrument is test-only instrumentation (see tools/test_printer_import.py
+    test_unsupported_grid_query_is_bounded): when a dict is passed, this fills
+    in 'queries' (number of unsupported-extrusion lookups performed) and
+    'points_scanned' (total size of every spatial-hash cell touched by those
+    lookups) so a test can assert the per-query cost stays bounded on a tall
+    print, without timing anything. It is never read, only written, so passing
+    None (the default) is a complete no-op and changes no analysis result.
+
+    _progress follows the same publish-only pattern as _instrument, but for
+    /api/generate_stream's live progress bar (see serve.py's "verify" stage):
+    when a dict is passed, this periodically writes the number of lines
+    processed so far into _progress["analyzed"]. It is never read and never
+    branches on, so passing None (the default) is a complete no-op -- same
+    behaviour and same cost as before this parameter existed."""
     fil_area = math.pi * (filament_diameter / 2) ** 2
     a = GcodeAnalysis()
     x = y = z = e = 0.0
@@ -80,14 +96,27 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
 
     # --- Unsupported-extrusion state ---
     # Spatial hash of prior extrusion segment midpoints. Key = (round(x/2),
-    # round(y/2)) -> set of quantised (qx, qy, qz) points in that 2x2mm cell. A
-    # new extruding segment above z=1.0 is "unsupported" if no prior midpoint
-    # lies within 1.0mm in XY (actual distance test) *and* 0.2..2.0mm below the
-    # segment's own z (i.e. nothing to deposit onto). O(n): each query scans the
-    # 3x3 neighbour cells only. Points are quantised (0.5mm XY, 0.1mm Z) and
-    # de-duplicated per cell, so a tall single-wall print that revisits the same
-    # column every turn can't grow an unbounded point list.
+    # round(y/2), z-bucket) -> set of quantised (qx, qy, qz) points in that
+    # 2x2mm-XY x ZCELL-tall cell. A new extruding segment above z=1.0 is
+    # "unsupported" if no prior midpoint lies within 1.0mm in XY (actual
+    # distance test) *and* 0.2..2.0mm below the segment's own z (i.e. nothing
+    # to deposit onto).
+    #
+    # The grid is ALSO bucketed by Z (bz = floor(z / ZCELL)), and a query only
+    # visits the Z buckets that can possibly satisfy Z_LO <= (mz - pz) <= Z_HI
+    # -- i.e. pz in [mz - Z_HI, mz - Z_LO]. Without that, XY quantisation alone
+    # does NOT bound the work: the stored point also carries the layer's own Z
+    # (round(mz, 1)), so a tall single-wall print that revisits the same XY
+    # column every layer keeps adding a NEW distinct point to that column's
+    # set, and every future query at that column walks the whole growing set --
+    # O(moves x layers), not O(moves). The Z bucketing keeps each query's point
+    # count to the (small, geometry-bounded) number of points actually within
+    # the 1.8mm-tall acceptance window, restoring O(n) overall. Points are
+    # still quantised (0.5mm XY, 0.1mm Z) and de-duplicated per (XY, Z) cell,
+    # which bounds the *density* within a Z band but was never what bounded
+    # the total point count across a whole print.
     CELL = 2.0
+    ZCELL = 2.0             # Z bucket size, >= Z_HI so a query needs few buckets
     XY_R2 = 1.0 * 1.0      # max XY distance^2 to count as supporting
     Z_LO, Z_HI = 0.2, 2.0  # supporting layer must be this far below
     grid: dict = {}
@@ -106,8 +135,19 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
     p_cells = int(math.ceil(p_rad / PCELL)) + 1
     maxz_grid: dict = {}
 
+    # Progress line counter (publish-only; see _progress doc above). Checked
+    # against N=2000 so the dict store happens on well under 0.1% of lines --
+    # negligible next to the per-line parsing work above it -- while still
+    # updating several times a second on a multi-hundred-thousand-line print.
+    _PROGRESS_EVERY = 2000
+    line_no = 0
+
     with open(path, encoding="utf-8", errors="replace") as fh:
         for raw in fh:
+            if _progress is not None:
+                line_no += 1
+                if line_no % _PROGRESS_EVERY == 0:
+                    _progress["analyzed"] = line_no
             line = raw.strip()
             if not line or line[0] in (";", "("):
                 continue
@@ -228,19 +268,34 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
                         mx, my, mz = (x + nx) / 2, (y + ny) / 2, (z + nz) / 2
                         if mz > 1.0:
                             gx, gy = round(mx / CELL), round(my / CELL)
+                            # Only Z buckets that can hold a point with
+                            # Z_LO <= mz - pz <= Z_HI, i.e. pz in
+                            # [mz - Z_HI, mz - Z_LO], can ever pass the exact
+                            # 'below' check just below -- so skip the rest.
+                            bz_lo = int(math.floor((mz - Z_HI) / ZCELL))
+                            bz_hi = int(math.floor((mz - Z_LO) / ZCELL))
+                            if _instrument is not None:
+                                _instrument["queries"] = _instrument.get("queries", 0) + 1
                             supported = False
                             for cx in (gx - 1, gx, gx + 1):
                                 for cy in (gy - 1, gy, gy + 1):
-                                    cell = grid.get((cx, cy))
-                                    if not cell:
-                                        continue
-                                    for (px, py, pz) in cell:
-                                        below = mz - pz
-                                        if Z_LO <= below <= Z_HI:
-                                            ddx, ddy = mx - px, my - py
-                                            if ddx*ddx + ddy*ddy <= XY_R2:
-                                                supported = True
-                                                break
+                                    for bz in range(bz_lo, bz_hi + 1):
+                                        cell = grid.get((cx, cy, bz))
+                                        if not cell:
+                                            continue
+                                        if _instrument is not None:
+                                            _instrument["points_scanned"] = (
+                                                _instrument.get("points_scanned", 0) + len(cell)
+                                            )
+                                        for (px, py, pz) in cell:
+                                            below = mz - pz
+                                            if Z_LO <= below <= Z_HI:
+                                                ddx, ddy = mx - px, my - py
+                                                if ddx*ddx + ddy*ddy <= XY_R2:
+                                                    supported = True
+                                                    break
+                                        if supported:
+                                            break
                                     if supported:
                                         break
                                 if supported:
@@ -268,11 +323,14 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
 
                         # Record this segment's midpoint as future support,
                         # quantised (0.5mm XY, 0.1mm Z) and de-duplicated per
-                        # cell so a tall single-wall print can't grow an
-                        # unbounded point list.
-                        key = (round(mx / CELL), round(my / CELL))
+                        # (XY, Z-bucket) cell. The Z bucket is derived from the
+                        # point's own quantised z so insert and query agree on
+                        # which bucket a given point lives in.
+                        qz = round(mz, 1)
+                        key = (round(mx / CELL), round(my / CELL),
+                               int(math.floor(qz / ZCELL)))
                         grid.setdefault(key, set()).add(
-                            (round(mx * 2) / 2, round(my * 2) / 2, round(mz, 1))
+                            (round(mx * 2) / 2, round(my * 2) / 2, qz)
                         )
                         # Coarse max-height grid for the probe check.
                         pkey = (round(mx / PCELL), round(my / PCELL))

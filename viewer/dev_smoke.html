@@ -50,7 +50,7 @@
   // from the centre out, so it returned an infill line near the middle and
   // reported 36.0 mm across a part that is 64.0 mm across. Anything that goes
   // back to a nearest-point search will fail assertion 3 or 4.
-  function runSelfTest(w) {
+  async function runSelfTest(w) {
     const results = [];
     const check = (name, ok, detail) => results.push({ name, ok, detail });
     const near = (a, b, tol) => Math.abs(a - b) <= tol;
@@ -119,7 +119,7 @@
                   'G1 X117.5 Y117.5 F3000',
                   'G1 X117.5 Y160.0 E1.0 F1200',
                   ''].join('\n');
-    w.loadGcode('mirror_spur.gcode', spur);
+    await w.loadGcode('mirror_spur.gcode', spur);
     w.document.querySelector('.measure-mode[data-mmode="span"]').click();
     const tip = w.__measureAt(117.5, 160.0, 0.3).points[0];
     check('measure reports printer Y on the side the toolpath is really on',
@@ -217,7 +217,7 @@
       'G1 X100 Y100 E1.0 F1200',
       ''
     ].join('\n');
-    w.loadGcode('unsupported_check.gcode', unsupportedGcode);
+    await w.loadGcode('unsupported_check.gcode', unsupportedGcode);
     const unsupportedCount = w.__previewState().riskyCount;
     check('viewer unsupported-move count matches analyze.py (4, from an actual analyze.py run on this G-code)',
           unsupportedCount === 4, 'got ' + unsupportedCount);
@@ -465,10 +465,9 @@
     check('closing the guide sets trident-guide-seen',
           seenAfterClose === '1', 'got ' + seenAfterClose);
 
-    // Every slide carries an animated figure -- the guide is meant to SHOW the
-    // control being described, with a cursor moving to it, not just describe it
-    // in prose. A slide that loses its figure silently regresses to a wall of
-    // text, which is what this replaced.
+    // Every slide carries a figure -- the guide is meant to SHOW the control
+    // being described, not just describe it in prose. A slide that loses its
+    // figure silently regresses to a wall of text, which is what this replaced.
     var guideSlides = w.document.querySelectorAll('#guide-modal .guide-slide');
     var slidesWithFig = 0;
     Array.prototype.forEach.call(guideSlides, function(sl){
@@ -478,10 +477,39 @@
           guideSlides.length > 0 && slidesWithFig === guideSlides.length,
           slidesWithFig + ' of ' + guideSlides.length);
 
+    // Each figure after the first is a RECORDING: a run of frames captured from
+    // this app while a real click was driven through it (viewer/guide/README.md).
+    // data-count is written by hand next to a directory of files, so the two can
+    // drift -- a count that overshoots renders a broken image at the end of the
+    // sequence, one that undershoots silently drops the payoff frame. Assert the
+    // built stack matches what the slide declares, and that the sequence stayed
+    // long enough to actually be a sequence.
+    var recFigs = w.document.querySelectorAll('#guide-modal .guide-fig[data-frames]');
+    var recOk = 0, recDetail = [];
+    Array.prototype.forEach.call(recFigs, function(fig){
+      var want = parseInt(fig.getAttribute('data-count'), 10);
+      var got = fig.querySelectorAll('img.guide-shot').length;
+      if(want >= 2 && got === want && fig.querySelector('.gf-replay')) recOk++;
+      else recDetail.push(fig.getAttribute('data-frames') + ' want ' + want + ' got ' + got);
+    });
+    check('every recorded figure built the frames it declares, plus a Replay control',
+          recFigs.length >= 5 && recOk === recFigs.length,
+          recFigs.length + ' figures; ' + (recDetail.join('; ') || 'none built'));
+
+    // Exactly one frame visible at a time: two frames carrying .gf-on stack on
+    // top of each other and the sequence reads as a smear rather than a click.
+    var multiLit = [];
+    Array.prototype.forEach.call(recFigs, function(fig){
+      var lit = fig.querySelectorAll('img.guide-shot.gf-on').length;
+      if(lit > 1) multiLit.push(fig.getAttribute('data-frames') + ' lit ' + lit);
+    });
+    check('no recorded figure shows more than one frame at once',
+          multiLit.length === 0, multiLit.join('; '));
+
     // The figures are decoration and must never be the only carrier of meaning:
-    // each one is aria-hidden or purely presentational, and the prose beside it
-    // says the same thing. Assert the trigger keeps an accessible name even
-    // though it now shows a word rather than a glyph.
+    // the frames are alt="" and the prose beside them says the same thing.
+    // Assert the trigger keeps an accessible name even though it now shows a
+    // word rather than a glyph.
     var gBtn = w.document.getElementById('guide-btn');
     check('the guide trigger reads as words and keeps an accessible name',
           /how to use/i.test((gBtn.textContent || '').trim()) &&
@@ -508,15 +536,19 @@
         if (!r.ok) throw new Error('fetch failed: ' + r.status + ' ' + r.statusText);
         return r.text();
       })
-      .then(text => {
+      .then(async text => {
         const name = src.split('/').pop();
         const w = frame.contentWindow;
-        w.loadGcode(name, text);
+        // load() (window.loadGcode) is async -- it stages parse/analysis/build
+        // behind requestAnimationFrame yields so a large file's tab shows a
+        // progress overlay instead of freezing silently. Await it so nothing
+        // below reads viewer state before the load has actually finished.
+        await w.loadGcode(name, text);
         if (!selftest) {
           status.textContent = 'loaded ' + name + ' (' + text.length + ' bytes)';
           return;
         }
-        const results = runSelfTest(w);
+        const results = await runSelfTest(w);
         const failed = results.filter(r => !r.ok);
         // Reported on the page and to the console, so a headless run can read
         // either one.

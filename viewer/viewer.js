@@ -509,19 +509,28 @@ function parseGcode(text){
       // the nav cube) must use this same negated form.
       const ax=x-cx, ay=z, az=cy-y;
       const bx=nx-cx, by=nz, bz=cy-ny;
+      const len=Math.hypot(nx-x,ny-y,nz-z);
+      const speed=curF/60;                       // mm/s
+      // Peak Z-rate deliberately mirrors trident_gcode/analyze.py's max_z_rate
+      // (see analyze.py around line 216: `if dist > 0 and speed > 0: zr = ...`).
+      // That is computed over EVERY move -- travel included -- not just
+      // extruding ones, because a fast Z-lift on a travel move stresses the Z
+      // axis exactly as much as one made while extruding. analyze.py's number
+      // is the authoritative safety report the server prints; scoping this to
+      // extruding-only (as it used to be) made the viewer under-report the
+      // same file's peak Z-rate by 4x. Keep this outside the extruding branch
+      // below so the two panels cannot drift apart again.
+      if(len>0 && speed>0){ const zr=speed*Math.abs(nz-z)/len; if(zr>maxZrate)maxZrate=zr; }
       if(extruding){
         ext.push(ax,ay,az, bx,by,bz);
         extCol.push(nz, nz);            // store z; convert to colour after
         extrudeCount++;
-        const len=Math.hypot(nx-x,ny-y,nz-z);
-        const speed=curF/60;                       // mm/s
         // volumetric flow = filament volume extruded / time = e*area*speed/len
         const flow=(len>0 && relE)? e*FIL_AREA*speed/len : 0;
         segSpeed.push(speed); segFlow.push(flow);
         // skip pre-M106 extrudes (fan-off adhesion window) so they don't pin minFan to 0
         if(fanEverOn){ if(curFan<minFan) minFan=curFan; if(curFan>maxFan) maxFan=curFan; }
         if(relE) fil+=e;
-        if(len>0){ const zr=speed*Math.abs(nz-z)/len; if(zr>maxZrate)maxZrate=zr; }
         minz=Math.min(minz,z,nz); maxz=Math.max(maxz,z,nz);
         minx=Math.min(minx,nx);maxx=Math.max(maxx,nx);miny=Math.min(miny,ny);maxy=Math.max(maxy,ny);
       } else {
@@ -536,12 +545,13 @@ function parseGcode(text){
   const extFlat = new Float32Array(ext);
   const trvFlat = new Float32Array(trv);
 
-  // Compute risk flags (O(n) grid hash).
-  const riskFlags = computeRiskFlags(extFlat, nExtSeg);
-  const riskyCount = riskFlags.reduce((a,v)=>a+v, 0);
-
-  // Compute per-segment overhang angles once (cached on the loaded data).
-  const overhang = computeOverhang(extFlat, nExtSeg);
+  // NOTE: risk flags (computeRiskFlags) and overhang angles (computeOverhang)
+  // are deliberately NOT computed here. Both are O(extrude segments) grid-hash
+  // passes as heavy as this parse loop, and load() below stages them as
+  // separate "Analyzing supports..." / "Computing overhangs..." steps with a
+  // yield to the browser in between so a big file's tab doesn't freeze with
+  // zero feedback. Callers must run those two passes themselves and merge the
+  // results into this object -- see load().
 
   // Compute estimated print time.
   const estTimeSec = computeEstTime(extFlat, trvFlat, segSpeed, nExtSeg);
@@ -559,7 +569,9 @@ function parseGcode(text){
   const fanSeen = extrudeCount > 0 && isFinite(minFan);
 
   return {ext:extFlat,extCol,trv:trvFlat,segSpeed,segFlow,meta,minz,maxz,minx,maxx,miny,maxy,
-          fil,extrudeCount,travelCount,maxZrate,riskFlags,riskyCount,overhang,estTime,estTimeSec,segT,
+          fil,extrudeCount,travelCount,maxZrate,
+          riskFlags:null,riskyCount:null,overhang:null,   // filled in by load() -- see NOTE above
+          estTime,estTimeSec,segT,
           minFan: fanSeen ? minFan : null, maxFan: fanSeen ? maxFan : null};
 }
 
@@ -734,6 +746,24 @@ function showGcodeTitle(name){
   gcodeTitleEl.style.display = 'block';
 }
 
+// The Z-rate ceiling comes from the SELECTED PRINTER's own declared limit,
+// never a literal in this file -- CLAUDE.md's "No machine limit may be a
+// module constant" invariant names this exact spot: a bare 25.1 (the Voron
+// Trident's max_z_velocity) here would call a file "ok" on some other
+// printer's Z axis and "! " on the Trident's, regardless of what that other
+// printer can actually take. The agent wiring up the printer-select UI
+// publishes the active profile's limit on window.__printerLimits with the
+// shape { key, name, max_z_velocity }, refreshed on load and on every printer
+// change; that global is read here defensively (it depends on an async
+// fetch, so it may be absent or incomplete at the instant this runs). Returns
+// a finite number, or null if no grounded limit is available -- callers must
+// withhold the ok/danger verdict in the null case rather than guess.
+function currentMaxZVelocity(){
+  const lim = window.__printerLimits;
+  const v = lim && lim.max_z_velocity;
+  return (typeof v === 'number' && isFinite(v)) ? v : null;
+}
+
 function showStats(name,d){
   document.getElementById('stats-group').style.display='block';
   document.getElementById('overlay').style.display='none';
@@ -746,8 +776,19 @@ function showStats(name,d){
   set('s-foot',`${(d.maxx-d.minx).toFixed(0)}x${(d.maxy-d.miny).toFixed(0)} mm`);
   set('s-fil',d.fil>0?(d.fil/1000).toFixed(2)+' m':'n/a');
   const zr=d.maxZrate;
-  set('s-zrate',zr.toFixed(1)+' mm/s'+(zr>25.1?' !':' ok'));
-  document.getElementById('s-zrate').classList.toggle('state-danger', zr>25.1);
+  const zLimit=currentMaxZVelocity();
+  const zrateEl=document.getElementById('s-zrate');
+  if(zLimit!=null){
+    set('s-zrate',zr.toFixed(1)+' mm/s'+(zr>zLimit?' !':' ok'));
+    zrateEl.classList.toggle('state-danger', zr>zLimit);
+  } else {
+    // No grounded limit available -- show the measured rate but withhold the
+    // verdict rather than inventing or falling back to a ceiling. A verdict
+    // that isn't backed by the selected printer's own declared limit is
+    // worse than none (CLAUDE.md).
+    set('s-zrate',zr.toFixed(1)+' mm/s (limit unknown)');
+    zrateEl.classList.remove('state-danger');
+  }
   set('s-time', d.estTime || '--');
   set('s-risk', d.riskyCount != null ? d.riskyCount.toLocaleString() : '--');
   document.getElementById('s-risk').classList.toggle('state-warn', !!d.riskyCount);
@@ -895,23 +936,121 @@ function sparkSeek(e){
 
 let lastData=null;
 let cuts=[0];   // extrude-segment indices at each spiral-turn boundary (+ the end)
-function load(name,text){
-  lastData=parseGcode(text);
-  cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
-  buildGeometry(lastData); showStats(name,lastData);
-  measureReload();                       // new model: any old measurement is meaningless
-  document.getElementById('tl-wrap').style.display='';
-  // Widens --overlay-bottom (style.css) so the nav cube and its neighbours
-  // clear the now-visible machine-readout strip instead of floating 92px
-  // above empty canvas, which is what happened before this class existed.
-  wrap.classList.add('has-timeline');
-  document.getElementById('telemetry-card').style.display='';
-  stopPlay(); setProgress(1);            // start fully drawn
-  fitView();                             // frame the camera on the model
-  // Build the sparkline after layout settles (offsetWidth needs a rendered frame).
-  requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(1); });
-  // A file was loaded (dropped, picked, or generated) - show the viewer mode.
-  if(window.setAppMode) window.setAppMode('viewer');
+
+// ---- staged load overlay ---------------------------------------------------
+// load() below runs several O(extrude segments) passes back to back
+// (parseGcode -> computeRiskFlags -> computeOverhang -> buildGeometry). On a
+// large file each one can take seconds, and with nothing on screen to say so
+// a frozen tab looks exactly like a crash. This overlay names the current
+// stage; loadYield() below hands control back to the browser between stages
+// so that label actually paints before the next heavy pass blocks the thread.
+// Built as a plain DOM node with inline styles (same pattern as
+// showGcodeTitle's #gcode-title) rather than a stylesheet class -- viewer.js
+// does not own style.css. Colours are hand-picked to track --surface/--ink
+// without using the CSS custom properties themselves (and deliberately avoid
+// --ok/--warn/--danger/--accent-purple, which are reserved to other subsystems).
+let loadOverlayEl = null, loadOverlayStageEl = null, loadOverlayFileEl = null;
+function showLoadOverlay(name){
+  if(!loadOverlayEl){
+    loadOverlayEl = document.createElement('div');
+    loadOverlayEl.id = 'load-overlay';
+    loadOverlayEl.style.cssText =
+      'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;' +
+      'justify-content:center;gap:6px;background:rgba(23,25,27,0.82);' +
+      'color:#e8eaed;font-family:sans-serif;z-index:8;pointer-events:none;text-align:center;';
+    loadOverlayStageEl = document.createElement('div');
+    loadOverlayStageEl.id = 'load-overlay-stage';
+    loadOverlayStageEl.style.cssText = 'font-size:14px;font-weight:600;';
+    loadOverlayFileEl = document.createElement('div');
+    loadOverlayFileEl.id = 'load-overlay-file';
+    loadOverlayFileEl.style.cssText =
+      'font-size:12px;font-weight:400;opacity:0.72;max-width:70%;overflow:hidden;' +
+      'text-overflow:ellipsis;white-space:nowrap;';
+    loadOverlayEl.appendChild(loadOverlayStageEl);
+    loadOverlayEl.appendChild(loadOverlayFileEl);
+    wrap.appendChild(loadOverlayEl);
+  }
+  loadOverlayFileEl.textContent = name;
+  loadOverlayEl.style.display = 'flex';
+}
+function setLoadStage(text){
+  if(loadOverlayStageEl) loadOverlayStageEl.textContent = text;
+}
+function hideLoadOverlay(){
+  if(loadOverlayEl) loadOverlayEl.style.display = 'none';
+}
+// Yield to the browser and guarantee at least one paint has happened before
+// resuming. A single requestAnimationFrame callback runs BEFORE that frame's
+// paint, so it alone does not guarantee the label update is on screen yet --
+// the standard double-rAF idiom does: the first rAF fires at the start of the
+// next frame (paint follows), and the second rAF (scheduled from inside the
+// first) cannot fire until the frame after that, i.e. after the paint has
+// happened.
+//
+// Measured while testing this: Chrome can suspend rAF ENTIRELY for a hidden
+// or backgrounded tab (a user alt-tabbing away mid-load, or an occluded
+// window), and a pure double-rAF wait then never resolves -- the load just
+// hangs forever instead of freezing for seconds, which is worse than the bug
+// this was meant to fix. A setTimeout fallback races it: on a visible tab it
+// never fires (the rAFs win in well under 200ms), so the paint guarantee
+// above still holds; on a hidden tab it guarantees forward progress anyway,
+// just without that guarantee -- which is fine, because there is nothing to
+// paint for the user to see until the tab is visible again regardless.
+function loadYield(){
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => { if(!done){ done = true; resolve(); } };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 200);
+  });
+}
+
+async function load(name,text){
+  showLoadOverlay(name);
+  try {
+    // Cheap upfront count for the parse-stage label; a single split() is
+    // negligible next to the per-line regex work parseGcode does below.
+    const totalLines = text.split('\n').length;
+    setLoadStage(`Parsing G-code... (${totalLines.toLocaleString()} lines)`);
+    await loadYield();
+    const parsed = parseGcode(text);      // heavy: O(lines)
+
+    setLoadStage(`Analyzing supports... (${parsed.extrudeCount.toLocaleString()} segments)`);
+    await loadYield();
+    const riskFlags = computeRiskFlags(parsed.ext, parsed.extrudeCount);   // heavy: O(segments)
+    let riskyCount = 0;
+    for(let i=0;i<riskFlags.length;i++) riskyCount += riskFlags[i];
+
+    setLoadStage('Computing overhangs...');
+    await loadYield();
+    const overhang = computeOverhang(parsed.ext, parsed.extrudeCount);    // heavy: O(segments)
+
+    setLoadStage('Building view...');
+    await loadYield();
+    parsed.riskFlags = riskFlags;
+    parsed.riskyCount = riskyCount;
+    parsed.overhang = overhang;
+    lastData = parsed;
+    cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
+    buildGeometry(lastData); showStats(name,lastData);   // heavy: O(segments)
+    measureReload();                       // new model: any old measurement is meaningless
+    document.getElementById('tl-wrap').style.display='';
+    // Widens --overlay-bottom (style.css) so the nav cube and its neighbours
+    // clear the now-visible machine-readout strip instead of floating 92px
+    // above empty canvas, which is what happened before this class existed.
+    wrap.classList.add('has-timeline');
+    document.getElementById('telemetry-card').style.display='';
+    stopPlay(); setProgress(1);            // start fully drawn
+    fitView();                             // frame the camera on the model
+    // Build the sparkline after layout settles (offsetWidth needs a rendered frame).
+    requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(1); });
+    // A file was loaded (dropped, picked, or generated) - show the viewer mode.
+    if(window.setAppMode) window.setAppMode('viewer');
+  } finally {
+    // Always clears, success or failure -- a stuck overlay would be worse
+    // than the freeze it replaces (looks like a hang forever, not just once).
+    hideLoadOverlay();
+  }
 }
 
 // Detect spiral-turn boundaries by unwrapping the path's angle about its centre.
@@ -2690,7 +2829,7 @@ function measureReload(){
   measurePts = [];
   measureHoverPt = null;
   measureRingInfo = null;
-  measureSyncAppMode();
+  syncCanvasChromeForMode();
   if(measureOn) measureBuildGrid();
   measureRedraw();
   measureRenderCard();
@@ -2701,13 +2840,30 @@ function measureReload(){
 // Without the mode half, the rail stayed on the canvas in Design mode -- one
 // click away from measuring the loaded G-code while the canvas is showing the
 // blue draft preview of a shape that has since been edited.
-function measureSyncAppMode(){
-  const rail = document.getElementById('tool-rail');
+// Everything that floats ON the canvas has to follow the app mode by hand.
+// The canvas is visible in BOTH modes, so none of this chrome is covered by
+// the panel's own .active class toggling -- it has to be told.
+//
+// The telemetry card is here for exactly that reason: load() shows it when a
+// file loads (see the has-timeline block) and nothing hid it again, so
+// switching Design -> G-code Viewer -> Design left a telemetry readout
+// floating over the design view, describing G-code the user is no longer
+// looking at. Its display is restored (not forced) when returning to the
+// viewer so the card's own collapsed/expanded state survives.
+function syncCanvasChromeForMode(){
   const show = viewerModeActive() && !!extArr;
+
+  const rail = document.getElementById('tool-rail');
   if(rail) rail.style.display = show ? '' : 'none';
   if(!show && measureOn) measureSetOn(false);
+
+  const tele = document.getElementById('telemetry-card');
+  if(tele) tele.style.display = show ? '' : 'none';
 }
-window.__measureAppMode = measureSyncAppMode;
+// Kept under the old name too: designer.js's activateMode() calls it, and a
+// silently-renamed hook is a chrome-desync bug that only shows up at runtime.
+window.__syncCanvasChrome = syncCanvasChromeForMode;
+window.__measureAppMode = syncCanvasChromeForMode;
 
 document.getElementById('tool-measure').addEventListener('click', function(){
   measureSetOn(!measureOn);
@@ -2809,6 +2965,195 @@ window.__measureState = function(){
     } : null
   };
 };
+
+// ---- measure card: drag / lock / reset -------------------------------------
+// The card ships CSS-anchored bottom-right of the canvas (.measure-card in
+// style.css: right:76px, bottom:var(--overlay-bottom)) so by design it can sit
+// right on top of the geometry someone is trying to measure. Dragging swaps it
+// to an explicit inline left/top; Reset just deletes those inline styles so
+// the CSS anchor takes back over -- no separate "remembered original spot" to
+// keep in sync with a stylesheet this task does not own.
+//
+// This file owns every DOM/CSS change for this feature (index.html and
+// style.css are being edited elsewhere right now), so the lock/reset buttons
+// and their styling are injected here rather than hand-added to the markup.
+// Colour stays on --measure/MEASURE_COL, same token the rest of this tool
+// uses -- see the reserved-token comment at the top of style.css.
+const MEASURE_POS_KEY = 'measure-card-pos';
+const MEASURE_LOCK_KEY = 'measure-card-locked';
+const MEASURE_CARD_W = 246;      // mirrors .measure-card's width in style.css
+const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, however far it is dragged
+
+(function(){
+  const card = document.getElementById('measure-card');
+  const head = card ? card.querySelector('.measure-head') : null;
+  const closeBtn = document.getElementById('measure-close');
+  if(!card || !head || !closeBtn) return;   // defensive: markup shape changed elsewhere
+
+  const css = document.createElement('style');
+  css.textContent =
+    '.measure-head{cursor:grab;touch-action:none;}' +
+    '.measure-head.measure-dragging{cursor:grabbing;}' +
+    '.measure-head.measure-locked{cursor:default;}' +
+    '.measure-head-actions{display:flex;align-items:center;gap:2px;}' +
+    '.measure-drag-btn{background:none;border:none;color:var(--ink);cursor:pointer;' +
+      'font-size:12px;min-width:22px;min-height:22px;padding:2px 5px;line-height:1;' +
+      'border-radius:4px;font-family:var(--font-ui);opacity:.75;' +
+      'transition:color .15s,background-color .15s,opacity .15s;}' +
+    '.measure-drag-btn:hover{opacity:1;color:var(--ink);background:var(--surface-raised);}' +
+    '.measure-drag-btn[aria-pressed="true"]{opacity:1;color:var(--measure);' +
+      'background:var(--measure-dim);}';
+  document.head.appendChild(css);
+
+  // Grouping reset+lock+close in their own flex box (instead of dropping them
+  // straight into .measure-head) keeps the existing title-left/controls-right
+  // layout: .measure-head is `justify-content:space-between` over exactly two
+  // children today, and adding buttons directly would spread all of them out
+  // evenly instead of clustering them against the close button.
+  const actions = document.createElement('div');
+  actions.className = 'measure-head-actions';
+
+  const resetBtn = document.createElement('button');
+  resetBtn.id = 'measure-reset-pos';
+  resetBtn.type = 'button';
+  resetBtn.className = 'measure-drag-btn';
+  resetBtn.title = 'Reset card position';
+  resetBtn.setAttribute('aria-label', 'Reset card position');
+  resetBtn.innerHTML = '&#8634;';    // anticlockwise open circle arrow
+
+  const lockBtn = document.createElement('button');
+  lockBtn.id = 'measure-lock-pos';
+  lockBtn.type = 'button';
+  lockBtn.className = 'measure-drag-btn';
+  lockBtn.setAttribute('aria-pressed', 'false');
+
+  actions.appendChild(resetBtn);
+  actions.appendChild(lockBtn);
+  actions.appendChild(closeBtn);   // re-parented, not cloned -- its own listener (below) is untouched
+  head.appendChild(actions);
+
+  let locked = false;
+  let dragging = false;
+  let dragStartX = 0, dragStartY = 0, dragOrigLeft = 0, dragOrigTop = 0;
+
+  function updateLockUI(){
+    lockBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+    lockBtn.title = locked ? 'Unlock card position' : 'Lock card position (prevents dragging)';
+    lockBtn.setAttribute('aria-label', lockBtn.title);
+    lockBtn.innerHTML = locked ? '&#128274;' : '&#128275;';   // closed / open padlock
+    head.classList.toggle('measure-locked', locked);
+  }
+
+  // Keeps at least MEASURE_REACH_PAD px of the card within the wrap on every
+  // side: horizontally by bounding how far left/right of it can go relative
+  // to its own (fixed) width, vertically by never letting the header strip
+  // above the wrap's top edge and never letting the whole card slide past the
+  // bottom. This is what stands between a bad drag and a card the user can
+  // never click again -- see the CLAUDE.md-adjacent brief for why that matters.
+  function clamp(left, top){
+    const minLeft = MEASURE_REACH_PAD - MEASURE_CARD_W;
+    const maxLeft = Math.max(minLeft, wrap.clientWidth - MEASURE_REACH_PAD);
+    const maxTop = Math.max(0, wrap.clientHeight - MEASURE_REACH_PAD);
+    return {
+      left: Math.min(maxLeft, Math.max(minLeft, left)),
+      top: Math.min(maxTop, Math.max(0, top))
+    };
+  }
+
+  function applyPos(left, top){
+    const c = clamp(left, top);
+    card.style.right = 'auto';
+    card.style.bottom = 'auto';
+    card.style.left = c.left + 'px';
+    card.style.top = c.top + 'px';
+  }
+
+  function savePos(){
+    try {
+      localStorage.setItem(MEASURE_POS_KEY, JSON.stringify({
+        left: parseFloat(card.style.left), top: parseFloat(card.style.top)
+      }));
+    } catch(e){}
+  }
+
+  function resetPos(){
+    card.style.left = '';
+    card.style.top = '';
+    card.style.right = '';
+    card.style.bottom = '';
+    // Reset only clears the remembered position; a reload without this would
+    // put the card right back where it was, which is not what "reset" means.
+    try { localStorage.removeItem(MEASURE_POS_KEY); } catch(e){}
+  }
+
+  function endDrag(){
+    if(!dragging) return;
+    dragging = false;
+    head.classList.remove('measure-dragging');
+    savePos();
+  }
+
+  head.addEventListener('pointerdown', function(e){
+    if(locked || e.button !== 0) return;
+    if(e.target.closest('button')) return;   // reset/lock/close live in this same strip
+    const cardRect = card.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    dragOrigLeft = cardRect.left - wrapRect.left;
+    dragOrigTop = cardRect.top - wrapRect.top;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragging = true;
+    applyPos(dragOrigLeft, dragOrigTop);
+    head.classList.add('measure-dragging');
+    // The card is a sibling of the canvas, not a descendant, so this can
+    // never reach OrbitControls' own pointerdown listener regardless --
+    // preventDefault here just stops the browser reading the drag as a text
+    // or image selection gesture.
+    e.preventDefault();
+  });
+
+  // move/up/cancel + blur all live on window, the same freeze-safety pattern
+  // the shape-cage and nav-cube drags in this file use: if the pointer is
+  // released (or the window loses focus) anywhere other than exactly over the
+  // card, the drag still has to end, or the card is stuck following the
+  // pointer with no way to let go of it.
+  window.addEventListener('pointermove', function(e){
+    if(!dragging) return;
+    applyPos(dragOrigLeft + (e.clientX - dragStartX), dragOrigTop + (e.clientY - dragStartY));
+  });
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+  window.addEventListener('blur', endDrag);
+
+  // A stored (or mid-session) position can be stranded off-screen by a window
+  // resize -- reclamp live, not just on the next load.
+  window.addEventListener('resize', function(){
+    if(!card.style.left) return;   // still at the CSS default; nothing to reclamp
+    applyPos(parseFloat(card.style.left) || 0, parseFloat(card.style.top) || 0);
+    savePos();
+  });
+
+  resetBtn.addEventListener('click', resetPos);
+  lockBtn.addEventListener('click', function(){
+    locked = !locked;
+    updateLockUI();
+    try { localStorage.setItem(MEASURE_LOCK_KEY, locked ? '1' : '0'); } catch(e){}
+  });
+
+  // Restore persisted position/lock at load. The card is display:none at this
+  // point (nothing is loaded yet), but clamp() only needs the CSS-fixed card
+  // width (MEASURE_CARD_W) and the wrap's own size, neither of which depend
+  // on the card's own layout, so restoring while hidden is safe.
+  let storedPos = null;
+  try { storedPos = JSON.parse(localStorage.getItem(MEASURE_POS_KEY) || 'null'); } catch(e){}
+  if(storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)){
+    applyPos(storedPos.left, storedPos.top);
+  }
+  let storedLock = null;
+  try { storedLock = localStorage.getItem(MEASURE_LOCK_KEY); } catch(e){}
+  locked = storedLock === '1';
+  updateLockUI();
+})();
 
 // ---- orientation / view cube -----------------------------------------------
 // Bambu-Studio-style gizmo: a small cube in the corner that mirrors the main

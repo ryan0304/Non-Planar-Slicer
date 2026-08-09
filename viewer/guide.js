@@ -42,6 +42,89 @@
     dots.forEach(function(d, i){ d.classList.toggle('active', i === current); });
     backBtn.textContent = (current === 0) ? 'Skip' : 'Back';
     nextBtn.textContent = (current === slides.length - 1) ? 'Done' : 'Next';
+    figures.forEach(stopFigure);   // never leave an off-screen slide ticking
+    var rec = currentFigure();
+    if(rec) playFigure(rec, false);
+  }
+
+  // ---- recorded-interaction figures -----------------------------------------
+  // Every slide after the first shows a short sequence of PNG frames captured
+  // from THIS app while a real click was driven through it -- see
+  // viewer/guide/README.md. Nothing in a frame is drawn on afterwards: the
+  // cursor, the click ring, the hover states and the numbers that change were
+  // all rendered by the page at capture time.
+  //
+  // The <img> stack is built on FIRST OPEN rather than at page load, so a user
+  // who never opens the guide never fetches ~640 kB of screenshots. That is
+  // also why the frames are not inlined into index.html.
+  var FRAME_MS = 850;
+  var figures = [];
+  var figuresBuilt = false;
+
+  function buildFigures(){
+    if(figuresBuilt) return;
+    figuresBuilt = true;
+    slides.forEach(function(slide){
+      var fig = slide.querySelector('.guide-fig[data-frames]');
+      if(!fig) return;
+      var base = fig.getAttribute('data-frames');
+      var count = parseInt(fig.getAttribute('data-count'), 10);
+      if(!(count > 0)) return;
+
+      var frames = [];
+      for(var i = 1; i <= count; i++){
+        var img = document.createElement('img');
+        img.className = 'guide-shot';
+        img.alt = '';            // decorative: the bullets carry the meaning
+        img.src = base + '/' + (i < 10 ? '0' : '') + i + '.png';
+        fig.appendChild(img);
+        frames.push(img);
+      }
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'gf-replay';
+      btn.textContent = 'Replay';
+      btn.setAttribute('aria-label', 'Replay this recording');
+      fig.appendChild(btn);
+
+      var rec = { frames: frames, timer: 0 };
+      // force:true -- pressing Replay is an explicit ask for motion, so it
+      // steps the sequence even under prefers-reduced-motion.
+      btn.addEventListener('click', function(){ playFigure(rec, true); });
+      fig.recording = rec;
+      figures.push(rec);
+    });
+  }
+
+  function currentFigure(){
+    var fig = slides[current] && slides[current].querySelector('.guide-fig[data-frames]');
+    return (fig && fig.recording) || null;
+  }
+
+  function showFrame(rec, i){
+    rec.frames.forEach(function(f, k){ f.classList.toggle('gf-on', k === i); });
+  }
+
+  function stopFigure(rec){
+    if(rec.timer){ clearInterval(rec.timer); rec.timer = 0; }
+  }
+
+  // Runs once and HOLDS on the last frame rather than looping: the last frame
+  // is the outcome of the click, so the figure reads correctly frozen -- the
+  // same rule the rest of this UI's motion follows. Replay is the way back.
+  function playFigure(rec, force){
+    stopFigure(rec);
+    if(!rec.frames.length) return;
+    var mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+    if(mq && mq.matches && !force){ showFrame(rec, rec.frames.length - 1); return; }
+    var i = 0;
+    showFrame(rec, 0);
+    rec.timer = setInterval(function(){
+      i += 1;
+      if(i >= rec.frames.length){ stopFigure(rec); return; }
+      showFrame(rec, i);
+    }, FRAME_MS);
   }
 
   function isOpen(){ return modal.style.display !== 'none'; }
@@ -49,6 +132,7 @@
   function openGuide(fromEl){
     opener = fromEl || document.activeElement;
     current = 0;
+    buildFigures();   // first open is when the frames start downloading
     renderSlide();
     modal.style.display = 'flex';
     if(closeBtn) closeBtn.focus();
@@ -60,6 +144,7 @@
   function closeGuide(){
     if(!isOpen()) return;
     modal.style.display = 'none';
+    figures.forEach(stopFigure);   // a closed guide must not keep a timer alive
     markSeen();
     var target = (opener && typeof opener.focus === 'function') ? opener : triggerBtn;
     if(target) target.focus();

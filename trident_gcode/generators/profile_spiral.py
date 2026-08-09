@@ -19,7 +19,8 @@ from ..blobs import (BlobSpec, LoopSpec, blob_volume_at, compute_blob_sites,
                      compute_loop_sites)
 from ..extrusion import blob_e_for_volume
 from ..gcode import GcodeWriter
-from ..paths import _R_PATTERNS, _fade_envelope, _MAX_AMP_STEP, R_PATTERN_NAMES
+from ..paths import (_R_PATTERNS, _fade_envelope, _MAX_AMP_STEP, R_PATTERN_NAMES,
+                    cage_scale)
 from ..profile_stack import Contour, contour_normals, interpolate_contours
 from .base_fill import layered_base_and_brim, brim_outer_radius, blend_layer_z
 from .continuous_spiral import emit_loop, _overhang_fan, _fan_on_threshold
@@ -92,6 +93,15 @@ def build_profile_spiral(
     r_alternate: bool = False,
     # XY twist
     xy_twist_turns: float = 0.0,
+    # Asymmetric control cage (N rows x M cols radius-scale grid, see
+    # paths.cage_scale) and the ovality / spine sculpting pair. Sampled at the
+    # same ring-index theta (2*pi*j/n) the radial texture already uses -- a
+    # per-point multiplicative/affine transform about the local origin, so it
+    # needs no assumption that the underlying contour is star-convex (unlike
+    # base_fill's disk paver).
+    cage: list | None = None,
+    ovality: float = 0.0,
+    spine_offset: Callable[[float], tuple[float, float]] | None = None,
     # Placement / adhesion
     center: tuple[float, float] | None = None,
     base_z: float | None = None,
@@ -136,6 +146,20 @@ def build_profile_spiral(
     if not contours:
         raise ValueError("empty contour stack")
 
+    # Point-edit modifiers (FFD / Smooth / Radial Push, see serve.py's
+    # _point_edits_on_contours) hand back 3-tuple (x, y, z) rings when any of
+    # them displaced a point off its nominal layer height -- Radial Push alone
+    # never touches z, but the return shape is uniform across all three
+    # deforming modifiers. Split any such z into a parallel per-point override
+    # array and reduce contours back to plain (x, y) so every (x, y)-only
+    # helper below (interpolate_contours, contour_normals, _polygon_radius_fn,
+    # the footprint scan) is untouched and still runs on the true,
+    # already-edited XY footprint.
+    z_override: list[list[float]] | None = None
+    if contours[0] and len(contours[0][0]) == 3:
+        z_override = [[float(p[2]) for p in c] for c in contours]
+        contours = [[(p[0], p[1]) for p in c] for c in contours]
+
     n_contours = len(contours)
     n = points_per_turn
 
@@ -170,6 +194,24 @@ def build_profile_spiral(
     # ---- safety: footprint + top Z -----------------------------------------
     radius = max(math.hypot(x, y) for c in contours for (x, y) in c)
 
+    # Conservative (never under-estimating) footprint bound for cage/ovality/
+    # spine: cage_scale's own inputs are clamped to [0.5, 1.5] by
+    # serve.py's _parse_cage, ovality is bounded to [-0.4, 0.4], and the
+    # spine offset grows monotonically with t so its worst case is t=1.
+    # Mirrors continuous_spiral.py's _base_footprint_bound philosophy -- an
+    # over-estimate only ever rejects a design that might, by exact math,
+    # have technically fit; an under-estimate is a crash.
+    fit_bound = radius
+    if cage is not None:
+        max_cage = max(v for row in cage for v in row)
+        fit_bound *= max_cage
+    if ovality != 0.0:
+        fit_bound *= (1.0 + abs(ovality))
+    if spine_offset is not None:
+        dx1, dy1 = spine_offset(1.0)
+        fit_bound += math.hypot(dx1, dy1)
+    radius = max(radius, fit_bound)
+
     bottom = contours[0]
     radius_fn = _polygon_radius_fn(bottom)
 
@@ -179,8 +221,11 @@ def build_profile_spiral(
         fit_radius = max(fit_radius, radius + loop_spec.out_mm)
     _ensure_fits(profile, cx, cy, fit_radius)
 
-    # Compute top Z from the heights array + any z_amp headroom.
-    max_height = max(heights)
+    # Compute top Z from the heights array (or the point-edit override, when
+    # present -- it already holds the fully-deformed per-point Z) + any
+    # z_amp headroom.
+    max_height = (max(v for row in z_override for v in row)
+                  if z_override is not None else max(heights))
     top_z = wall_off + max_height + abs(z_amp)
     if loop_spec is not None:
         top_z += loop_spec.up_mm
@@ -308,6 +353,17 @@ def build_profile_spiral(
                 cos_a, sin_a = math.cos(angle), math.sin(angle)
                 px, py = px * cos_a - py * sin_a, px * sin_a + py * cos_a
 
+            # ---- asymmetric control cage: radial scale about the origin ----
+            # Sampled at the ring-index angle (matches the radial texture's
+            # theta_tex below), not atan2(px, py) -- consistent with how the
+            # parametric path samples cage_scale at the shape's own theta
+            # parameter rather than the point's post-twist geometric angle.
+            if cage is not None:
+                theta_ring = 2.0 * math.pi * j / n
+                scale = cage_scale(cage, theta_ring, t)
+                px *= scale
+                py *= scale
+
             # ---- radial texture displacement along outward normal ----------
             if r_pattern is not None:
                 # Compute normals on the blended contour (cached per contour
@@ -333,9 +389,29 @@ def build_profile_spiral(
                 px += disp * nx
                 py += disp * ny
 
+            # ---- ovality: stretch/squash the final wall coordinates -------
+            # Applied after texture so ridges ride the elliptical wall,
+            # before the spine offset so the offset stays a pure centre
+            # translation -- same order as spiral_path() (paths.py).
+            if ovality != 0.0:
+                px *= (1.0 + ovality)
+                py *= (1.0 - ovality)
+
+            # ---- spine offset: translate the cross-section centre in XY ---
+            if spine_offset is not None:
+                sdx, sdy = spine_offset(t)
+                px += sdx
+                py += sdy
+
             # ---- Z computation ---------------------------------------------
-            # Base Z from interpolating the heights array.
-            if i_next != i:
+            # Base Z: from the point-edit override when present (already the
+            # fully-deformed per-point Z), else interpolating the heights
+            # array as before.
+            if z_override is not None:
+                zo0 = z_override[i][j]
+                zo1 = z_override[i_next][j]
+                z_base = zo0 + frac * (zo1 - zo0) if i_next != i else zo0
+            elif i_next != i:
                 z_base = heights[i] + frac * (heights[i_next] - heights[i])
             else:
                 z_base = heights[i]
