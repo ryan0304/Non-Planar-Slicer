@@ -99,6 +99,30 @@
     return s;
   }
 
+  // ---- header brand mark (ambient busy echo) -------------------------------
+  // See viewer/style.css's brand-mark block and the logo spec it implements.
+  // Only #brand-mark-header ever animates -- the empty-state splash mark is
+  // idle-only. Two mutually-exclusive states on that one element:
+  //   is-busy-indeterminate: driven here, from the shared busy-line helper
+  //     below, whenever any of #stl-status / #pm-drop-status /
+  //     #printer-meta-status is showing its spinner. A >0 counter because
+  //     more than one of those three can in principle overlap.
+  //   is-busy-determinate: driven from showGenProgress/hideGenProgress
+  //     (search "gen-progress-fill"), in step with the real progress bar.
+  var headerMarkEl = document.getElementById('brand-mark-header');
+  var MARK_BUSY_STATUS_IDS = { 'stl-status':1, 'pm-drop-status':1, 'printer-meta-status':1 };
+  var markBusyCount = 0;
+  function markBusyBegin(){
+    markBusyCount++;
+    if(headerMarkEl && markBusyCount === 1 && !headerMarkEl.classList.contains('is-busy-determinate')){
+      headerMarkEl.classList.add('is-busy-indeterminate');
+    }
+  }
+  function markBusyEnd(){
+    if(markBusyCount > 0) markBusyCount--;
+    if(headerMarkEl && markBusyCount === 0) headerMarkEl.classList.remove('is-busy-indeterminate');
+  }
+
   // ---- shared busy-state helper -------------------------------------------
   // One small system for every "this network call takes a moment" spot in
   // this file: a disabled trigger control (when there is a single one) and
@@ -120,6 +144,8 @@
   // UI, or the operation's result speaks for itself).
   function beginBusy(btn, statusEl, label){
     if(btn) btn.disabled = true;
+    var marksBrand = !!(statusEl && MARK_BUSY_STATUS_IDS[statusEl.id]);
+    if(marksBrand) markBusyBegin();
     if(statusEl){
       statusEl.textContent = '';
       statusEl.className = 'busy-line';
@@ -135,6 +161,7 @@
       if(settled) return;
       settled = true;
       if(btn) btn.disabled = false;
+      if(marksBrand) markBusyEnd();
       if(!statusEl) return;
       if(finalText == null){
         statusEl.style.display = 'none';
@@ -508,10 +535,16 @@
         if(panels[k]) panels[k].classList.toggle('active', k === name);
       }
       if(stepNavEl) stepNavEl.classList.toggle('active', name === 'design');
-      try { localStorage.setItem('app-mode', name); } catch(e){}
+      // Not persisted: every load starts in Design (see activateMode's call
+      // site below). Writing a key nothing reads would just resurrect the
+      // stale value this change exists to get rid of.
       // The measure tool's rail lives on the canvas, which is visible in both
       // modes, so it cannot hide itself off the panel's .active class.
-      if(window.__measureAppMode) window.__measureAppMode();
+      // Canvas-floating chrome (measure rail, telemetry card) lives on the
+      // canvas, which is visible in both modes, so it cannot follow the
+      // panel's .active class -- viewer.js re-syncs it from here.
+      if(window.__syncCanvasChrome) window.__syncCanvasChrome();
+      else if(window.__measureAppMode) window.__measureAppMode();
       if(name === 'viewer'){
         // Viewing the generated G-code: drop the live blue draft so the
         // rainbow toolpath is unobstructed.
@@ -527,9 +560,20 @@
       btn.addEventListener('click', function(){ activateMode(btn.dataset.mode); });
     });
     window.setAppMode = activateMode;
-    var savedMode = null;
-    try { savedMode = localStorage.getItem('app-mode'); } catch(e){}
-    activateMode((savedMode && panels[savedMode]) ? savedMode : 'design');
+    // A load always starts in Design, never in the G-code Viewer.
+    //
+    // The mode used to be replayed from localStorage, but it is not a
+    // preference -- it is a consequence. A successful Generate switches to
+    // 'viewer' (see the generate handler), which persisted, so the NEXT load
+    // opened the viewer. The generated G-code only ever lives in memory, so
+    // after a reload there is nothing to view: the user landed on an empty
+    // drop-zone panel instead of the design they were working on.
+    //
+    // Opening a session is opening a project, and a project starts at the
+    // design. The stale 'app-mode' key is cleared rather than left behind,
+    // so an older browser profile does not keep a value nothing reads.
+    activateMode('design');
+    try { localStorage.removeItem('app-mode'); } catch(e){}
   })();
 
   // ---- design wizard step bar (Model / Texture / Print / Generate) --------
@@ -576,9 +620,14 @@
       var idx = STEPS.indexOf(current);
       if(idx < STEPS.length - 1) activate(STEPS[idx + 1]);
     });
-    var savedStep = null;
-    try { savedStep = localStorage.getItem('designer-step'); } catch(e){}
-    activate((savedStep && panels[savedStep]) ? savedStep : 'model');
+    // Same reasoning as the mode above: a load starts the wizard at step 1
+    // (Model), not wherever the last session happened to stop. Landing on
+    // step 4 (Generate) with a restored design and no way to see what shape
+    // it is reads as broken, and "which step was I on" is not a decision
+    // worth persisting across a reload -- the design itself is, and that is
+    // restored separately (see the session-restore prompt).
+    activate('model');
+    try { localStorage.removeItem('designer-step'); } catch(e){}
     return activate;
   })();
 
@@ -2100,7 +2149,14 @@
   function defaultsToPts(defaults, ts){
     return defaults.map(function(v,i){ return {t: ts[i], v: v}; });
   }
-  function makeEditor(canvasId, lo, hi, defaults, refVal, refLabel){
+  // readoutFmt (optional): function(pt) -> {mm: string, sub: string}, called
+  // with the active {t,v} control point to describe it in real units. Each
+  // editor's Y axis means something different (radius scale, mm of wave
+  // amplitude, width multiplier), so the caller supplies its own formatter
+  // rather than this shared factory guessing units. readoutElId (optional):
+  // id of a persistent DOM node (with .cv-readout-mm / .cv-readout-sub
+  // children) that mirrors the on-canvas label and survives mouseup.
+  function makeEditor(canvasId, lo, hi, defaults, refVal, refLabel, readoutFmt, readoutElId){
     var cv = document.getElementById(canvasId);
     var ctx = cv.getContext('2d');
     var W = cv.width, H = cv.height;
@@ -2108,6 +2164,14 @@
     var defaultTs = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
     var pts = defaultsToPts(defaults, defaultTs);
     var dragging = -1;
+    var hoverIdx = -1;
+    // Last point actually interacted with (drag or hover), kept as an object
+    // reference rather than an index -- indices shift on add/remove/sort, but
+    // the point object itself stays valid until it is removed.
+    var lastTouchedPt = null;
+    var readoutEl = readoutElId ? document.getElementById(readoutElId) : null;
+    var readoutMmEl = readoutEl ? readoutEl.querySelector('.cv-readout-mm') : null;
+    var readoutSubEl = readoutEl ? readoutEl.querySelector('.cv-readout-sub') : null;
 
     function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
     function px(t){ return PADL + t*(W-PADL-PADR); }
@@ -2152,15 +2216,41 @@
       ctx.fillText(refLabel, PADL+2, py(refVal)-2);
       ctx.fillText('bottom', PADL, H-2);
       ctx.fillText('top', W-18, H-2);
-      // numeric readout for the point being dragged
-      if(dragging >= 0 && pts[dragging]){
-        var dp = pts[dragging];
-        ctx.fillStyle = accent;
+      // Numeric readout for the active point (dragging, else hovered) --
+      // drawn right next to the dot so the eye never has to leave the point.
+      var activeIdx = dragging >= 0 ? dragging : hoverIdx;
+      if(activeIdx >= 0 && pts[activeIdx]){
+        var dp = pts[activeIdx];
+        lastTouchedPt = dp;
+        var label = readoutFmt ? readoutFmt(dp).mm
+                                : ('t=' + dp.t.toFixed(2) + ' v=' + dp.v.toFixed(2));
         ctx.font = '10px sans-serif';
-        var label = 't=' + dp.t.toFixed(2) + ' v=' + dp.v.toFixed(2);
-        var lx = Math.min(px(dp.t) + 8, W - 78);
-        var ly = Math.max(py(dp.v) - 8, 12);
+        var tw = ctx.measureText(label).width;
+        var lx = px(dp.t) + 8;
+        if(lx + tw + 4 > W) lx = px(dp.t) - tw - 8;   // flip left near the right edge
+        lx = Math.max(2, Math.min(lx, W - tw - 2));   // clamp inside the canvas
+        var ly = py(dp.v) - 8;
+        ly = Math.max(11, Math.min(ly, H - PADB - 3));
+        // Backing plate so the label stays legible over the filled curve area.
+        ctx.fillStyle = 'rgba(10,11,13,0.72)';
+        ctx.fillRect(lx - 3, ly - 10, tw + 6, 13);
+        ctx.fillStyle = accent;
         ctx.fillText(label, lx, ly);
+      }
+      // Persistent readout: the active point, or the last one touched, so the
+      // value survives mouseup instead of vanishing with the cursor. Recomputed
+      // from readoutFmt on every draw(), so a redraw after design.radius /
+      // design.height changes (see the d-radius/d-height hooks below) is
+      // enough to bring it current -- no separate "refresh" path needed.
+      if(readoutMmEl && readoutSubEl){
+        if(lastTouchedPt && readoutFmt){
+          var info = readoutFmt(lastTouchedPt);
+          readoutMmEl.textContent = info.mm;
+          readoutSubEl.textContent = info.sub ? ('  ' + info.sub) : '';
+        } else {
+          readoutMmEl.textContent = '--';
+          readoutSubEl.textContent = 'hover or drag a point';
+        }
       }
     }
 
@@ -2207,7 +2297,21 @@
       draw(); onChange();
     });
     window.addEventListener('mouseup', function(){
-      if(dragging >= 0){ dragging=-1; draw(); }   // clear the readout
+      // Stop dragging and clear the on-canvas label; the persistent readout
+      // keeps showing this point (lastTouchedPt) until another is touched.
+      if(dragging >= 0){ dragging=-1; draw(); }
+    });
+
+    // Hover (no button held): cheap on a canvas this small, and it is what
+    // lets the mm readout appear before the user commits to a drag.
+    cv.addEventListener('mousemove', function(e){
+      if(dragging >= 0) return;   // the window-level drag listener handles this
+      var p = evtXY(e);
+      var idx = nearest(p[0], p[1]);
+      if(idx !== hoverIdx){ hoverIdx = idx; draw(); }
+    });
+    cv.addEventListener('mouseleave', function(){
+      if(hoverIdx !== -1){ hoverIdx = -1; draw(); }
     });
 
     // Double-click: insert a new point at the clicked position.
@@ -2221,6 +2325,7 @@
       if(hit >= 0) return;
       pts.push({t:t, v:v});
       sortPts();
+      hoverIdx = -1;   // point positions shifted; stale index would mislabel
       draw(); onChange();
     });
 
@@ -2231,7 +2336,9 @@
       var p = evtXY(e);
       var idx = nearest(p[0], p[1]);
       if(idx <= 0 || idx >= pts.length-1) return; // can't remove endpoints
+      if(pts[idx] === lastTouchedPt) lastTouchedPt = null;
       pts.splice(idx, 1);
+      hoverIdx = -1;
       draw(); onChange();
     });
 
@@ -2243,7 +2350,11 @@
         sortPts();
         return pts.map(function(p){ return [p.t, p.v]; });
       },
-      reset: function(){ pts = defaultsToPts(defaults, defaultTs); draw(); onChange(); },
+      reset: function(){
+        pts = defaultsToPts(defaults, defaultTs);
+        hoverIdx = -1; lastTouchedPt = null;
+        draw(); onChange();
+      },
       setChangeHandler: function(fn){ onChange = fn; },
       setProfile: function(prof){
         if(!prof || prof.length < 2) return;
@@ -2251,6 +2362,8 @@
         sortPts();
         pts[0].t = 0;
         pts[pts.length-1].t = 1.0;
+        // The old point objects are gone; drop any reference to them.
+        hoverIdx = -1; lastTouchedPt = null;
         draw();
       },
       // Changes the editor's ceiling (e.g. a new printer's z_amp_max), the
@@ -2273,15 +2386,58 @@
     };
   }
 
+  // ---- per-editor mm readouts ---------------------------------------------
+  // Each curve editor's Y axis means something different (a radius scale
+  // factor, mm of wave amplitude, a line-width multiplier), so each gets its
+  // own formatter rather than the shared makeEditor() factory guessing units.
+  // Height mm is always t * design.height (a point's X position is the
+  // height fraction); degenerate design.radius/height/nozzle (unset, zero,
+  // non-finite) fall back to "--" rather than printing garbage.
+  function fmtHeightMm(t){
+    var h = design.height;
+    return (typeof h === 'number' && isFinite(h) && h > 0) ? (t * h) : null;
+  }
+  function silReadout(pt){
+    var r = design.radius;
+    var mm = (typeof r === 'number' && isFinite(r) && r > 0) ? (r * pt.v) : null;
+    var h = fmtHeightMm(pt.t);
+    return {
+      mm: mm != null ? ('R ' + mm.toFixed(1) + ' mm') : 'R --',
+      sub: pt.v.toFixed(2) + 'x' + (h != null ? ('  @ H ' + h.toFixed(1) + ' mm') : '')
+    };
+  }
+  function ampReadout(pt){
+    // This editor's Y axis is already millimetres of wave amplitude
+    // (0..z_amp_max), not a scale factor -- no multiplication needed.
+    var h = fmtHeightMm(pt.t);
+    return {
+      mm: 'amp ' + pt.v.toFixed(2) + ' mm',
+      sub: h != null ? ('@ H ' + h.toFixed(1) + ' mm') : ''
+    };
+  }
+  function widthReadout(pt){
+    // This editor's Y axis is a multiplier on the nominal bead width, which
+    // is either the explicit override (design.line_width) or nozzle*1.125 --
+    // the same formula the "Flow line width" hint on the Print tab uses.
+    var nz = (design.nozzle === '' || design.nozzle == null) ? 0.4 : parseFloat(design.nozzle);
+    var nominal = design.line_width != null ? design.line_width : (isFinite(nz) ? nz * 1.125 : null);
+    var mm = (nominal != null && isFinite(nominal)) ? (pt.v * nominal) : null;
+    var h = fmtHeightMm(pt.t);
+    return {
+      mm: mm != null ? ('line ' + mm.toFixed(2) + ' mm') : 'line --',
+      sub: pt.v.toFixed(2) + 'x' + (h != null ? ('  @ H ' + h.toFixed(1) + ' mm') : '')
+    };
+  }
+
   // Default amp curve peaks at 1.6mm: with the default 5 waves on r=32 that is
   // wave slope 0.25 - the empirically printable ceiling on this machine
   // (2026-07-05 print: slopes beyond ~0.25 collapsed above half height).
   var ampEditor = makeEditor('amp-curve', 0, AMP_MAX, [0, 0.3, 0.6, 0.8, 0.8, 0.5],
-                             PROBE_LIMIT, 'amp limit 0.95');
+                             PROBE_LIMIT, 'amp limit 0.95', ampReadout, 'amp-readout');
   var silEditor = makeEditor('sil-curve', RAD_LO, RAD_HI, [1,1,1,1,1,1],
-                             1.0, '1.0');
+                             1.0, '1.0', silReadout, 'sil-readout');
   var widthEditor = makeEditor('width-curve', 0.6, 1.8, [1,1,1,1,1,1],
-                               1.0, '1.0');
+                               1.0, '1.0', widthReadout, 'width-readout');
   // Restore persisted curve shapes.
   ampEditor.setProfile(design.amp_profile);
   silEditor.setProfile(design.radius_profile);
@@ -2619,6 +2775,21 @@
   bindSelect('d-shape', 'shape');
   bindNumber('d-radius', 'radius');
   bindNumber('d-height', 'height');
+  // The silhouette/amp/width mm readouts derive from design.radius and
+  // design.height (radius*scale, t*height) but only recompute when an
+  // editor redraws -- bindNumber() above never touches those canvases, so a
+  // Model-tab radius/height edit would otherwise leave a stale mm figure
+  // showing under Texture until the user happened to touch a curve point.
+  // draw() re-invokes each editor's formatter against the CURRENT design
+  // values every time, so a bare redraw is enough; no extra state to sync.
+  (function(){
+    var radiusEl = document.getElementById('d-radius');
+    var heightEl = document.getElementById('d-height');
+    if(radiusEl) radiusEl.addEventListener('input', function(){ silEditor.draw(); });
+    if(heightEl) heightEl.addEventListener('input', function(){
+      ampEditor.draw(); silEditor.draw(); widthEditor.draw();
+    });
+  })();
   bindNumber('d-lh', 'layer_height');
   bindNumber('d-xytwist', 'xy_twist');
   bindNumber('d-starpoints', 'star_points', true);
@@ -3273,6 +3444,7 @@
 
   // Print tab.
   bindSelect('d-nozzle', 'nozzle');
+  document.getElementById('d-nozzle').addEventListener('change', function(){ widthEditor.draw(); });
   bindNumber('d-speed', 'print_speed');
   bindSelect('d-filament', 'filament');
   (function(){
@@ -3283,6 +3455,7 @@
       var v = parseFloat(el.value);
       design.line_width = (el.value === '' || Number.isNaN(v)) ? null : v;
       persistDesign();
+      widthEditor.draw();   // its mm readout depends on the nominal bead width
     });
   })();
 
@@ -4315,12 +4488,23 @@
     // invisible for the whole generate -- which is exactly what it did.
     if(genProgressEl){ genProgressEl.style.display = 'block'; genProgressEl.setAttribute('aria-valuenow', String(pct)); }
     if(genProgressFill) genProgressFill.style.width = pct + '%';
+    // Header brand mark: same fraction, same clamp-to-99 intent, so the
+    // spiral never visually completes before the stream's 'done' line does.
+    if(headerMarkEl){
+      headerMarkEl.classList.remove('is-busy-indeterminate');
+      headerMarkEl.classList.add('is-busy-determinate');
+      headerMarkEl.style.setProperty('--mark-progress', pct / 100);
+    }
     statusEl.className = '';
     statusEl.textContent = label + '... ' + pct + '%';
   }
   function hideGenProgress(){
     if(genProgressEl) genProgressEl.style.display = 'none';
     if(genProgressFill) genProgressFill.style.width = '0%';
+    if(headerMarkEl){
+      headerMarkEl.classList.remove('is-busy-determinate');
+      headerMarkEl.style.removeProperty('--mark-progress');
+    }
   }
 
   // Applies a successful /api/generate result (the streaming path's "done"

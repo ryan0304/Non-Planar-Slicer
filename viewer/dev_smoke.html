@@ -465,10 +465,9 @@
     check('closing the guide sets trident-guide-seen',
           seenAfterClose === '1', 'got ' + seenAfterClose);
 
-    // Every slide carries an animated figure -- the guide is meant to SHOW the
-    // control being described, with a cursor moving to it, not just describe it
-    // in prose. A slide that loses its figure silently regresses to a wall of
-    // text, which is what this replaced.
+    // Every slide carries a figure -- the guide is meant to SHOW the control
+    // being described, not just describe it in prose. A slide that loses its
+    // figure silently regresses to a wall of text, which is what this replaced.
     var guideSlides = w.document.querySelectorAll('#guide-modal .guide-slide');
     var slidesWithFig = 0;
     Array.prototype.forEach.call(guideSlides, function(sl){
@@ -478,10 +477,39 @@
           guideSlides.length > 0 && slidesWithFig === guideSlides.length,
           slidesWithFig + ' of ' + guideSlides.length);
 
+    // Each figure after the first is a RECORDING: a run of frames captured from
+    // this app while a real click was driven through it (viewer/guide/README.md).
+    // data-count is written by hand next to a directory of files, so the two can
+    // drift -- a count that overshoots renders a broken image at the end of the
+    // sequence, one that undershoots silently drops the payoff frame. Assert the
+    // built stack matches what the slide declares, and that the sequence stayed
+    // long enough to actually be a sequence.
+    var recFigs = w.document.querySelectorAll('#guide-modal .guide-fig[data-frames]');
+    var recOk = 0, recDetail = [];
+    Array.prototype.forEach.call(recFigs, function(fig){
+      var want = parseInt(fig.getAttribute('data-count'), 10);
+      var got = fig.querySelectorAll('img.guide-shot').length;
+      if(want >= 2 && got === want && fig.querySelector('.gf-replay')) recOk++;
+      else recDetail.push(fig.getAttribute('data-frames') + ' want ' + want + ' got ' + got);
+    });
+    check('every recorded figure built the frames it declares, plus a Replay control',
+          recFigs.length >= 5 && recOk === recFigs.length,
+          recFigs.length + ' figures; ' + (recDetail.join('; ') || 'none built'));
+
+    // Exactly one frame visible at a time: two frames carrying .gf-on stack on
+    // top of each other and the sequence reads as a smear rather than a click.
+    var multiLit = [];
+    Array.prototype.forEach.call(recFigs, function(fig){
+      var lit = fig.querySelectorAll('img.guide-shot.gf-on').length;
+      if(lit > 1) multiLit.push(fig.getAttribute('data-frames') + ' lit ' + lit);
+    });
+    check('no recorded figure shows more than one frame at once',
+          multiLit.length === 0, multiLit.join('; '));
+
     // The figures are decoration and must never be the only carrier of meaning:
-    // each one is aria-hidden or purely presentational, and the prose beside it
-    // says the same thing. Assert the trigger keeps an accessible name even
-    // though it now shows a word rather than a glyph.
+    // the frames are alt="" and the prose beside them says the same thing.
+    // Assert the trigger keeps an accessible name even though it now shows a
+    // word rather than a glyph.
     var gBtn = w.document.getElementById('guide-btn');
     check('the guide trigger reads as words and keeps an accessible name',
           /how to use/i.test((gBtn.textContent || '').trim()) &&

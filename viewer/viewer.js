@@ -2829,7 +2829,7 @@ function measureReload(){
   measurePts = [];
   measureHoverPt = null;
   measureRingInfo = null;
-  measureSyncAppMode();
+  syncCanvasChromeForMode();
   if(measureOn) measureBuildGrid();
   measureRedraw();
   measureRenderCard();
@@ -2840,13 +2840,30 @@ function measureReload(){
 // Without the mode half, the rail stayed on the canvas in Design mode -- one
 // click away from measuring the loaded G-code while the canvas is showing the
 // blue draft preview of a shape that has since been edited.
-function measureSyncAppMode(){
-  const rail = document.getElementById('tool-rail');
+// Everything that floats ON the canvas has to follow the app mode by hand.
+// The canvas is visible in BOTH modes, so none of this chrome is covered by
+// the panel's own .active class toggling -- it has to be told.
+//
+// The telemetry card is here for exactly that reason: load() shows it when a
+// file loads (see the has-timeline block) and nothing hid it again, so
+// switching Design -> G-code Viewer -> Design left a telemetry readout
+// floating over the design view, describing G-code the user is no longer
+// looking at. Its display is restored (not forced) when returning to the
+// viewer so the card's own collapsed/expanded state survives.
+function syncCanvasChromeForMode(){
   const show = viewerModeActive() && !!extArr;
+
+  const rail = document.getElementById('tool-rail');
   if(rail) rail.style.display = show ? '' : 'none';
   if(!show && measureOn) measureSetOn(false);
+
+  const tele = document.getElementById('telemetry-card');
+  if(tele) tele.style.display = show ? '' : 'none';
 }
-window.__measureAppMode = measureSyncAppMode;
+// Kept under the old name too: designer.js's activateMode() calls it, and a
+// silently-renamed hook is a chrome-desync bug that only shows up at runtime.
+window.__syncCanvasChrome = syncCanvasChromeForMode;
+window.__measureAppMode = syncCanvasChromeForMode;
 
 document.getElementById('tool-measure').addEventListener('click', function(){
   measureSetOn(!measureOn);
@@ -2948,6 +2965,195 @@ window.__measureState = function(){
     } : null
   };
 };
+
+// ---- measure card: drag / lock / reset -------------------------------------
+// The card ships CSS-anchored bottom-right of the canvas (.measure-card in
+// style.css: right:76px, bottom:var(--overlay-bottom)) so by design it can sit
+// right on top of the geometry someone is trying to measure. Dragging swaps it
+// to an explicit inline left/top; Reset just deletes those inline styles so
+// the CSS anchor takes back over -- no separate "remembered original spot" to
+// keep in sync with a stylesheet this task does not own.
+//
+// This file owns every DOM/CSS change for this feature (index.html and
+// style.css are being edited elsewhere right now), so the lock/reset buttons
+// and their styling are injected here rather than hand-added to the markup.
+// Colour stays on --measure/MEASURE_COL, same token the rest of this tool
+// uses -- see the reserved-token comment at the top of style.css.
+const MEASURE_POS_KEY = 'measure-card-pos';
+const MEASURE_LOCK_KEY = 'measure-card-locked';
+const MEASURE_CARD_W = 246;      // mirrors .measure-card's width in style.css
+const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, however far it is dragged
+
+(function(){
+  const card = document.getElementById('measure-card');
+  const head = card ? card.querySelector('.measure-head') : null;
+  const closeBtn = document.getElementById('measure-close');
+  if(!card || !head || !closeBtn) return;   // defensive: markup shape changed elsewhere
+
+  const css = document.createElement('style');
+  css.textContent =
+    '.measure-head{cursor:grab;touch-action:none;}' +
+    '.measure-head.measure-dragging{cursor:grabbing;}' +
+    '.measure-head.measure-locked{cursor:default;}' +
+    '.measure-head-actions{display:flex;align-items:center;gap:2px;}' +
+    '.measure-drag-btn{background:none;border:none;color:var(--ink);cursor:pointer;' +
+      'font-size:12px;min-width:22px;min-height:22px;padding:2px 5px;line-height:1;' +
+      'border-radius:4px;font-family:var(--font-ui);opacity:.75;' +
+      'transition:color .15s,background-color .15s,opacity .15s;}' +
+    '.measure-drag-btn:hover{opacity:1;color:var(--ink);background:var(--surface-raised);}' +
+    '.measure-drag-btn[aria-pressed="true"]{opacity:1;color:var(--measure);' +
+      'background:var(--measure-dim);}';
+  document.head.appendChild(css);
+
+  // Grouping reset+lock+close in their own flex box (instead of dropping them
+  // straight into .measure-head) keeps the existing title-left/controls-right
+  // layout: .measure-head is `justify-content:space-between` over exactly two
+  // children today, and adding buttons directly would spread all of them out
+  // evenly instead of clustering them against the close button.
+  const actions = document.createElement('div');
+  actions.className = 'measure-head-actions';
+
+  const resetBtn = document.createElement('button');
+  resetBtn.id = 'measure-reset-pos';
+  resetBtn.type = 'button';
+  resetBtn.className = 'measure-drag-btn';
+  resetBtn.title = 'Reset card position';
+  resetBtn.setAttribute('aria-label', 'Reset card position');
+  resetBtn.innerHTML = '&#8634;';    // anticlockwise open circle arrow
+
+  const lockBtn = document.createElement('button');
+  lockBtn.id = 'measure-lock-pos';
+  lockBtn.type = 'button';
+  lockBtn.className = 'measure-drag-btn';
+  lockBtn.setAttribute('aria-pressed', 'false');
+
+  actions.appendChild(resetBtn);
+  actions.appendChild(lockBtn);
+  actions.appendChild(closeBtn);   // re-parented, not cloned -- its own listener (below) is untouched
+  head.appendChild(actions);
+
+  let locked = false;
+  let dragging = false;
+  let dragStartX = 0, dragStartY = 0, dragOrigLeft = 0, dragOrigTop = 0;
+
+  function updateLockUI(){
+    lockBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+    lockBtn.title = locked ? 'Unlock card position' : 'Lock card position (prevents dragging)';
+    lockBtn.setAttribute('aria-label', lockBtn.title);
+    lockBtn.innerHTML = locked ? '&#128274;' : '&#128275;';   // closed / open padlock
+    head.classList.toggle('measure-locked', locked);
+  }
+
+  // Keeps at least MEASURE_REACH_PAD px of the card within the wrap on every
+  // side: horizontally by bounding how far left/right of it can go relative
+  // to its own (fixed) width, vertically by never letting the header strip
+  // above the wrap's top edge and never letting the whole card slide past the
+  // bottom. This is what stands between a bad drag and a card the user can
+  // never click again -- see the CLAUDE.md-adjacent brief for why that matters.
+  function clamp(left, top){
+    const minLeft = MEASURE_REACH_PAD - MEASURE_CARD_W;
+    const maxLeft = Math.max(minLeft, wrap.clientWidth - MEASURE_REACH_PAD);
+    const maxTop = Math.max(0, wrap.clientHeight - MEASURE_REACH_PAD);
+    return {
+      left: Math.min(maxLeft, Math.max(minLeft, left)),
+      top: Math.min(maxTop, Math.max(0, top))
+    };
+  }
+
+  function applyPos(left, top){
+    const c = clamp(left, top);
+    card.style.right = 'auto';
+    card.style.bottom = 'auto';
+    card.style.left = c.left + 'px';
+    card.style.top = c.top + 'px';
+  }
+
+  function savePos(){
+    try {
+      localStorage.setItem(MEASURE_POS_KEY, JSON.stringify({
+        left: parseFloat(card.style.left), top: parseFloat(card.style.top)
+      }));
+    } catch(e){}
+  }
+
+  function resetPos(){
+    card.style.left = '';
+    card.style.top = '';
+    card.style.right = '';
+    card.style.bottom = '';
+    // Reset only clears the remembered position; a reload without this would
+    // put the card right back where it was, which is not what "reset" means.
+    try { localStorage.removeItem(MEASURE_POS_KEY); } catch(e){}
+  }
+
+  function endDrag(){
+    if(!dragging) return;
+    dragging = false;
+    head.classList.remove('measure-dragging');
+    savePos();
+  }
+
+  head.addEventListener('pointerdown', function(e){
+    if(locked || e.button !== 0) return;
+    if(e.target.closest('button')) return;   // reset/lock/close live in this same strip
+    const cardRect = card.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    dragOrigLeft = cardRect.left - wrapRect.left;
+    dragOrigTop = cardRect.top - wrapRect.top;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragging = true;
+    applyPos(dragOrigLeft, dragOrigTop);
+    head.classList.add('measure-dragging');
+    // The card is a sibling of the canvas, not a descendant, so this can
+    // never reach OrbitControls' own pointerdown listener regardless --
+    // preventDefault here just stops the browser reading the drag as a text
+    // or image selection gesture.
+    e.preventDefault();
+  });
+
+  // move/up/cancel + blur all live on window, the same freeze-safety pattern
+  // the shape-cage and nav-cube drags in this file use: if the pointer is
+  // released (or the window loses focus) anywhere other than exactly over the
+  // card, the drag still has to end, or the card is stuck following the
+  // pointer with no way to let go of it.
+  window.addEventListener('pointermove', function(e){
+    if(!dragging) return;
+    applyPos(dragOrigLeft + (e.clientX - dragStartX), dragOrigTop + (e.clientY - dragStartY));
+  });
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+  window.addEventListener('blur', endDrag);
+
+  // A stored (or mid-session) position can be stranded off-screen by a window
+  // resize -- reclamp live, not just on the next load.
+  window.addEventListener('resize', function(){
+    if(!card.style.left) return;   // still at the CSS default; nothing to reclamp
+    applyPos(parseFloat(card.style.left) || 0, parseFloat(card.style.top) || 0);
+    savePos();
+  });
+
+  resetBtn.addEventListener('click', resetPos);
+  lockBtn.addEventListener('click', function(){
+    locked = !locked;
+    updateLockUI();
+    try { localStorage.setItem(MEASURE_LOCK_KEY, locked ? '1' : '0'); } catch(e){}
+  });
+
+  // Restore persisted position/lock at load. The card is display:none at this
+  // point (nothing is loaded yet), but clamp() only needs the CSS-fixed card
+  // width (MEASURE_CARD_W) and the wrap's own size, neither of which depend
+  // on the card's own layout, so restoring while hidden is safe.
+  let storedPos = null;
+  try { storedPos = JSON.parse(localStorage.getItem(MEASURE_POS_KEY) || 'null'); } catch(e){}
+  if(storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)){
+    applyPos(storedPos.left, storedPos.top);
+  }
+  let storedLock = null;
+  try { storedLock = localStorage.getItem(MEASURE_LOCK_KEY); } catch(e){}
+  locked = storedLock === '1';
+  updateLockUI();
+})();
 
 // ---- orientation / view cube -----------------------------------------------
 // Bambu-Studio-style gizmo: a small cube in the corner that mirrors the main

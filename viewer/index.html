@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="Cache-Control" content="no-store" />
 <title>Trident Non-Planar G-code Generator &amp; Viewer</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cpath d='M48.00,34.00 C49.94,34.39 56.50,34.00 59.67,36.33 C62.83,38.67 66.41,43.52 67.00,48.00 C67.59,52.48 66.37,59.20 63.20,63.20 C60.04,67.20 53.66,71.41 48.00,72.00 C42.34,72.59 34.10,70.74 29.26,66.74 C24.43,62.74 19.59,54.84 19.00,48.00 C18.41,41.16 20.89,31.39 25.73,25.73 C30.56,20.06 44.29,15.95 48.00,14.00' fill='none' stroke='%239aa0a6' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -14,6 +15,11 @@
 <div id="app" class="app-shell">
   <div id="canvas-wrap" class="canvas-wrap">
     <div id="overlay" class="overlay"><div class="card">
+      <svg class="brand-mark full" width="120" height="120" viewBox="0 0 96 96" aria-hidden="true">
+        <path class="mark-base" d="M48.00,39.00 C48.48,38.72 49.96,37.38 50.86,37.31 C51.77,37.25 52.79,37.94 53.42,38.61 C54.05,39.28 54.17,40.57 54.67,41.33 C55.17,42.09 55.58,42.56 56.40,43.15 C57.22,43.74 58.72,44.08 59.61,44.89 C60.50,45.70 61.56,46.92 61.73,48.00 C61.89,49.08 61.20,50.40 60.61,51.38 C60.03,52.36 58.83,52.97 58.20,53.89 C57.58,54.81 57.33,55.69 56.88,56.88 C56.43,58.06 56.28,59.86 55.50,61.00 C54.73,62.14 53.46,63.34 52.21,63.72 C50.96,64.10 49.32,63.58 48.00,63.25 C46.68,62.92 45.61,62.05 44.32,61.74 C43.03,61.43 41.76,61.59 40.25,61.42 C38.75,61.24 36.72,61.36 35.31,60.69 C33.90,60.01 32.48,58.72 31.79,57.36 C31.10,56.00 31.25,54.07 31.15,52.51 C31.06,50.95 31.39,49.55 31.23,48.00 C31.06,46.45 30.35,44.95 30.15,43.22 C29.94,41.48 29.49,39.28 29.98,37.60 C30.48,35.91 31.74,34.21 33.10,33.10 C34.47,32.00 36.53,31.62 38.17,30.98 C39.82,30.33 41.33,29.97 42.97,29.23 C44.61,28.48 46.15,27.17 48.00,26.50 C49.85,25.83 52.15,25.02 54.10,25.24 C56.04,25.45 58.10,26.58 59.67,27.79 C61.24,28.99 62.25,30.97 63.51,32.49 C64.77,34.01 65.86,35.37 67.22,36.90 C68.59,38.43 70.52,39.80 71.68,41.65 C72.85,43.50 74.06,45.84 74.22,48.00 C74.39,50.16 73.56,52.59 72.69,54.62 C71.82,56.64 70.19,58.29 69.03,60.14 C67.87,61.99 66.93,63.77 65.72,65.72 C64.51,67.66 63.47,70.14 61.75,71.82 C60.04,73.50 57.74,75.14 55.45,75.79 C53.16,76.45 50.39,76.08 48.00,75.75 C45.61,75.42 43.42,74.40 41.08,73.81 C38.75,73.23 36.44,72.96 34.00,72.24 C31.57,71.53 28.65,70.97 26.47,69.53 C24.30,68.09 22.20,65.91 20.96,63.61 C19.73,61.31 19.45,58.35 19.08,55.75 C18.71,53.15 18.89,50.63 18.73,48.00 C18.56,45.37 18.00,42.76 18.07,39.98 C18.15,37.21 18.13,33.97 19.16,31.35 C20.19,28.73 22.14,26.13 24.26,24.26 C26.39,22.40 29.34,21.33 31.92,20.15 C34.50,18.97 37.06,18.18 39.73,17.15 C42.41,16.13 46.62,14.53 48.00,14.00"/>
+        <path class="mark-highlight" d="M48.00,39.00 C48.48,38.72 49.96,37.38 50.86,37.31 C51.77,37.25 52.79,37.94 53.42,38.61 C54.05,39.28 54.17,40.57 54.67,41.33 C55.17,42.09 55.58,42.56 56.40,43.15 C57.22,43.74 58.72,44.08 59.61,44.89 C60.50,45.70 61.56,46.92 61.73,48.00 C61.89,49.08 61.20,50.40 60.61,51.38 C60.03,52.36 58.83,52.97 58.20,53.89 C57.58,54.81 57.33,55.69 56.88,56.88 C56.43,58.06 56.28,59.86 55.50,61.00 C54.73,62.14 53.46,63.34 52.21,63.72 C50.96,64.10 49.32,63.58 48.00,63.25 C46.68,62.92 45.61,62.05 44.32,61.74 C43.03,61.43 41.76,61.59 40.25,61.42 C38.75,61.24 36.72,61.36 35.31,60.69 C33.90,60.01 32.48,58.72 31.79,57.36 C31.10,56.00 31.25,54.07 31.15,52.51 C31.06,50.95 31.39,49.55 31.23,48.00 C31.06,46.45 30.35,44.95 30.15,43.22 C29.94,41.48 29.49,39.28 29.98,37.60 C30.48,35.91 31.74,34.21 33.10,33.10 C34.47,32.00 36.53,31.62 38.17,30.98 C39.82,30.33 41.33,29.97 42.97,29.23 C44.61,28.48 46.15,27.17 48.00,26.50 C49.85,25.83 52.15,25.02 54.10,25.24 C56.04,25.45 58.10,26.58 59.67,27.79 C61.24,28.99 62.25,30.97 63.51,32.49 C64.77,34.01 65.86,35.37 67.22,36.90 C68.59,38.43 70.52,39.80 71.68,41.65 C72.85,43.50 74.06,45.84 74.22,48.00 C74.39,50.16 73.56,52.59 72.69,54.62 C71.82,56.64 70.19,58.29 69.03,60.14 C67.87,61.99 66.93,63.77 65.72,65.72 C64.51,67.66 63.47,70.14 61.75,71.82 C60.04,73.50 57.74,75.14 55.45,75.79 C53.16,76.45 50.39,76.08 48.00,75.75 C45.61,75.42 43.42,74.40 41.08,73.81 C38.75,73.23 36.44,72.96 34.00,72.24 C31.57,71.53 28.65,70.97 26.47,69.53 C24.30,68.09 22.20,65.91 20.96,63.61 C19.73,61.31 19.45,58.35 19.08,55.75 C18.71,53.15 18.89,50.63 18.73,48.00 C18.56,45.37 18.00,42.76 18.07,39.98 C18.15,37.21 18.13,33.97 19.16,31.35 C20.19,28.73 22.14,26.13 24.26,24.26 C26.39,22.40 29.34,21.33 31.92,20.15 C34.50,18.97 37.06,18.18 39.73,17.15 C42.41,16.13 46.62,14.53 48.00,14.00"/>
+        <circle class="mark-dot" cx="48" cy="14" r="3.2"/>
+      </svg>
       <div class="card-title">Drop a <b>.gcode</b> file here</div>
       <div class="sub" style="margin:0">or use the picker on the right</div>
     </div></div>
@@ -103,7 +109,13 @@
   <div id="splitter" class="splitter" title="Drag to resize"></div>
   <div id="panel" class="panel">
     <div id="panel-scroll" class="panel-scroll">
-    <h1>Trident Non-Planar G-code Generator &amp; Viewer</h1>
+    <div id="brand-row" class="brand-row">
+      <svg id="brand-mark-header" class="brand-mark simple" width="22" height="22" viewBox="0 0 96 96" aria-hidden="true">
+        <path class="mark-base" d="M48.00,34.00 C49.94,34.39 56.50,34.00 59.67,36.33 C62.83,38.67 66.41,43.52 67.00,48.00 C67.59,52.48 66.37,59.20 63.20,63.20 C60.04,67.20 53.66,71.41 48.00,72.00 C42.34,72.59 34.10,70.74 29.26,66.74 C24.43,62.74 19.59,54.84 19.00,48.00 C18.41,41.16 20.89,31.39 25.73,25.73 C30.56,20.06 44.29,15.95 48.00,14.00"/>
+        <path class="mark-highlight" d="M48.00,34.00 C49.94,34.39 56.50,34.00 59.67,36.33 C62.83,38.67 66.41,43.52 67.00,48.00 C67.59,52.48 66.37,59.20 63.20,63.20 C60.04,67.20 53.66,71.41 48.00,72.00 C42.34,72.59 34.10,70.74 29.26,66.74 C24.43,62.74 19.59,54.84 19.00,48.00 C18.41,41.16 20.89,31.39 25.73,25.73 C30.56,20.06 44.29,15.95 48.00,14.00"/>
+      </svg>
+      <h1>Trident Non-Planar G-code Generator &amp; Viewer</h1>
+    </div>
     <div class="sub">Continuous single-Z toolpath preview</div>
     <div class="mobile-note">Best experienced on desktop &#8212; cage-handle drag, curve-editor
       drag and per-turn arrow-key playback are pointer/keyboard interactions.</div>
@@ -279,6 +291,7 @@
         <div class="cv-editor">
           <div class="cv-head"><b>Wave amplitude over height</b><span class="cv-reset" id="amp-reset">reset</span></div>
           <canvas id="amp-curve" width="360" height="100"></canvas>
+          <div id="amp-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span class="cv-readout-sub">hover or drag a point</span></div>
           <div id="slope-read" class="cv-note"></div>
         </div>
         <div class="hint" id="amp-limit-hint" style="margin-top:-2px"></div>
@@ -438,6 +451,7 @@
           </div>
           <div id="sil-sym-panel">
             <canvas id="sil-curve" width="360" height="100"></canvas>
+            <div id="sil-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span class="cv-readout-sub">hover or drag a point</span></div>
             <div class="hint" style="margin-top:2px">Scales the whole outline at each height.
               Double-click to add a point, right-click to remove, drag to shape. Shift = fine.</div>
           </div>
@@ -485,6 +499,7 @@
         <div class="cv-editor">
           <div class="cv-head"><b>Line width over height</b><span class="cv-reset" id="width-reset">reset</span></div>
           <canvas id="width-curve" width="360" height="100"></canvas>
+          <div id="width-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span class="cv-readout-sub">hover or drag a point</span></div>
           <div class="hint" style="margin-top:2px">Scales bead width at each height (0.6-1.8&times;).
             Double-click to add a point, right-click to remove, drag to shape. Shift = fine.</div>
         </div>
@@ -857,20 +872,8 @@
       <div class="guide-slide" data-slide="0">
         <h3>Read this first</h3>
         <div class="guide-fig" aria-hidden="true">
-          <svg viewBox="0 0 360 136" width="100%" height="136" preserveAspectRatio="xMidYMid meet">
-            <rect x="30" y="104" width="300" height="7" rx="2" fill="var(--surface)" stroke="var(--line)"/>
-            <g transform="translate(0,11)"><path d="M150 44 L170 44 L163 70 L157 70 Z" fill="var(--ink-muted)"/>
-            <rect x="152" y="70" width="6" height="8" fill="var(--ink)"/></g>
-            <rect x="196" y="46" width="20" height="30" rx="3" fill="var(--surface)" stroke="var(--ink-muted)"/>
-            <text x="206" y="40" font-size="9" fill="var(--ink-muted)" text-anchor="middle">probe</text>
-            <path d="M60 90 Q 110 78 160 90 T 260 90 T 330 86" fill="none" stroke="var(--accent)" stroke-width="2"/>
-            <g class="gf-reveal">
-              <line x1="206" y1="76" x2="206" y2="90" stroke="var(--accent)" stroke-width="1.5"/>
-              <line x1="200" y1="90" x2="212" y2="90" stroke="var(--accent)" stroke-width="1.5"/>
-              <text x="222" y="88" font-size="10" fill="var(--ink)">0.95 mm clearance</text>
-            </g>
-          </svg>
-          <div class="gf-caption gf-reveal-late">Measured after a probe strike &#8212; not a published spec.</div>
+          <img class="guide-shot" src="guide/00-read-first.png" alt="">
+          <div class="gf-caption">Measured after a probe strike &#8212; not a published spec.</div>
         </div>
         <ul>
           <li>This tool generates non-planar toolpaths directly &#8212; it is not a slicer
@@ -886,18 +889,7 @@
 
       <div class="guide-slide" data-slide="1">
         <h3>Fastest start</h3>
-        <div class="guide-fig" style="--x1:18px; --y1:104px; --x2:356px; --y2:12px; --x3:396px; --y3:64px;">
-          <div class="guide-fig-inner">
-            <div class="gf-row"><span>Preset</span><b>01 gentle wave vase</b></div>
-            <div class="gf-row"><span>Printer</span><b>Voron Trident</b></div>
-            <div class="gf-row" style="justify-content:flex-end;background:none;border:none;padding:0">
-              <span class="gf-btn">Generate</span>
-            </div>
-            <div class="gf-row gf-reveal-late" style="margin-top:4px"><span>Result</span><b>safe [OK] &#8212; 1.2 m filament</b></div>
-          </div>
-          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
-          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
-        </div>
+        <div class="guide-fig" data-frames="guide/01-fastest-start" data-count="6"></div>
         <ul>
           <li>Pick a preset from the preset bar at the top of Design.</li>
           <li>Press <b>Generate &amp; preview</b>.</li>
@@ -908,21 +900,7 @@
 
       <div class="guide-slide" data-slide="2">
         <h3>The four steps</h3>
-        <div class="guide-fig" style="--x1:16px; --y1:96px; --x2:57px; --y2:12px; --x3:362px; --y3:12px;">
-          <div class="guide-fig-inner">
-            <div class="gf-tabs">
-              <span class="gf-tab" style="color:var(--ink);border-bottom-color:var(--accent)">Model</span>
-              <span class="gf-tab">Texture</span>
-              <span class="gf-tab">Print</span>
-              <span class="gf-tab">Generate</span>
-            </div>
-            <div class="gf-row"><span>Shape, size, bottom</span><b>Model</b></div>
-            <div class="gf-row gf-reveal"><span>Patterns, blobs, fabric</span><b>Texture</b></div>
-            <div class="gf-row gf-reveal-late"><span>Speed, temps, printer</span><b>Print</b></div>
-          </div>
-          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
-          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
-        </div>
+        <div class="guide-fig" data-frames="guide/02-four-steps" data-count="5"></div>
         <ul>
           <li><b>1. Model</b> &#8212; pick a shape and its size, or import your own STL.</li>
           <li><b>2. Texture</b> &#8212; shape the Z-wave and silhouette curves, add a surface
@@ -934,22 +912,7 @@
 
       <div class="guide-slide" data-slide="3">
         <h3>Shaping</h3>
-        <div class="guide-fig" style="--x1:44px; --y1:104px; --x2:154px; --y2:76px; --x3:154px; --y3:32px;">
-          <svg viewBox="0 0 360 136" width="100%" height="136" preserveAspectRatio="xMidYMid meet">
-            <rect x="14" y="14" width="200" height="92" rx="6" fill="var(--surface)" stroke="var(--line)"/>
-            <text x="22" y="120" font-size="9" fill="var(--ink-muted)">bottom</text>
-            <text x="186" y="120" font-size="9" fill="var(--ink-muted)">top</text>
-            <path d="M24 84 L74 80 L124 76 L174 72 L204 70" fill="none" stroke="var(--ink-muted)" stroke-width="1.5" stroke-dasharray="3 3"/>
-            <path class="gf-reveal" d="M24 84 L74 70 L124 38 L174 60 L204 68" fill="none" stroke="var(--accent)" stroke-width="2"/>
-            <circle class="gf-reveal" cx="124" cy="38" r="4" fill="var(--accent)"/>
-            <path d="M262 108 L262 40 Q 262 28 286 28 Q 310 28 310 40 L310 108 Z" fill="none" stroke="var(--ink-muted)" stroke-width="1.5" stroke-dasharray="3 3"/>
-            <path class="gf-reveal-late" d="M262 108 L262 66 Q 250 44 286 28 Q 322 44 310 66 L310 108 Z" fill="none" stroke="var(--accent)" stroke-width="2"/>
-            <rect class="gf-reveal-late" x="258" y="106" width="56" height="5" rx="2" fill="var(--accent)" opacity="0.5"/>
-            <text x="286" y="128" font-size="9" fill="var(--ink-muted)" text-anchor="middle">solid bottom</text>
-          </svg>
-          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
-          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
-        </div>
+        <div class="guide-fig" data-frames="guide/03-shaping" data-count="5"></div>
         <ul>
           <li>Two curve editors: <b>Wave amplitude over height</b> and <b>Silhouette</b> (radius
             scale). In both, the left edge is the bottom of the print, the right edge the top.</li>
@@ -963,24 +926,7 @@
 
       <div class="guide-slide" data-slide="4">
         <h3>Textures</h3>
-        <div class="guide-fig" style="--x1:18px; --y1:104px; --x2:352px; --y2:12px; --x3:352px; --y3:38px;">
-          <div class="guide-fig-inner">
-            <div class="gf-row"><span>Texture</span><b>ripple</b></div>
-            <div class="gf-row gf-reveal"><span>or</span><b>loop fabric</b></div>
-            <svg viewBox="0 0 336 56" width="100%" height="56" style="margin-top:4px">
-              <path d="M6 14 Q 26 4 46 14 T 86 14 T 126 14 T 166 14 T 206 14 T 246 14 T 286 14 T 326 14"
-                    fill="none" stroke="var(--ink-muted)" stroke-width="1.5"/>
-              <path d="M6 26 Q 26 16 46 26 T 86 26 T 126 26 T 166 26 T 206 26 T 246 26 T 286 26 T 326 26"
-                    fill="none" stroke="var(--ink-muted)" stroke-width="1.5"/>
-              <g class="gf-reveal-late" stroke="var(--accent)" stroke-width="1.5" fill="none">
-                <path d="M6 42 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0"/>
-                <path d="M6 50 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0 q 10 -12 20 0 q 10 12 20 0"/>
-              </g>
-            </svg>
-          </div>
-          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
-          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
-        </div>
+        <div class="guide-fig" data-frames="guide/04-textures" data-count="4"></div>
         <ul>
           <li>Seven radial wave patterns (v-wave, h-wave, ripple, diamond, bubbles, pleats,
             hammered), plus blobs, plus loop fabric.</li>
@@ -993,18 +939,7 @@
 
       <div class="guide-slide" data-slide="5">
         <h3>After generating</h3>
-        <div class="guide-fig" style="--x1:76px; --y1:98px; --x2:200px; --y2:98px; --x3:312px; --y3:98px;">
-          <svg viewBox="0 0 360 136" width="100%" height="136" preserveAspectRatio="xMidYMid meet">
-            <path d="M140 96 L140 52 Q 140 40 168 40 Q 196 40 196 52 L196 96 Z" fill="none" stroke="var(--line)" stroke-width="1.5"/>
-            <path class="gf-reveal" d="M140 96 L140 70 Q 140 66 168 66 Q 196 66 196 70 L196 96 Z" fill="var(--accent)" opacity="0.30"/>
-            <path class="gf-reveal-late" d="M140 96 L140 52 Q 140 40 168 40 Q 196 40 196 52 L196 96 Z" fill="var(--accent)" opacity="0.30"/>
-            <rect x="40" y="102" width="280" height="4" rx="2" fill="var(--surface)" stroke="var(--line)"/>
-            <rect class="gf-reveal-late" x="40" y="102" width="240" height="4" rx="2" fill="var(--accent)"/>
-            <text x="180" y="128" font-size="9" fill="var(--ink-muted)" text-anchor="middle">drag the timeline to replay the print</text>
-          </svg>
-          <span class="guide-cursor"><svg viewBox="0 0 13 19" width="13" height="19" aria-hidden="true"><path d="M1 1 L1 15 L4.5 11.5 L7 17 L9.5 16 L7 10.5 L11.5 10.5 Z" fill="#f4f6f8" stroke="#11151a" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
-          <span class="gf-ping gf-ping-1"></span><span class="gf-ping gf-ping-2"></span>
-        </div>
+        <div class="guide-fig" data-frames="guide/05-after-generating" data-count="4"></div>
         <ul>
           <li>The viewer: a playback timeline, colour modes (plain / height / overhang), the
             measure tool, and the orientation cube.</li>
