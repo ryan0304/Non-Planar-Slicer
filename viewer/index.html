@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="Cache-Control" content="no-store" />
 <title>Trident Non-Planar G-code Generator &amp; Viewer</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cpath d='M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000' fill='none' stroke='%239aa0a6' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='11.5 11.5 73 73'%3E%3Cpath d='M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000' fill='none' stroke='%239aa0a6' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -15,7 +15,13 @@
 <div id="app" class="app-shell">
   <div id="canvas-wrap" class="canvas-wrap">
     <div id="overlay" class="overlay"><div class="card">
-      <svg class="brand-mark full" width="120" height="120" viewBox="0 0 96 96" aria-hidden="true">
+      <!-- viewBox frames the ARTWORK, not the 96-unit grid it was drawn on:
+           square, centred on the glyph's own visual bounds (stroke and accent
+           dot included) with 2u of padding. Drawn at 0 0 96 96 the filleted
+           glyph sat 4.7u low and filled barely half its box, so it rendered
+           smaller and lower than the simple variant beside it. See
+           brand/README.md; re-derive these numbers if the path changes. -->
+      <svg class="brand-mark full" width="120" height="120" viewBox="17.5 22.19 61.7 61.7" aria-hidden="true">
         <path class="mark-base" d="M 22.000,78.000 L 22.000,45.127 A 4.200 4.200 0 0 1 28.370,43.720 L 30.499,48.307 A 4.200 4.200 0 0 0 38.303,47.836 L 44.006,30.290 A 4.200 4.200 0 0 1 51.994,30.290 L 57.697,47.836 A 4.200 4.200 0 0 0 65.501,48.307 L 67.630,43.720 A 4.200 4.200 0 0 1 74.000,45.127 L 74.000,78.000"/>
         <path class="mark-highlight" d="M 22.000,78.000 L 22.000,45.127 A 4.200 4.200 0 0 1 28.370,43.720 L 30.499,48.307 A 4.200 4.200 0 0 0 38.303,47.836 L 44.006,30.290 A 4.200 4.200 0 0 1 51.994,30.290 L 57.697,47.836 A 4.200 4.200 0 0 0 65.501,48.307 L 67.630,43.720 A 4.200 4.200 0 0 1 74.000,45.127 L 74.000,78.000"/>
         <circle class="mark-dot" cx="74" cy="78" r="3.2"/>
@@ -110,7 +116,7 @@
   <div id="panel" class="panel">
     <div id="panel-scroll" class="panel-scroll">
     <div id="brand-row" class="brand-row">
-      <svg id="brand-mark-header" class="brand-mark simple" width="22" height="22" viewBox="0 0 96 96" aria-hidden="true">
+      <svg id="brand-mark-header" class="brand-mark simple" width="22" height="22" viewBox="11.5 11.5 73 73" aria-hidden="true">
         <path class="mark-base" d="M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000"/>
         <path class="mark-highlight" d="M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000"/>
       </svg>
