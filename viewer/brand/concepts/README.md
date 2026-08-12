@@ -1,8 +1,14 @@
 # Logo concepts (02-06)
 
-Five alternatives to the deployed mark (Concept 01, `viewer/brand/trident-mark-*.svg`),
-built for the user to compare and pick from before anything changes in the
-running app. **None of these are wired into `viewer/`.** Open
+> **Concept 06 (Constructed Trident) is the deployed mark.** It ships inline in
+> `viewer/index.html` and is exported to `viewer/brand/trident-mark-*.svg`; see
+> that folder's README for the geometry and the measured path lengths. The
+> files in *this* folder stay as they are -- they are the record of the choice,
+> not the source of what runs. Everything else here is still an alternative,
+> including Concepts 07a-c, which exist because 06 can read as a crown.
+
+Alternatives to Concept 01 (the original outward-spiral mark), built for the
+user to compare and pick from before anything changed in the running app. Open
 [`contact-sheet.html`](./contact-sheet.html) to see all six side by side at
 120/48/24/16px against the app's own `--bg`.
 
@@ -214,7 +220,13 @@ corners and a heavier stroke.
 Open `contact-sheet.html`. Everything is judged fairly against the same
 background (`#17191b`) at the same four sizes the app actually uses the
 mark at (120/48px favor detail; 24/16px is where it lives day to day:
-header bar, tab favicon, splash icon). Whichever concept is picked next is a
-separate deployment step -- swapping the inline copies in `index.html`,
-re-exporting the standalone files in `viewer/brand/`, and updating that
-folder's own README -- not something this folder does on its own.
+header bar, tab favicon, splash icon). Picking a concept is a separate
+deployment step -- swapping the inline copies in `index.html`, re-exporting
+the standalone files in `viewer/brand/`, and updating that folder's own
+README -- not something this folder does on its own.
+
+Deploying 06 took one step beyond that list, worth knowing before the next
+change: `--mark-len` in `style.css` is the glyph's **real path length**, and
+every dash figure in the busy animation is a fraction of it. Re-measure with
+`getTotalLength()` and update both values, or the header mark's comet and its
+progress fill run out of step with the shape they are drawn on.

@@ -4,10 +4,14 @@ Standalone copies of the Trident mark, for anything outside the app: a README
 header, a repo social image, slides, a sticker. Open any `.svg` directly in a
 browser or drop it into a design tool.
 
+The deployed mark is **Concept 06, Constructed Trident** (picked from
+`concepts/contact-sheet.html`; the concepts folder keeps the alternatives and
+the argument for and against each).
+
 | file | glyph | use |
 |---|---|---|
-| `trident-mark-full.svg` | 2 turns, sine ripple, nozzle dot | 32px and up. The one to use when the mark has room to be itself. |
-| `trident-mark-simple.svg` | 1 turn, no ripple, no dot | under 32px. The ripple goes sub-pixel and the two turns fuse into a blurred ring at small sizes, so detail is dropped on purpose. |
+| `trident-mark-full.svg` | filleted corners, nozzle dot | 32px and up. The one to use when the mark has room to be itself. |
+| `trident-mark-simple.svg` | sharp corners, heavier stroke, no dot | under 32px. A 4.2 fillet radius is sub-pixel well before 24px, so the rounding is dropped rather than smeared. |
 | `trident-favicon.svg` | same as simple | favicons / tab icons. |
 
 ## These are EXPORTS, not the source
@@ -40,23 +44,44 @@ someone updates them. They are a snapshot, not a binding.
 
 ## The idea
 
-The mark is a diagram of what the software does, not a picture of a printer.
-One unbroken stroke spirals outward, its radius perturbed by a bounded sine
-term:
+The product's own namesake, rebuilt as a toolpath rather than drawn as a
+weapon: a three-tine zigzag laid down in ONE unbroken stroke, where every
+interior corner is a fixed-radius tangent arc -- the corner blending a real
+G-code planner performs so the head never has to stop and restart at a vertex.
+That construction is the whole argument for using the obvious literal mark:
+it is a trident because the software is called Trident, and it is *this*
+trident because of how the corners are made.
 
-    r(theta) = r0 + (r1 - r0) * (theta / theta_max) + A * sin(n * theta)
-    x = 48 + r(theta) * cos(theta - pi/2)
-    y = 48 + r(theta) * sin(theta - pi/2)
+Both glyphs run from (22,78) to (74,78), so swapping between them at a size
+breakpoint does not jump. The stroke has TWO OPEN ENDS -- it is a path being
+travelled, not an outline enclosing a shape -- and the accent dot marks the
+end of the run.
 
-    full:   r0=9,  r1=34, theta_max=4pi, A=1.6, n=5   (path length ~282)
-    simple: r0=14, r1=34, theta_max=2pi, A=0          (path length ~152)
+**Geometry.** Fixed-radius corner fillet over a 7-point polyline:
 
-That is the same "base function plus a capped sine perturbation" the generator
-uses for Z-waves and radial texture. The path has ONE OPEN END on purpose: a
-closed loop reads as a finished part, an open one reads as still printing --
-which is true every time someone is looking at it. Both glyphs share the
-terminus (48,14) so swapping between them at a size breakpoint does not jump.
+    points: (22,78) (22,30) (35,58) (48,18) (61,58) (74,30) (74,78)
+    radius: 4.2
+
+    for each interior vertex P with neighbours P_prev, P_next:
+      v1 = normalize(P_prev - P);  v2 = normalize(P_next - P)
+      dist = radius / tan(acos(v1 . v2) / 2)     # trim-back along each edge
+      t1 = P + v1*dist;  t2 = P + v2*dist        # tangent points
+      emit: L t1,  A radius radius 0 0 sweep t2
+
+The arcs are computed exactly, not approximated with Beziers, so the fillet
+radius is a real checkable number. `simple` is the same polyline with the
+fillets dropped and a heavier stroke.
+
+**Path lengths** (`getTotalLength()`, and what `--mark-len` in `style.css`
+must match): full **158**, simple **242**. The filleted glyph is the shorter
+one -- these corners are acute, so `radius / tan(angle/2)` trims a long way
+back down both edges and the tips come in well short of the bare polyline's.
+Measure it, never estimate it: every dash figure in the busy animation is a
+fraction of that number, so a wrong value slides the comet and the progress
+fill out of step with the geometry.
 
 Deliberately not a filament spool, nozzle cone, print bed, cube, or layer
 stack -- all generic 3D-printing clip art that says nothing about this
-project's actual claim, which is the single continuous non-planar path.
+project. The honest cost of the literal route is in
+`concepts/README.md`: a trident silhouette says the product's name, not its
+claim, and Concepts 07a-c exist because this one can read as a crown.

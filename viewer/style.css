@@ -231,8 +231,15 @@ h1 { font-size:16px; font-weight:700; margin:0 0 var(--sp-1); letter-spacing:-0.
 .brand-row { display:flex; align-items:center; gap:var(--sp-2); margin-bottom:var(--sp-1); }
 #brand-row h1 { margin:0; }
 .brand-mark { display:block; overflow:visible; }
-.brand-mark.simple { --mark-len:152; }
-.brand-mark.full { --mark-len:282; }
+/* --mark-len is the path's REAL length in user units, read off
+   getTotalLength() -- every dash figure below is a fraction of it, so a wrong
+   number desynchronises the comet and the progress fill from the geometry.
+   Re-measure whenever the mark changes; do not eyeball it.
+   The filleted glyph is the SHORTER of the two: rounding a corner that sharp
+   trims a long way back down both edges, so .full is 158 against .simple's
+   242 even though it is the more detailed drawing. */
+.brand-mark.simple { --mark-len:242; }
+.brand-mark.full { --mark-len:158; }
 #overlay .card .brand-mark { margin-bottom:24px; }
 
 .brand-mark .mark-base { fill:none; stroke:var(--ink-muted); stroke-linecap:round; stroke-linejoin:round; }
@@ -240,7 +247,7 @@ h1 { font-size:16px; font-weight:700; margin:0 0 var(--sp-1); letter-spacing:-0.
   opacity:0; transition:opacity .15s ease-out; }
 .brand-mark .mark-dot { fill:var(--accent); transition:opacity .2s ease; }
 .brand-mark.full .mark-base, .brand-mark.full .mark-highlight { stroke-width:5; }
-.brand-mark.simple .mark-base, .brand-mark.simple .mark-highlight { stroke-width:10; }
+.brand-mark.simple .mark-base, .brand-mark.simple .mark-highlight { stroke-width:9; }
 
 .brand-mark.is-busy-indeterminate .mark-highlight { opacity:1;
   stroke-dasharray: calc(var(--mark-len) * .12) calc(var(--mark-len) * .88);
