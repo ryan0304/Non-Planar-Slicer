@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="17.5 22.19 61.7 61.7" role="img" aria-label="Trident">
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="8.22 12.92 80.26 80.26" role="img" aria-label="Trident">
   <title>Trident -- constructed single-stroke trident</title>
   <path d="M 22.000,78.000 L 22.000,45.127 A 4.200 4.200 0 0 1 28.370,43.720 L 30.499,48.307 A 4.200 4.200 0 0 0 38.303,47.836 L 44.006,30.290 A 4.200 4.200 0 0 1 51.994,30.290 L 57.697,47.836 A 4.200 4.200 0 0 0 65.501,48.307 L 67.630,43.720 A 4.200 4.200 0 0 1 74.000,45.127 L 74.000,78.000" fill="none" stroke="#9aa0a6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="74" cy="78" r="3.2" fill="#2f6bff"/>

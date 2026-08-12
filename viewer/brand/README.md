@@ -72,24 +72,36 @@ The arcs are computed exactly, not approximated with Beziers, so the fillet
 radius is a real checkable number. `simple` is the same polyline with the
 fillets dropped and a heavier stroke.
 
-**The viewBox frames the artwork, not the drawing grid.** The paths are
-authored on a 0 0 96 96 grid, but neither glyph is centred on it: filleting
-those acute corners trims a long way back down every edge, so the full glyph
-ends up 4.7u low and fills barely half the square. Left on `0 0 96 96` it
-rendered visibly smaller and lower than the simple variant beside it. Each
-file instead carries a square viewBox centred on its own visual bounds --
-stroke width and the accent dot included, plus 2u of padding:
+**The viewBox has two jobs: centre the glyph, and set how big it reads.**
 
-| glyph | visual bounds (incl. stroke + dot) | viewBox |
-|---|---|---|
-| full | x 19.5-77.2, y 24.9-81.2 | `17.5 22.19 61.7 61.7` |
-| simple | x 17.5-78.5, y 13.5-82.5 | `11.5 11.5 73 73` |
+Centring first. The paths are authored on a 0 0 96 96 grid. The `simple`
+glyph happens to be exactly centred on it (ink x 17.5-78.5, y 13.5-82.5 --
+both midpoints land on 48), so for that one the drawing grid already IS its
+centred square. `full` is not: filleting corners that acute trims a long way
+back down every edge, which pulls its ink down to y 24.9-81.2 and leaves it
+4.7u low. It needs its own square, centred on its own bounds.
 
-Re-derive these whenever the path or the stroke width changes: take the
-path's `getBBox()`, grow it by half the stroke on every side, union the dot,
-then square it about its own centre. Equal padding on opposite sides is the
-check -- the app's placements are flex-centred, so an off-centre viewBox is
-an off-centre logo everywhere at once.
+Size second, and this is the part that bites. A viewBox framed tight to the
+ink makes the glyph fill its rendered box, which sounds right and is not:
+at 2u of padding the mark came out **33% larger** than the spiral it replaced
+at the same declared width, reading as oversized beside 16px type and
+crowding the splash card. Both glyphs are therefore framed so the ink fills
+**71.9%** of the square -- the fraction `simple` gets from the 96-unit grid,
+which is what keeps it the size of the mark it replaced. Equal fill also
+means the two are interchangeable at any rendered size.
+
+| glyph | ink bounds (incl. stroke + dot) | ink | viewBox | fill |
+|---|---|---|---|---|
+| full | x 19.5-77.2, y 24.9-81.2 | 57.7 x 56.3 | `8.22 12.92 80.26 80.26` | 71.9% |
+| simple | x 17.5-78.5, y 13.5-82.5 | 61 x 69 | `0 0 96 96` | 71.9% |
+
+Re-derive whenever the path or the stroke width changes: take the path's
+`getBBox()`, grow it by half the stroke on every side, union the accent dot,
+then build a square of `max(w,h) / 0.719` about that centre. Two checks, both
+cheap: equal padding on opposite sides (the placements are centred, so an
+off-centre viewBox is an off-centre logo everywhere at once), and the ink's
+rendered height against the type it sits beside -- the header mark wants to
+land near 1.3x the h1 cap height, not 1.7x.
 
 **Path lengths** (`getTotalLength()`, and what `--mark-len` in `style.css`
 must match): full **158**, simple **242**. These are in user units and are

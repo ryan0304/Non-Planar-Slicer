@@ -240,7 +240,13 @@ h1 { font-size:16px; font-weight:700; margin:0 0 var(--sp-1); letter-spacing:-0.
    242 even though it is the more detailed drawing. */
 .brand-mark.simple { --mark-len:242; }
 .brand-mark.full { --mark-len:158; }
-#overlay .card .brand-mark { margin-bottom:24px; }
+/* Auto side margins, not text-align. The card centres its children with
+   text-align:center, which does nothing to a block box -- and .brand-mark is
+   display:block with a fixed width, so it sat flush against the left edge of
+   the card's content box: 21.8px left of the title centred beneath it. That
+   went unseen for as long as the mark was a radially symmetric spiral, which
+   looks the same wherever its box lands; an asymmetric trident does not. */
+#overlay .card .brand-mark { margin:0 auto 24px; }
 
 .brand-mark .mark-base { fill:none; stroke:var(--ink-muted); stroke-linecap:round; stroke-linejoin:round; }
 .brand-mark .mark-highlight { fill:none; stroke:var(--busy); stroke-linecap:round; stroke-linejoin:round;
