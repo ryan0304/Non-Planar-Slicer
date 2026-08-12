@@ -1034,18 +1034,19 @@ async function load(name,text){
     cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
     buildGeometry(lastData); showStats(name,lastData);   // heavy: O(segments)
     measureReload();                       // new model: any old measurement is meaningless
-    document.getElementById('tl-wrap').style.display='';
-    // Widens --overlay-bottom (style.css) so the nav cube and its neighbours
-    // clear the now-visible machine-readout strip instead of floating 92px
-    // above empty canvas, which is what happened before this class existed.
-    wrap.classList.add('has-timeline');
-    document.getElementById('telemetry-card').style.display='';
+    // A file was loaded (dropped, picked, or generated) - show the viewer mode.
+    // This happens BEFORE the canvas chrome appears and before fitView(),
+    // because switching mode is what reveals that chrome now: visibility is
+    // syncCanvasChromeForMode()'s decision alone. load() used to show the
+    // strip, the telemetry card and the has-timeline class by hand, which is
+    // how they survived into Design mode -- two places setting them, only one
+    // ever clearing them.
+    if(window.setAppMode) window.setAppMode('viewer');
+    syncCanvasChromeForMode();             // also covers designer.js being absent
     stopPlay(); setProgress(1);            // start fully drawn
     fitView();                             // frame the camera on the model
     // Build the sparkline after layout settles (offsetWidth needs a rendered frame).
     requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(1); });
-    // A file was loaded (dropped, picked, or generated) - show the viewer mode.
-    if(window.setAppMode) window.setAppMode('viewer');
   } finally {
     // Always clears, success or failure -- a stuck overlay would be worse
     // than the freeze it replaces (looks like a hang forever, not just once).
@@ -2859,6 +2860,48 @@ function syncCanvasChromeForMode(){
 
   const tele = document.getElementById('telemetry-card');
   if(tele) tele.style.display = show ? '' : 'none';
+
+  // The machine-readout strip and the filename label are the same kind of
+  // thing and were missed: load() revealed them and nothing put them back, so
+  // Design -> G-code Viewer -> Design left a playback timeline and a .gcode
+  // filename sitting over the design view. Worse than untidy -- the scrub bar
+  // is live, so dragging it there drove playback of a print the canvas was no
+  // longer showing, and the layer readout kept counting against it.
+  const tl = document.getElementById('tl-wrap');
+  if(tl) tl.style.display = show ? '' : 'none';
+  // .has-timeline widens --overlay-bottom to clear that strip; with the strip
+  // hidden the clearance has to go too, or the nav cube floats 92px above
+  // nothing (the exact fault the class was added to fix, in mirror image).
+  if(wrap) wrap.classList.toggle('has-timeline', show);
+  if(gcodeTitleEl) gcodeTitleEl.style.display = show ? 'block' : 'none';
+
+  // The toolpath IN the scene has to follow the mode as well -- it is not
+  // chrome, but it is on the same shared canvas and the rule is the same.
+  //
+  // Hiding it used to be a side effect of drawing the blue draft
+  // (showPreview() hides the generated path; clearPreview() restores it),
+  // which works only if a draft actually gets drawn. The draft stays off
+  // until the user touches a design control, so anyone who generated without
+  // editing -- or who scrubbed, then switched straight back -- was left
+  // looking at the generated G-code in DESIGN mode, still clipped to wherever
+  // the scrub was left, with the nozzle marker parked mid-print. Ownership
+  // belongs to the mode switch, not to whether some other feature ran.
+  if(show){
+    if(pathObj) pathObj.visible = true;
+    if(travelObj) travelObj.visible = document.getElementById('t-travel').checked;
+    // Re-derive the marker and the readouts from the progress we left at, so
+    // returning to the viewer resumes where the scrub was rather than showing
+    // a marker-less path until the next scrub.
+    if(lastData) setProgress(progress);
+  } else {
+    // A running playback would undo every line above on its next frame, and
+    // it has no business animating a canvas that is showing the design.
+    stopPlay();
+    if(pathObj) pathObj.visible = false;
+    if(travelObj) travelObj.visible = false;
+    nozzle.visible = false;
+  }
+  render();
 }
 // Kept under the old name too: designer.js's activateMode() calls it, and a
 // silently-renamed hook is a chrome-desync bug that only shows up at runtime.
