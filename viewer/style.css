@@ -1233,7 +1233,14 @@ body.hints-hidden .hint { display:none; }
    demand instead of looping forever in the corner of the reader's eye.
 
    guide.js builds the <img> stack on FIRST OPEN, so a user who never opens
-   the guide never downloads any of it. Exactly one frame carries .gf-on.
+   the guide never downloads any of it.
+
+   Playback is a REVEAL, not a crossfade: frame i fades in on top of every
+   earlier frame, which stays opaque underneath, so .gf-on is carried by
+   frames 0..i rather than by one frame alone. A symmetric crossfade (old
+   fading out while new fades in) dips to roughly half brightness halfway
+   through and reads as a flicker on this dark UI; leaving the outgoing frame
+   lit means the box is never dimmer than a finished frame.
 
    Colour note: the figure chrome uses --accent and neutral surface tokens
    only. --accent-purple belongs to Point Edit Modifiers and --ok/--warn/
@@ -1247,34 +1254,46 @@ body.hints-hidden .hint { display:none; }
 }
 .guide-shot {
   position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;
-  opacity:0;
+  opacity:0; transition:opacity 140ms linear;
 }
 .guide-shot.gf-on { opacity:1; }
+/* 140 ms, not 260. These frames are screenshots of TEXT, and a long crossfade
+   between two different panels superimposes both sets of it -- "SHAPE" ghosted
+   over "Z WAVES" for a quarter of a second reads as the figure glitching, not
+   as one state becoming another. Short enough to pass as a soft cut, long
+   enough that nothing snaps. The step in guide.js must stay well clear of it. */
 /* The "Read this first" slide ships a single still and no data-frames, so
    nothing ever adds .gf-on to it -- keep a lone image visible. */
 .guide-fig:not([data-frames]) .guide-shot { opacity:1; }
+/* Rearranging the stack must never animate. guide.js adds .gf-rewind, sets the
+   classes it wants, forces a reflow and drops it again -- so starting a figure
+   cuts to frame 0, and the loop restart can collapse six lit layers down to
+   two (frame 0 under the top frame, which looks identical) before dissolving
+   just those two. Without this, un-lighting the stack fades every layer out
+   together and the blend on the way down is a smear, not a dissolve. */
+.guide-fig.gf-rewind .guide-shot { transition:none; }
+/* Only promote the layers while something is actually moving. Six full-bleed
+   images held on the compositor for the life of the modal is a lot of VRAM
+   for a figure that spends most of its time frozen on its last frame. */
+.guide-fig.gf-running .guide-shot { will-change:opacity; }
+/* The caption sits ON the frame, so it needs its own ground -- a text-shadow
+   alone left it fighting whatever the screenshot happened to put behind it
+   (on the first slide, the step-tab row). A scrim fading up from the bottom
+   edge reads as part of the figure and keeps both legible. */
 .gf-caption {
-  position:absolute; left:10px; right:10px; bottom:8px; font-size:10px;
-  color:var(--ink-muted); text-align:center; text-shadow:0 1px 3px rgba(0,0,0,.8);
+  position:absolute; left:0; right:0; bottom:0; z-index:2;
+  padding:16px 12px 7px; font-size:10px; line-height:1.35;
+  color:var(--ink-muted); text-align:center;
+  background:linear-gradient(to bottom, rgba(8,10,13,0), rgba(8,10,13,.9) 55%);
 }
 
-/* Replay sits quiet until wanted. It is a real button, not a decoration:
-   the sequence runs once and holds on its last frame, so this is the only
-   way to see the click again without paging away and back. */
-.gf-replay {
-  position:absolute; right:8px; bottom:8px; z-index:3;
-  font-family:var(--font-ui); font-size:9.5px; letter-spacing:.06em;
-  text-transform:uppercase; color:var(--ink-muted);
-  background:rgba(8,10,13,.72); border:1px solid var(--line);
-  border-radius:999px; padding:3px 9px; cursor:pointer;
-  opacity:.5; transition:opacity .15s ease, color .15s ease;
-}
-.guide-fig:hover .gf-replay { opacity:1; }
-.gf-replay:hover { color:var(--ink); border-color:var(--accent); opacity:1; }
-.gf-replay:focus-visible { outline:2px solid var(--accent); outline-offset:2px; opacity:1; }
+/* There is deliberately no Replay control. The sequence loops on its own --
+   it holds the payoff frame for a second, cuts back to the start and runs
+   again -- so a button would only ever do what the figure is about to do
+   anyway, while taking a bite out of the frame it sits on.
 
-/* Reduced motion is handled in guide.js, not here, because "which frame is
-   showing" is state rather than styling: playFigure() holds the LAST frame --
-   the outcome of the click, the state the bullets describe -- so the slide
-   still says what happened without anything moving. Pressing Replay is an
-   explicit request for motion, and steps the sequence even then. */
+   Reduced motion is handled in guide.js, not here, because "which frame is
+   showing" is state rather than styling: playFigure() shows the LAST frame --
+   the outcome of the click, the state the bullets describe -- and never
+   starts the loop, so the slide still says what happened without anything
+   moving. */

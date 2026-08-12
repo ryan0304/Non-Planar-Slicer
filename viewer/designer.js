@@ -4522,6 +4522,12 @@
   // failure CLAUDE.md's safety-first stance exists to prevent.
   function applyGenerateResult(j, clickRev){
     lastGcode = j.gcode; lastName = j.filename;
+    // Pressing Generate is a design action, so arm the draft preview. Without
+    // this, a user who generated a restored design without touching a single
+    // control had never armed it, and switching back to Design left them on a
+    // bare bed: the generated toolpath is (correctly) hidden outside the
+    // viewer, and the draft that should replace it never drew.
+    previewArmed = true;
     if(window.clearPreview) window.clearPreview();
     if(window.loadGcode){ window.loadGcode(j.filename, j.gcode); }
     if(window.setAppMode) window.setAppMode('viewer');

@@ -44,7 +44,24 @@
     nextBtn.textContent = (current === slides.length - 1) ? 'Done' : 'Next';
     figures.forEach(stopFigure);   // never leave an off-screen slide ticking
     var rec = currentFigure();
-    if(rec) playFigure(rec, false);
+    if(rec) playFigure(rec);
+    warmAhead();
+  }
+
+  // Fetch the NEXT slide's frames while this one plays, so paging forward
+  // finds them decoded. Deliberately behind a delay and never at open time:
+  // requesting all 24 frames at once puts the sequence the reader is actually
+  // watching behind eighteen images it does not need yet, and the dev server
+  // only serves a handful of connections at a time. Whatever is on screen
+  // gets the pipe first.
+  var warmTimer = 0;
+  function warmAhead(){
+    if(warmTimer) clearTimeout(warmTimer);
+    warmTimer = setTimeout(function(){
+      warmTimer = 0;
+      var rec = figureIn(current + 1);
+      if(rec) preload(rec);
+    }, 700);
   }
 
   // ---- recorded-interaction figures -----------------------------------------
@@ -55,9 +72,27 @@
   // all rendered by the page at capture time.
   //
   // The <img> stack is built on FIRST OPEN rather than at page load, so a user
-  // who never opens the guide never fetches ~640 kB of screenshots. That is
+  // who never opens the guide never fetches ~950 kB of screenshots. That is
   // also why the frames are not inlined into index.html.
-  var FRAME_MS = 850;
+  //
+  // Timing: the step has to be long enough to read a frame and short enough to
+  // feel like one gesture. 620 ms with a 140 ms dissolve inside it leaves the
+  // image fully settled for ~480 ms before the next one starts. Several of
+  // these sequences swap the WHOLE panel between frames (the step tabs, the
+  // texture pattern), and a big change needs time to land -- stepped faster it
+  // reads as flicker rather than as one thing becoming another. FRAME_MS must
+  // stay well above the dissolve in style.css or the next fade starts before
+  // the last one finished and the box smears through three frames at once.
+  //
+  // The sequence LOOPS: it holds on the last frame -- the outcome of the click,
+  // the state the bullets describe -- for LOOP_PAUSE_MS, dissolves back to the
+  // start and runs again. The hold carries most of the calm: a short one turns
+  // the figure into something that restarts in the corner of the reader's eye
+  // while they are still reading the bullets beside it.
+  var FRAME_MS = 620;
+  var LOOP_PAUSE_MS = 2000;
+  var REWIND_MS = 200;          // must cover the dissolve in style.css
+  var DECODE_WAIT_MS = 600;
   var figures = [];
   var figuresBuilt = false;
 
@@ -81,50 +116,186 @@
         frames.push(img);
       }
 
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'gf-replay';
-      btn.textContent = 'Replay';
-      btn.setAttribute('aria-label', 'Replay this recording');
-      fig.appendChild(btn);
-
-      var rec = { frames: frames, timer: 0 };
-      // force:true -- pressing Replay is an explicit ask for motion, so it
-      // steps the sequence even under prefers-reduced-motion.
-      btn.addEventListener('click', function(){ playFigure(rec, true); });
+      // token: bumped by every stopFigure(), so an async decode that finishes
+      // after the user paged away cannot start a stale sequence.
+      var rec = { fig: fig, frames: frames, raf: 0, deadline: 0,
+                  ready: false, pending: false, waiting: null, token: 0 };
       fig.recording = rec;
       figures.push(rec);
     });
   }
 
-  function currentFigure(){
-    var fig = slides[current] && slides[current].querySelector('.guide-fig[data-frames]');
+  function figureIn(index){
+    var slide = slides[index];
+    var fig = slide && slide.querySelector('.guide-fig[data-frames]');
     return (fig && fig.recording) || null;
   }
 
+  function currentFigure(){ return figureIn(current); }
+
+  // Reveal, not crossfade: frames 0..i are all lit, so the incoming frame
+  // fades in OVER an opaque stack instead of trading places with a frame that
+  // is simultaneously fading out. A symmetric crossfade passes through about
+  // half brightness at its midpoint, which on this dark UI reads as a flicker
+  // between every pair of frames. See the note in style.css.
   function showFrame(rec, i){
-    rec.frames.forEach(function(f, k){ f.classList.toggle('gf-on', k === i); });
+    rec.frames.forEach(function(f, k){ f.classList.toggle('gf-on', k <= i); });
+  }
+
+  // Hard cut to frame 0, used when a figure STARTS (nothing is on screen yet,
+  // so there is nothing to dissolve from). Un-lighting the stack with
+  // transitions live would fade every opaque layer out together, and the blend
+  // of all of them on the way down is a smear. Suppress, mutate, flush, restore.
+  function resetToStart(rec){
+    rec.fig.classList.add('gf-rewind');
+    rec.frames.forEach(function(f, k){ f.classList.toggle('gf-on', k === 0); });
+    void rec.fig.offsetWidth;   // force style flush while transitions are off
+    rec.fig.classList.remove('gf-rewind');
+  }
+
+  // Loop restart, and the one moment the figure would otherwise jump. Cutting
+  // straight back to frame 0 is a hard jolt every few seconds beside prose
+  // somebody is still reading, so dissolve instead -- but dissolve exactly TWO
+  // layers, not the whole stack.
+  //
+  // Every frame between the first and the last is hidden BEHIND the top frame
+  // while the sequence is fully revealed, so un-lighting them costs nothing
+  // visually and has to be done with transitions off. What is left is the top
+  // frame over frame 0: fading the top one out is a plain one-to-one dissolve
+  // back to the beginning, with no intermediate blend of six images.
+  function dissolveToStart(rec){
+    var frames = rec.frames, top = frames.length - 1;
+    rec.fig.classList.add('gf-rewind');
+    frames.forEach(function(f, k){ f.classList.toggle('gf-on', k === 0 || k === top); });
+    void rec.fig.offsetWidth;
+    rec.fig.classList.remove('gf-rewind');
+    if(top > 0) frames[top].classList.remove('gf-on');   // now transitions
   }
 
   function stopFigure(rec){
-    if(rec.timer){ clearInterval(rec.timer); rec.timer = 0; }
+    rec.token += 1;        // invalidates any decode still in flight
+    rec.waiting = null;
+    if(rec.raf){ cancelAnimationFrame(rec.raf); rec.raf = 0; }
+    if(rec.deadline){ clearTimeout(rec.deadline); rec.deadline = 0; }
+    if(rec.fig) rec.fig.classList.remove('gf-running');
   }
 
-  // Runs once and HOLDS on the last frame rather than looping: the last frame
-  // is the outcome of the click, so the figure reads correctly frozen -- the
-  // same rule the rest of this UI's motion follows. Replay is the way back.
-  function playFigure(rec, force){
+  function settle(rec){
+    rec.ready = true;
+    rec.pending = false;
+    var go = rec.waiting;
+    rec.waiting = null;
+    if(go) go();
+  }
+
+  // Decode every frame before the first step. An <img> that is merely fetched
+  // still costs a decode the first time the compositor has to paint it, and
+  // that lands exactly on a frame flip -- which is what makes the first play
+  // of a sequence feel like it is stuttering. decode() moves that work off the
+  // animation. Rejections resolve the same as successes: a missing PNG must
+  // not hang playback, it just stays blank.
+  //
+  // The complete/naturalWidth short-circuit is not just an optimisation. In a
+  // BACKGROUND tab Chrome may never settle decode(), which would otherwise
+  // wedge rec.pending forever and make every later play sit out the full
+  // DECODE_WAIT_MS deadline -- reopening a guide whose frames were already on
+  // screen once would feel slower than the first time. Bytes in hand and a
+  // known intrinsic size is readiness enough.
+  function allComplete(rec){
+    return rec.frames.every(function(img){ return img.complete && img.naturalWidth > 0; });
+  }
+
+  function preload(rec){
+    if(rec.ready) return;
+    if(allComplete(rec)){ settle(rec); return; }
+    if(rec.pending) return;
+    rec.pending = true;
+    var left = rec.frames.length;
+    function done(){
+      left -= 1;
+      if(left <= 0) settle(rec);
+    }
+    rec.frames.forEach(function(img){
+      if(typeof img.decode === 'function'){ img.decode().then(done, done); return; }
+      if(img.complete){ done(); return; }
+      img.addEventListener('load', done);
+      img.addEventListener('error', done);
+    });
+  }
+
+  // Stepped on requestAnimationFrame rather than setInterval. Two reasons, and
+  // both are about how this reads rather than about correctness:
+  //   - a flip scheduled by a timer can land just after the frame it wanted,
+  //     so the dissolve starts one vsync late and the cadence wobbles; rAF
+  //     hands the class change to the same frame the compositor is building.
+  //   - a hidden tab clamps timers to one second, so a guide left open in a
+  //     background tab would step at 1 s and land the reader mid-sequence on
+  //     return. rAF simply does not run when nobody is looking, and resumes.
+  //     That matters more now that the sequence loops: a looping figure in a
+  //     background tab would otherwise burn the whole time it is not watched.
+  // Three phases on one clock: 'step' reveals a frame every FRAME_MS, 'hold'
+  // sits on the payoff, 'reset' is the dissolve back to the start. Keeping the
+  // reset as a phase rather than a setTimeout means a slide change cancels it
+  // with the same cancelAnimationFrame as everything else, and the figure can
+  // never be left mid-dissolve on a slide nobody is looking at.
+  function stepFigure(rec){
+    var i = 0, since = 0, phase = 'step';
+    var due = { step: FRAME_MS, hold: LOOP_PAUSE_MS, reset: REWIND_MS };
+    rec.fig.classList.add('gf-running');
+    showFrame(rec, 0);
+    function tick(now){
+      if(!since) since = now;
+      if(now - since >= due[phase]){
+        since = now;
+        if(phase === 'step'){
+          i += 1;
+          // Reaching the end starts the hold rather than ending the loop; the
+          // last frame stays up, it just stops being replaced.
+          if(i >= rec.frames.length){ phase = 'hold'; }
+          else showFrame(rec, i);
+        } else if(phase === 'hold'){
+          dissolveToStart(rec);
+          phase = 'reset';
+        } else {
+          i = 0;
+          showFrame(rec, 0);   // the dissolve already landed here; make it exact
+          phase = 'step';
+        }
+      }
+      rec.raf = requestAnimationFrame(tick);
+    }
+    rec.raf = requestAnimationFrame(tick);
+  }
+
+  // Loops for as long as its slide is on screen. Only ONE figure ever runs --
+  // renderSlide() stops every other one and closeGuide() stops them all -- so
+  // this is a single looping animation, not five.
+  //
+  // Under prefers-reduced-motion it does not loop and does not step: the last
+  // frame, the outcome of the click, is shown and left alone. That reader gets
+  // the same information without anything moving, and there is no longer a
+  // Replay control to opt back in with, so the still has to stand on its own.
+  function playFigure(rec){
     stopFigure(rec);
     if(!rec.frames.length) return;
     var mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
-    if(mq && mq.matches && !force){ showFrame(rec, rec.frames.length - 1); return; }
-    var i = 0;
-    showFrame(rec, 0);
-    rec.timer = setInterval(function(){
-      i += 1;
-      if(i >= rec.frames.length){ stopFigure(rec); return; }
-      showFrame(rec, i);
-    }, FRAME_MS);
+    if(mq && mq.matches){ showFrame(rec, rec.frames.length - 1); return; }
+    resetToStart(rec);
+    if(rec.ready){ stepFigure(rec); return; }
+    // Wait for the decode, but only up to DECODE_WAIT_MS. A fully decoded run
+    // is the goal; a reader staring at a frozen frame 0 because one PNG is
+    // slow is worse than the pop it would have caused. The deadline bounds the
+    // stall either way, and whichever of the two fires first cancels the other.
+    var token = rec.token;
+    var start = function(){
+      if(rec.token !== token) return;      // slide changed under us
+      rec.waiting = null;
+      if(rec.deadline){ clearTimeout(rec.deadline); rec.deadline = 0; }
+      stepFigure(rec);
+    };
+    rec.waiting = start;
+    rec.deadline = setTimeout(start, DECODE_WAIT_MS);
+    preload(rec);
   }
 
   function isOpen(){ return modal.style.display !== 'none'; }
@@ -133,7 +304,7 @@
     opener = fromEl || document.activeElement;
     current = 0;
     buildFigures();   // first open is when the frames start downloading
-    renderSlide();
+    renderSlide();    // which then warms slide 2's frames in the background
     modal.style.display = 'flex';
     if(closeBtn) closeBtn.focus();
   }

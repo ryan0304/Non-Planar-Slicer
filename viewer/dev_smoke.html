@@ -222,6 +222,77 @@
     check('viewer unsupported-move count matches analyze.py (4, from an actual analyze.py run on this G-code)',
           unsupportedCount === 4, 'got ' + unsupportedCount);
 
+    // ---- canvas chrome has to follow the app mode ---------------------------
+    // #tl-wrap, #telemetry-card, #tool-rail and #gcode-title all live in
+    // #canvas-wrap, OUTSIDE both mode panels, so the panel's own .active class
+    // hides none of them -- each has to be told. That has now been got wrong
+    // three times (the tool rail, then the telemetry card, then the timeline
+    // strip and the filename label), so assert the whole set rather than the
+    // piece that broke last. Leaving the strip up is not merely untidy: the
+    // scrub bar stays live, so dragging it in Design mode drives playback of a
+    // print the canvas is no longer showing.
+    var canvasWrap = w.document.getElementById('canvas-wrap');
+    var chromeIds = ['tl-wrap', 'telemetry-card', 'tool-rail', 'gcode-title'];
+    function modeBtn(m){ return w.document.querySelector('.mode-btn[data-mode="' + m + '"]'); }
+    function chromeShown(){
+      return chromeIds.filter(function(id){
+        var el = w.document.getElementById(id);
+        return el && el.style.display !== 'none';
+      });
+    }
+
+    // Leave the viewer mid-print and mid-playback -- the state that actually
+    // leaked. A partially drawn path and a parked nozzle marker are scene
+    // objects, not chrome, and they used to be hidden only as a side effect of
+    // the blue draft being drawn, which does not happen until the user touches
+    // a design control.
+    var scrubEl = w.document.getElementById('scrub');
+    scrubEl.value = 500;
+    scrubEl.dispatchEvent(new w.Event('input', { bubbles: true }));
+    var markerWasUp = w.__previewState().nozzleVisible;
+    var playBtn = w.document.getElementById('play');
+    playBtn.click();
+    var playbackStarted = playBtn.textContent === '||';
+
+    modeBtn('design').click();
+    var leftOver = chromeShown();
+    var staleClearance = !!(canvasWrap && canvasWrap.classList.contains('has-timeline'));
+    check('switching back to Design hides every piece of G-code viewer canvas chrome',
+          leftOver.length === 0 && !staleClearance,
+          'still shown: ' + (leftOver.join(', ') || 'none') +
+          (staleClearance ? ' (and .has-timeline still reserving overlay space)' : ''));
+
+    var designFlags = w.__viewFlags();
+    var designNozzle = w.__previewState().nozzleVisible;
+    check('...and takes the generated toolpath and nozzle marker off the canvas with it',
+          designFlags.pathVisible === false && designNozzle === false,
+          'pathVisible ' + designFlags.pathVisible + ', nozzle ' + designNozzle +
+          (markerWasUp ? '' : ' (marker was already down before the switch)'));
+
+    check('...and stops playback, which would otherwise redraw both next frame',
+          playBtn.textContent === '>',
+          playbackStarted ? 'play button reads ' + playBtn.textContent
+                          : 'playback never started, so this proved nothing');
+
+    modeBtn('viewer').click();
+    var missing = chromeIds.filter(function(id){
+      var el = w.document.getElementById(id);
+      return !el || el.style.display === 'none';
+    });
+    check('returning to the G-code Viewer brings that chrome back',
+          missing.length === 0 &&
+          !!(canvasWrap && canvasWrap.classList.contains('has-timeline')),
+          'still hidden: ' + (missing.join(', ') || 'none'));
+
+    check('...and puts the toolpath back with it',
+          w.__viewFlags().pathVisible === true,
+          'pathVisible ' + w.__viewFlags().pathVisible);
+
+    // Hand the suite back in Design mode. loadGcode() above switched to the
+    // viewer, and every check below this point reads rows in the design panel
+    // -- which is the inactive panel while the viewer is up.
+    modeBtn('design').click();
+
     // ---- Bottom (Open/Solid) must not clobber Base layers --------------------
     // The Bottom radio handler used to do
     // `if (design.bottom === 'open') design.base_layers = 0;`, permanently
@@ -489,22 +560,57 @@
     Array.prototype.forEach.call(recFigs, function(fig){
       var want = parseInt(fig.getAttribute('data-count'), 10);
       var got = fig.querySelectorAll('img.guide-shot').length;
-      if(want >= 2 && got === want && fig.querySelector('.gf-replay')) recOk++;
+      if(want >= 2 && got === want) recOk++;
       else recDetail.push(fig.getAttribute('data-frames') + ' want ' + want + ' got ' + got);
     });
-    check('every recorded figure built the frames it declares, plus a Replay control',
+    check('every recorded figure built the frames it declares',
           recFigs.length >= 5 && recOk === recFigs.length,
           recFigs.length + ' figures; ' + (recDetail.join('; ') || 'none built'));
 
-    // Exactly one frame visible at a time: two frames carrying .gf-on stack on
-    // top of each other and the sequence reads as a smear rather than a click.
-    var multiLit = [];
+    // Playback is a reveal: frame i fades in over frames 0..i-1, which stay
+    // lit, so several .gf-on frames at once is CORRECT here (a symmetric
+    // crossfade would dip to half brightness mid-step and read as a flicker).
+    // What must never happen is a hole in that stack -- a lit frame with an
+    // unlit one beneath it is a partially transparent image over whatever the
+    // browser last painted, which is exactly the smear the old one-frame rule
+    // was guarding against. Assert the lit set is a contiguous prefix.
+    var gappy = [];
     Array.prototype.forEach.call(recFigs, function(fig){
-      var lit = fig.querySelectorAll('img.guide-shot.gf-on').length;
-      if(lit > 1) multiLit.push(fig.getAttribute('data-frames') + ' lit ' + lit);
+      var shots = fig.querySelectorAll('img.guide-shot');
+      var seenDark = false, hole = false;
+      Array.prototype.forEach.call(shots, function(img){
+        if(img.classList.contains('gf-on')){ if(seenDark) hole = true; }
+        else seenDark = true;
+      });
+      if(hole) gappy.push(fig.getAttribute('data-frames'));
     });
-    check('no recorded figure shows more than one frame at once',
-          multiLit.length === 0, multiLit.join('; '));
+    check('every recorded figure lights a contiguous run of frames from the first',
+          gappy.length === 0, gappy.join('; '));
+
+    // ONE capture size for the whole guide, stills included. Every frame is
+    // stretched to fill the same fixed 16:10 box, so the crop size IS the
+    // magnification: a 256-wide crop and a 939-wide crop of the same interface
+    // arrive on screen at 1.7x and 0.45x, and paging through the guide reads as
+    // the app zooming in and out under the reader. Sizes drift the moment a
+    // single sequence is re-shot against a different window, so assert it.
+    var allShots = w.document.querySelectorAll('#guide-modal img.guide-shot');
+    await Promise.all(Array.prototype.map.call(allShots, function(img){
+      if(img.complete) return null;
+      return new Promise(function(res){
+        img.addEventListener('load', res); img.addEventListener('error', res);
+      });
+    }));
+    var sizes = {}, unloaded = 0;
+    Array.prototype.forEach.call(allShots, function(img){
+      if(!img.naturalWidth){ unloaded++; return; }
+      var k = img.naturalWidth + 'x' + img.naturalHeight;
+      sizes[k] = (sizes[k] || 0) + 1;
+    });
+    var sizeKeys = Object.keys(sizes);
+    check('every guide frame is captured at the same pixel size',
+          allShots.length >= 20 && unloaded === 0 && sizeKeys.length === 1,
+          sizeKeys.map(function(k){ return k + ' x' + sizes[k]; }).join(', ') +
+          (unloaded ? ' (' + unloaded + ' failed to load)' : ''));
 
     // The figures are decoration and must never be the only carrier of meaning:
     // the frames are alt="" and the prose beside them says the same thing.
