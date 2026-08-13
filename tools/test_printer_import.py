@@ -1336,7 +1336,8 @@ def test_non_finite_rejected():
             "start_gcode": "G28\nM83\nM109 S200", "end_gcode": "M104 S0"}
     numeric = ["bed_size_x", "bed_size_y", "z_max", "max_velocity", "max_z_velocity",
                "max_accel", "max_z_accel", "nozzle_diameter", "filament_diameter",
-               "probe_dx", "probe_dy", "z_amp_max", "max_nozzle_temp", "max_bed_temp"]
+               "probe_dx", "probe_dy", "z_amp_max", "quality_slope_max",
+               "max_nozzle_temp", "max_bed_temp"]
     leaked = []
     for name in numeric:
         for bad in (float("nan"), float("inf"), float("-inf")):
@@ -1840,6 +1841,96 @@ def test_z_amp_max_default_is_not_another_machines_number():
 
 
 # ---------------------------------------------------------------------------
+# 7b. quality_slope_max must come from the SELECTED PrinterProfile, exactly
+# like z_amp_max above -- it used to be QUALITY_SLOPE_LIMIT, a bare 0.25
+# module constant in serve.py applied to every printer regardless of what
+# it declared. This is the regression guard for that defect: it must fail
+# if anyone reintroduces a module constant in its place.
+# ---------------------------------------------------------------------------
+def test_quality_slope_comes_from_the_profile():
+    import math as _math
+    from dataclasses import replace
+    from serve import slope_ceiling, _peak_wave_slope
+
+    # 1. slope_ceiling(p) reads straight through to its own quality_slope_max
+    #    for every built-in profile.
+    for key, p in PRINTER_PROFILES.items():
+        check(slope_ceiling(p) == p.quality_slope_max,
+              f"slope_ceiling: {key} ceiling equals its own quality_slope_max",
+              f"{slope_ceiling(p)} vs {p.quality_slope_max}")
+
+    # 2. THE core regression guard: the same design's pass/fail status must
+    #    track the SELECTED profile's own ceiling, not a constant shared by
+    #    every printer. amp_fn/radius_at held constant so peak slope is
+    #    exactly amp*waves/radius, no silhouette noise.
+    amp_fn = lambda t: 1.0
+    radius_at = lambda t: 10.0
+    slope_020 = _peak_wave_slope(amp_fn, 2, radius_at)   # 1 * 2 / 10 = 0.20
+    slope_030 = _peak_wave_slope(amp_fn, 3, radius_at)   # 1 * 3 / 10 = 0.30
+    check(abs(slope_020 - 0.20) < 1e-9, "quality-slope: 0.20 sample computes exactly", str(slope_020))
+    check(abs(slope_030 - 0.30) < 1e-9, "quality-slope: 0.30 sample computes exactly", str(slope_030))
+
+    strict = replace(TRIDENT, quality_slope_max=0.10)
+    loose = replace(TRIDENT, quality_slope_max=0.40)
+
+    check(slope_020 <= slope_ceiling(TRIDENT) + 1e-9,
+          "quality-slope: a ~0.20 design passes on the stock Trident (0.25 ceiling)",
+          f"{slope_020} vs {slope_ceiling(TRIDENT)}")
+    check(slope_020 > slope_ceiling(strict) + 1e-9,
+          "quality-slope: the SAME ~0.20 design is flagged on a stricter 0.10 profile",
+          f"{slope_020} vs {slope_ceiling(strict)}")
+    check(slope_030 > slope_ceiling(TRIDENT) + 1e-9,
+          "quality-slope: a ~0.30 design is flagged on the stock Trident (0.25 ceiling)",
+          f"{slope_030} vs {slope_ceiling(TRIDENT)}")
+    check(slope_030 <= slope_ceiling(loose) + 1e-9,
+          "quality-slope: the SAME ~0.30 design passes on a looser 0.40 profile",
+          f"{slope_030} vs {slope_ceiling(loose)}")
+
+    # 3. Non-finite in a config is rejected outright -- never clamped into a
+    #    NaN/inf profile value, always the conservative default (0.25, same
+    #    figure as _QUALITY_SLOPE_UNKNOWN_DEFAULT in printer_validate.py).
+    base = {"name": "x", "bed_size_x": 235, "bed_size_y": 235, "z_max": 160,
+            "start_gcode": "G28\nM83\nM109 S200", "end_gcode": "M104 S0"}
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        vr = validate_profile_dict(dict(base, quality_slope_max=bad))
+        val = vr.profile.quality_slope_max
+        check(_math.isfinite(val),
+              f"quality-slope: non-finite {bad} never reaches the profile", str(val))
+        check(val == 0.25,
+              f"quality-slope: non-finite {bad} falls through to the conservative 0.25 default",
+              str(val))
+        check(not vr.ok,
+              f"quality-slope: non-finite {bad} is reported as an error, not silently defaulted")
+
+    # 4. An absurd value clamps into [0, 10] rather than being accepted as-is.
+    vr_hi = validate_profile_dict(dict(base, quality_slope_max=99999))
+    check(vr_hi.profile.quality_slope_max == 10.0,
+          "quality-slope: an absurdly high value clamps to 10.0",
+          str(vr_hi.profile.quality_slope_max))
+    vr_lo = validate_profile_dict(dict(base, quality_slope_max=-50))
+    check(vr_lo.profile.quality_slope_max == 0.0,
+          "quality-slope: an absurdly negative value clamps to 0.0",
+          str(vr_lo.profile.quality_slope_max))
+
+    # 5. A declared 0.0 stays 0.0 -- it is a real (if extreme) declaration,
+    #    not something to be replaced by the conservative default.
+    vr_zero = validate_profile_dict(dict(base, quality_slope_max=0.0))
+    check(vr_zero.profile.quality_slope_max == 0.0,
+          "quality-slope: a declared 0.0 stays 0.0, not the 0.25 default",
+          str(vr_zero.profile.quality_slope_max))
+
+    # 6. hostile.cfg (klipper_cfg text) has no key for this field -- none of
+    #    the five format parsers extract quality_slope_max from any real
+    #    config, same as z_amp_max -- so it must still validate without
+    #    crashing and land safely in range via the default path.
+    raw = parse_printer_config(_read_fixture("hostile.cfg"), "hostile.cfg")
+    vr_hostile = validate_raw(raw)
+    check(0.0 <= vr_hostile.profile.quality_slope_max <= 10.0,
+          "hostile.cfg: quality_slope_max lands in [0,10] via the default path",
+          str(vr_hostile.profile.quality_slope_max))
+
+
+# ---------------------------------------------------------------------------
 # 8. Loop fabric anchors itself with its own solid cuff and prints no base
 # disks, brim or skirt -- serve.py used to call build_loop_fabric() without
 # forwarding base_layers/brim_loops/skirt_loops/base_style at all, so those
@@ -2292,6 +2383,7 @@ def main() -> int:
     test_nozzle_temp_ceiling_comes_from_the_profile()
     test_bed_temp_ceiling_comes_from_the_profile()
     test_z_amp_max_default_is_not_another_machines_number()
+    test_quality_slope_comes_from_the_profile()
     test_loop_fabric_base_is_reported()
     test_base_follows_the_silhouette()
     test_inapplicable_controls_are_reported()

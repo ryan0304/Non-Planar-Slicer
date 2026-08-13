@@ -576,6 +576,15 @@ label.radio-inline { cursor:pointer; }
 .cv-editor canvas { display:block; width:100%; border:1px solid var(--line); border-radius:6px;
   background:var(--bg); cursor:ns-resize; }
 .cv-note { font-size:10.5px; color:var(--ink-muted); margin-top:6px; }
+/* Wave-slope readout (#slope-read) is a genuine safety state -- "waves may
+   collapse" is a print-quality failure, not a UI hint -- so it earns the
+   reserved --danger/--ok pair (see the token comment at the top of this
+   file). designer.js's updateSlope() toggles these instead of writing
+   style.color with a literal hex, so the readout can never drift from the
+   tokens it is supposed to mirror. Mirrors the .gen-status.err/.ok pair
+   below (see "generate / download controls"). */
+.cv-note.err { color:var(--danger); }
+.cv-note.ok { color:var(--ok); }
 /* Live per-point mm readout under a curve editor (silhouette radius, wave
    amplitude, line width) -- see makeEditor()'s readoutFmt in designer.js.
    The headline figure (radius/amp/line in mm) is the number that matters

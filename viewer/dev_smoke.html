@@ -99,6 +99,371 @@
           zc(Infinity) === 0.4 && zc(null) === 0.4,
           'got ' + (zc && [zc(undefined), zc(NaN), zc(Infinity), zc(null)].join('/')));
 
+    // ---- the DRAFT's amplitude clamp tracks the printer too ------------------
+    // preview_math.js carried its own hardcoded `AMP_MAX = 0.95` -- the
+    // Trident's ceiling applied to every machine -- while the server clamps
+    // amp_profile to the selected profile's z_amp_max (serve.py's
+    // amp_ceiling). On a Bambu declaring 4.0 the draft therefore stopped
+    // responding partway up the amp curve: dragging a point from 0.95 to 2.34
+    // changed the request and the printed part, but not the picture the user
+    // was judging it by, and it understated the real wave by more than half.
+    // Understating is the dangerous direction -- the draft's entire job is to
+    // show what the server will actually generate.
+    const pAmp = w.__previewAmpMax;
+    check('preview exposes its amplitude clamp for inspection',
+          typeof pAmp === 'function', 'got ' + typeof pAmp);
+    for (const [key, expected] of [['trident', 0.95], ['bambu_a1', 4.0],
+                                   ['creality_ender3', 1.0]]) {
+      w.__testSelectPrinter(key);
+      check('draft amplitude clamp follows ' + key + ' (' + expected + '), not a hardcoded 0.95',
+            pAmp() === expected, 'got ' + pAmp());
+    }
+    // Behavioural half of the guard: the clamp is only meaningful if the drawn
+    // geometry actually grows with it. Same design, two printers -- the wave
+    // must be visibly bigger on the machine that allows more dip. Asserting on
+    // geometry rather than on the constant is what catches someone reinstating
+    // a clamp somewhere else in the pipeline.
+    function draftWave(printerKey, ampPeak) {
+      w.__testSelectPrinter(printerKey);
+      const d = w.__designSnapshot();
+      d.amp_profile = [[0, ampPeak], [1, ampPeak]];
+      d.z_waves = 5; d.radius = 32; d.height = 60;
+      const p = w.generatePreview(d, { base_layers: 0, brim: 0, skirt: 0,
+                                       base_style_applies: true });
+      const n = p.length / 3, mid = Math.floor(n / 2);
+      let mn = Infinity, mx = -Infinity;
+      for (let i = mid; i < mid + 120 && i < n; i++) {
+        const v = p[i * 3 + 1]; if (v < mn) mn = v; if (v > mx) mx = v;
+      }
+      return mx - mn;
+    }
+    const wideWave = draftWave('bambu_a1', 2.34);
+    const narrowWave = draftWave('trident', 2.34);
+    check('a 2.34mm amplitude draws a bigger draft wave on a 4.0mm machine than on a 0.95mm one',
+          wideWave > narrowWave + 1.0,
+          'bambu_a1 ' + wideWave.toFixed(2) + ' vs trident ' + narrowWave.toFixed(2));
+    check('the 0.95mm machine still clamps its draft at its own ceiling',
+          near(narrowWave, 1.99, 0.15), 'got ' + narrowWave.toFixed(2));
+
+    // ---- loading a design re-applies the ceilings of the printer it names ---
+    // "Load design as JSON" assigns every key the design object owns, and
+    // `printer` is one of them -- so a load can switch machines. applyDesignToUI()
+    // repainted the combo and the bed but never called applyPrinterCaps(), so
+    // the amp editor's ceiling, its control points and the draft's amplitude
+    // clamp all stayed on the PREVIOUS machine's numbers. Loading a 4.0mm
+    // Bambu design onto a 0.95mm Trident then left the UI offering, drawing
+    // and SENDING amplitudes the server would clamp away -- exactly what
+    // applyPrinterCaps' own comment forbids.
+    function loadDesignDoc(doc) {
+      const dt = new w.DataTransfer();
+      dt.items.add(new w.File([JSON.stringify(doc)], 'd.json', { type: 'application/json' }));
+      const input = w.document.getElementById('load-design-file');
+      input.files = dt.files;
+      input.dispatchEvent(new w.Event('change', { bubbles: true }));
+    }
+    const steep = [[0, 0], [0.3, 2.34], [0.6, 3.5], [1, 1.0]];
+    w.__testSelectPrinter('trident');
+    loadDesignDoc(Object.assign({}, w.__designSnapshot(),
+                                { printer: 'bambu_a1', amp_profile: steep }));
+    await new Promise(function(res){ setTimeout(res, 600); });
+    check('loading a 4.0mm design while on a 0.95mm printer raises every ceiling with it',
+          w.__designSnapshot().printer === 'bambu_a1' &&
+          w.__testAmpCeilings().hi === 4.0 && w.__previewAmpMax() === 4.0,
+          'hi ' + w.__testAmpCeilings().hi + ', draft clamp ' + w.__previewAmpMax());
+
+    loadDesignDoc(Object.assign({}, w.__designSnapshot(),
+                                { printer: 'trident', amp_profile: steep }));
+    await new Promise(function(res){ setTimeout(res, 600); });
+    const sent = w.__designSnapshot().amp_profile;
+    check('THE GUARD -- loading that design onto the 0.95mm printer clamps the points, ' +
+          'so the panel never sends an amplitude the server would clamp away',
+          w.__testAmpCeilings().hi === 0.95 && w.__previewAmpMax() === 0.95 &&
+          sent.every(p => p[1] <= 0.95 + 1e-9),
+          'sent ' + JSON.stringify(sent.map(p => +p[1].toFixed(2))));
+
+    // ---- wave-slope ceiling comes from the printer, not a module constant ---
+    // designer.js used to hardcode `var SLOPE_LIMIT = 0.25` and apply it to
+    // every printer. It now reads PRINTER_SLOPE[design.printer] (fed from
+    // each /api/printers entry's quality_slope_max) via activeSlopeLimit().
+    // __testInjectPrinter/__testSelectPrinter/__testSetCurves (all test-only,
+    // see designer.js) exercise that exact path without a network round trip.
+    //
+    // Pin the geometry first so the peak slope is a KNOWN number regardless
+    // of whatever radius/waves/curve a previous session in this browser
+    // profile may have left in localStorage: radius 32, 5 waves, the
+    // shipped-default amp curve (peak 0.8mm) over a flat silhouette gives
+    // peak slope = 0.8 * 5 / 32 = 0.125 -- inside a 0.25 ceiling, outside a
+    // 0.10 one.
+    const radiusEl = w.document.getElementById('d-radius');
+    const wavesEl = w.document.getElementById('d-waves');
+    const slopeReadEl = w.document.getElementById('slope-read');
+    const ampHintEl = w.document.getElementById('amp-limit-hint');
+    const loopNoteEl = w.document.getElementById('loop-zcap');
+    const prevRadius = radiusEl.value;
+    const prevWaves = wavesEl.value;
+    const prevAmpProfile = w.__designSnapshot().amp_profile;
+    const prevSilProfile = w.__designSnapshot().radius_profile;
+    const prevPrinterKey = w.__designSnapshot().printer;
+
+    radiusEl.value = '32';
+    radiusEl.dispatchEvent(new w.Event('input'));
+    radiusEl.dispatchEvent(new w.Event('change'));
+    wavesEl.value = '5';
+    wavesEl.dispatchEvent(new w.Event('input'));
+    wavesEl.dispatchEvent(new w.Event('change'));
+    w.__testSetCurves(
+      [[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]],
+      [[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]]
+    );
+
+    w.__testInjectPrinter({ key: '__test_slope_loose__', name: 'Test Loose Slope',
+      bed: [235,235], z_amp_max: 4.0, quality_slope_max: 0.25, has_probe: false });
+    w.__testInjectPrinter({ key: '__test_slope_tight__', name: 'Test Tight Slope',
+      bed: [235,235], z_amp_max: 4.0, quality_slope_max: 0.10, has_probe: false });
+
+    w.__testSelectPrinter('__test_slope_loose__');
+    check('printer declaring quality_slope_max 0.25: peak slope 0.125 reads ok',
+          /\/ 0\.25 {2}ok\s*$/.test(slopeReadEl.textContent),
+          'got ' + JSON.stringify(slopeReadEl.textContent));
+
+    w.__testSelectPrinter('__test_slope_tight__');
+    check('THE GUARD -- same design, a printer declaring quality_slope_max 0.10, ' +
+          'now reads TOO STEEP (this is what catches a re-hardcoded SLOPE_LIMIT)',
+          /\/ 0\.10 {2}TOO STEEP/.test(slopeReadEl.textContent),
+          'got ' + JSON.stringify(slopeReadEl.textContent));
+
+    // ---- probe-less machines never claim a probe ----------------------------
+    // Both false-attribution sites (amp-limit-hint, loop-zcap) must say
+    // "z-amp ceiling", never "probe keep-out", for a printer that declares
+    // has_probe:false -- regardless of how low its ceiling actually is.
+    w.__testInjectPrinter({ key: '__test_probeless_lowcap__', name: 'Test Probeless Low-Cap',
+      bed: [235,235], z_amp_max: 0.5, quality_slope_max: 0.25, has_probe: false });
+    w.__testSelectPrinter('__test_probeless_lowcap__');
+    check('has_probe:false: amp hint never says "probe keep-out"',
+          ampHintEl.textContent.indexOf('probe keep-out') === -1,
+          'got ' + JSON.stringify(ampHintEl.textContent));
+    check('has_probe:false: loop-height note never says "probe keep-out"',
+          loopNoteEl.textContent.indexOf('probe keep-out') === -1,
+          'got ' + JSON.stringify(loopNoteEl.textContent));
+    check('...and the amp hint still explains the low ceiling as "z-amp ceiling"',
+          ampHintEl.textContent.indexOf('z-amp ceiling') !== -1,
+          'got ' + JSON.stringify(ampHintEl.textContent));
+
+    // Positive control: the SAME low ceiling, but has_probe:true, DOES say
+    // probe keep-out. Without this, the three checks above could pass simply
+    // because "probe keep-out" never appears for any printer any more --
+    // this proves the string is still reachable when it is actually true.
+    w.__testInjectPrinter({ key: '__test_probed_lowcap__', name: 'Test Probed Low-Cap',
+      bed: [235,235], z_amp_max: 0.5, quality_slope_max: 0.25, has_probe: true });
+    w.__testSelectPrinter('__test_probed_lowcap__');
+    check('positive control: has_probe:true with the same low ceiling DOES say probe keep-out',
+          ampHintEl.textContent.indexOf('probe keep-out') !== -1 &&
+          loopNoteEl.textContent.indexOf('probe keep-out') !== -1,
+          'amp hint ' + JSON.stringify(ampHintEl.textContent) +
+            ', loop note ' + JSON.stringify(loopNoteEl.textContent));
+
+    // ---- amp-editor two-ceiling model ----------------------------------------
+    // The amp curve editor has TWO ceilings that used to be smashed into one
+    // dashed line (see designer.js's makeEditor()/updateSlope()): a HARD wall
+    // (z_amp_max, always the editor's axis top, control points physically
+    // clamped to it) and a SEPARATE, advisory slope cap (print-quality only --
+    // the server warns but still generates) that is drawn -- band, dashed
+    // line, label -- only while it actually falls inside that wall. A single
+    // line meant opposite things on different printers (a real wall on the
+    // Trident, a wall-you-can-cross-with-a-warning on a Bambu) and its label
+    // clipped off the canvas whenever it WAS the wall (py(hi)-2 sits above the
+    // canvas edge). w.__testAmpCeilings() (designer.js) exposes both ceilings'
+    // values, labels and DRAWN geometry -- canvas has no DOM to read back --
+    // so these assertions catch both a value regression and a pixel one.
+    const ampCv = w.document.getElementById('amp-curve');
+    const ampW = ampCv.width, ampH = ampCv.height;
+    // A rect fully inside the canvas is the clipping regression itself: the
+    // old bug placed the "amp limit" label's top edge at py(hi)-2, i.e.
+    // partly above y=0, which this catches directly rather than eyeballing a
+    // screenshot.
+    const rectOnCanvas = (r) => !!r &&
+      r.x >= 0 && r.y >= 0 && r.x + r.w <= ampW && r.y + r.h <= ampH;
+
+    // slope cap = quality_slope_max * radius * min(silhouette) / waves. At
+    // radius 32 / 5 waves / flat silhouette / slope 0.25 that is 1.60mm --
+    // below a 4.0mm z_amp_max (band shown), not below a 0.95mm one (no band,
+    // hard wall only). Same slope math as the readout above (same injected
+    // 0.25 printer, just a different z_amp_max), so the two can never
+    // disagree about which one binds.
+    w.__testInjectPrinter({ key: '__test_ref_wide__', name: 'Test Ref Wide',
+      bed: [235,235], z_amp_max: 4.0, quality_slope_max: 0.25, has_probe: false });
+    w.__testSelectPrinter('__test_ref_wide__');
+    const ceilWide = w.__testAmpCeilings();
+    check('wide printer (z_amp_max 4.0): hard wall is at hi and its label stays on-canvas',
+          near(ceilWide.wall.val, 4.0, 0.01) && /^amp limit 4/.test(ceilWide.wall.label) &&
+          rectOnCanvas(ceilWide.wall.rect),
+          'got ' + JSON.stringify(ceilWide.wall));
+    // bandTop must sit at the editor's fixed top padding (PADT=8 in
+    // designer.js's makeEditor()) -- py(hi) always resolves there by
+    // definition, which is the whole "hard wall is always the axis top"
+    // invariant this rework is built on, made assertable rather than just
+    // asserted-by-construction.
+    check('wide printer: slope cap (1.60) binds inside the wall -- band shown, on-canvas label',
+          !!ceilWide.soft && near(ceilWide.soft.val, 1.60, 0.01) &&
+          /^slope cap 1\.60/.test(ceilWide.soft.label) &&
+          near(ceilWide.soft.bandTop, 8, 0.01) &&
+          ceilWide.soft.bandTop < ceilWide.soft.bandBottom &&   // band has positive height
+          rectOnCanvas(ceilWide.soft.rect),
+          'got ' + JSON.stringify(ceilWide.soft));
+    // THE GUARD -- dragging (here: setting) a point ABOVE the slope cap must
+    // NOT get clamped to it. Only z_amp_max (hi) may clamp a control point;
+    // the slope cap is advisory. 2.34 is the exact number from the bug
+    // report this rework fixes: on a 4.0mm-ceiling printer the old single
+    // line drew the 1.60 slope cap and points sailed past it to 2.34 with no
+    // clamping -- confirm that stays true under the new model too.
+    w.__testSetCurves([[0,0],[0.2,0.3],[0.4,0.6],[0.6,2.34],[0.8,0.8],[1.0,0.5]], null);
+    const overCapProfile = w.__designSnapshot().amp_profile;
+    const overCapPt = overCapProfile.find(p => Math.abs(p[1] - 2.34) < 1e-6);
+    check('a control point above the slope cap is never clamped to it',
+          !!overCapPt, 'got amp_profile ' + JSON.stringify(overCapProfile));
+    check('...and the slope readout flags it red (over), not silently accepted',
+          slopeReadEl.classList.contains('err') && /TOO STEEP/.test(slopeReadEl.textContent),
+          'got ' + JSON.stringify(slopeReadEl.textContent) + ' classes ' + slopeReadEl.className);
+    // Restore the pinned default curve before the narrow-printer checks below
+    // read amp_profile again.
+    w.__testSetCurves([[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]], null);
+
+    w.__testInjectPrinter({ key: '__test_ref_narrow__', name: 'Test Ref Narrow',
+      bed: [235,235], z_amp_max: 0.95, quality_slope_max: 0.25, has_probe: false });
+    w.__testSelectPrinter('__test_ref_narrow__');
+    const ceilNarrow = w.__testAmpCeilings();
+    check('narrow printer (z_amp_max 0.95): hard wall label stays on-canvas ' +
+          '(THE CLIPPING REGRESSION -- the old code drew this at py(hi)-2, above y=0)',
+          near(ceilNarrow.wall.val, 0.95, 0.01) && /^amp limit 0\.95/.test(ceilNarrow.wall.label) &&
+          rectOnCanvas(ceilNarrow.wall.rect),
+          'got ' + JSON.stringify(ceilNarrow.wall));
+    check('narrow printer: slope cap (1.60) does NOT bind above the wall (0.95) -- no band',
+          ceilNarrow.soft === null, 'got ' + JSON.stringify(ceilNarrow.soft));
+
+    // ---- no waves means no slope constraint ----------------------------------
+    // slopeAmpCap() must return null (guarded in updateSlope()) rather than
+    // dividing by a zero wave count -- both the readout and the soft limit
+    // should fall back to "no band", leaving only the hard wall.
+    wavesEl.value = '0';
+    wavesEl.dispatchEvent(new w.Event('input'));
+    wavesEl.dispatchEvent(new w.Event('change'));
+    check('0 waves: readout reports ok (no slope to violate)',
+          /ok\s*$/.test(slopeReadEl.textContent) && !/TOO STEEP/.test(slopeReadEl.textContent),
+          'got ' + JSON.stringify(slopeReadEl.textContent));
+    const ceilNoWaves = w.__testAmpCeilings();
+    check('0 waves: no soft limit band, hard wall still marks the plain amp limit',
+          ceilNoWaves.soft === null && near(ceilNoWaves.wall.val, 0.95, 0.01) &&
+          /^amp limit 0\.95/.test(ceilNoWaves.wall.label),
+          'got ' + JSON.stringify(ceilNoWaves));
+
+    wavesEl.value = '5';
+    wavesEl.dispatchEvent(new w.Event('input'));
+    wavesEl.dispatchEvent(new w.Event('change'));
+
+    // ---- degenerate slope caps must never produce bad geometry --------------
+    // A slope cap that is a tiny sliver of the axis (a very tight printer +
+    // many waves) and a slope cap of exactly 0 (a printer declaring
+    // quality_slope_max: 0, i.e. every amplitude is over) are both real
+    // configurations a hostile or just unusual printer entry can send. Assert
+    // the drawn rect is still finite and on-canvas, and the band never
+    // inverts (top must stay above bottom in canvas-Y, i.e. bandTop <
+    // bandBottom) rather than merely "did not throw".
+    w.__testInjectPrinter({ key: '__test_slope_sliver__', name: 'Test Slope Sliver',
+      bed: [235,235], z_amp_max: 4.0, quality_slope_max: 0.10, has_probe: false });
+    w.__testSelectPrinter('__test_slope_sliver__');
+    wavesEl.value = '20';
+    wavesEl.dispatchEvent(new w.Event('input'));
+    wavesEl.dispatchEvent(new w.Event('change'));
+    const ceilSliver = w.__testAmpCeilings();
+    // slope cap = 0.10 * 32 / 20 = 0.16mm on a 4.0mm axis -- the band should
+    // cover nearly the whole plot.
+    check('tiny slope cap (0.16 on a 4.0 axis): band present, finite, on-canvas, not inverted',
+          !!ceilSliver.soft && isFinite(ceilSliver.soft.val) &&
+          isFinite(ceilSliver.soft.bandTop) && isFinite(ceilSliver.soft.bandBottom) &&
+          ceilSliver.soft.bandTop < ceilSliver.soft.bandBottom &&
+          rectOnCanvas(ceilSliver.soft.rect) && rectOnCanvas(ceilSliver.wall.rect),
+          'got ' + JSON.stringify(ceilSliver));
+
+    w.__testInjectPrinter({ key: '__test_slope_zero__', name: 'Test Slope Zero',
+      bed: [235,235], z_amp_max: 4.0, quality_slope_max: 0, has_probe: false });
+    w.__testSelectPrinter('__test_slope_zero__');
+    const ceilZero = w.__testAmpCeilings();
+    check('quality_slope_max 0: every amplitude is over -- band covers the whole axis, no NaN',
+          !!ceilZero.soft && near(ceilZero.soft.val, 0, 1e-6) &&
+          isFinite(ceilZero.soft.bandTop) && isFinite(ceilZero.soft.bandBottom) &&
+          rectOnCanvas(ceilZero.soft.rect),
+          'got ' + JSON.stringify(ceilZero));
+
+    // A slope cap that lands EXACTLY on the wall (equal, not less) must not
+    // bind -- draw()/setSoftLimit() both gate on strictly-less, matching
+    // updateSlope()'s own `slopeCap < zCap` -- so this is the boundary this
+    // codebase already treats as "does not bind" and must keep treating that
+    // way (a >= comparison here would flip a valid design into a phantom
+    // warning the moment a printer's numbers line up exactly).
+    // radius 32 * slope 0.125 / waves 5 = 0.80, chosen to equal z_amp_max 0.80.
+    w.__testInjectPrinter({ key: '__test_slope_exact__', name: 'Test Slope Exact',
+      bed: [235,235], z_amp_max: 0.80, quality_slope_max: 0.125, has_probe: false });
+    w.__testSelectPrinter('__test_slope_exact__');
+    wavesEl.value = '5';
+    wavesEl.dispatchEvent(new w.Event('input'));
+    wavesEl.dispatchEvent(new w.Event('change'));
+    const ceilExact = w.__testAmpCeilings();
+    check('slope cap exactly equal to z_amp_max: treated as not binding -- no band',
+          ceilExact.soft === null, 'got ' + JSON.stringify(ceilExact));
+
+    // ---- every shipped printer profile: /api/printers loop -------------------
+    // PRINTER_PROFILES (trident_gcode/profile.py) has 15 entries: z_amp_max
+    // ranges 0.95 (Trident) to 4.0 (the five Bambus) with the nine Crealitys
+    // <= 1.0, and every shipped profile currently declares the SAME
+    // quality_slope_max (0.25) -- see designer.js's SLOPE_LIMIT_FALLBACK
+    // comment. Pinned at radius 32 / 5 waves / flat silhouette (still set
+    // from above), the slope cap is therefore a FIXED 1.60mm for every one of
+    // them, which means this loop exercises both branches for real: the band
+    // shows on the five Bambus (1.60 < 4.0) and stays hidden on the Trident
+    // and all nine Crealitys (1.60 >= their <= 1.0 ceilings) -- not a
+    // hand-picked pair of injected fakes, the actual registry.
+    const printerList = await fetch('/api/printers').then(r => r.json()).then(j => j.printers);
+    check('printer registry loop actually has printers to iterate (fetch did not silently return empty)',
+          Array.isArray(printerList) && printerList.length >= 15,
+          'got ' + (printerList && printerList.length));
+
+    const perPrinterFail = [];
+    for (const p of printerList) {
+      w.__testInjectPrinter(p);
+      w.__testSelectPrinter(p.key);
+      const c = w.__testAmpCeilings();
+      const zCap = typeof p.z_amp_max === 'number' ? p.z_amp_max : 0.4;
+      const wantBand = 1.60 < zCap;
+
+      if (!near(c.wall.val, zCap, 0.01)) perPrinterFail.push(p.key + ': wall.val ' + c.wall.val + ' != ' + zCap);
+      if (!rectOnCanvas(c.wall.rect)) perPrinterFail.push(p.key + ': wall label off-canvas ' + JSON.stringify(c.wall.rect));
+      if (wantBand !== (c.soft !== null)) perPrinterFail.push(p.key + ': band present=' + (c.soft !== null) + ' want=' + wantBand);
+      if (c.soft) {
+        if (!near(c.soft.val, 1.60, 0.01)) perPrinterFail.push(p.key + ': soft.val ' + c.soft.val + ' != 1.60');
+        if (!rectOnCanvas(c.soft.rect)) perPrinterFail.push(p.key + ': soft label off-canvas ' + JSON.stringify(c.soft.rect));
+        if (!(c.soft.bandTop < c.soft.bandBottom)) perPrinterFail.push(p.key + ': band inverted ' + c.soft.bandTop + '/' + c.soft.bandBottom);
+        // The band's top edge is py(hi) -- the SAME pixel row the hard-wall
+        // line is drawn on (PADT=8, designer.js's makeEditor()) on every
+        // printer, since hi IS the wall. A drift here would mean the band
+        // and the wall had come loose from each other.
+        if (!near(c.soft.bandTop, 8, 0.01)) perPrinterFail.push(p.key + ': bandTop ' + c.soft.bandTop + ' != PADT 8');
+      }
+    }
+    check('every printer in /api/printers: hard wall matches z_amp_max, on-canvas, ' +
+          'band shown iff the fixed 1.60 slope cap is below it',
+          perPrinterFail.length === 0,
+          perPrinterFail.join('; '));
+
+    // Leave the page as we found it: restore geometry, curves and printer.
+    radiusEl.value = prevRadius;
+    radiusEl.dispatchEvent(new w.Event('input'));
+    radiusEl.dispatchEvent(new w.Event('change'));
+    wavesEl.value = prevWaves;
+    wavesEl.dispatchEvent(new w.Event('input'));
+    wavesEl.dispatchEvent(new w.Event('change'));
+    w.__testSetCurves(prevAmpProfile, prevSilProfile);
+    w.__testSelectPrinter(prevPrinterKey);
+
     // ---- coordinate mirror ---------------------------------------------------
     // The scene is Y-up, the machine Z-up. Swapping two axes without negating
     // one is a REFLECTION (determinant -1), which shows chiral geometry -- an

@@ -147,9 +147,15 @@ def build_loop_fabric(
     # ---- emit -------------------------------------------------------------------
     writer.header()
     if z_clamped:
+        # "probe keep-out" is only true on a machine that HAS a trailing
+        # probe (Trident); a probe-less machine (e.g. Bambu P1S, has_probe=
+        # False) is still clamped by z_amp_max, just for a different reason
+        # -- calling it "probe keep-out" there would be a false claim about
+        # hardware that isn't present.
+        reason = "probe keep-out" if getattr(profile, "has_probe", True) else "z-amp ceiling"
         writer.comment(
             f"NOTE: loop height clamped to {loop_h:.2f}mm / row to {row_mm:.2f}mm "
-            f"({profile.name} z_amp_max={z_cap}mm - probe keep-out)")
+            f"({profile.name} z_amp_max={z_cap}mm - {reason})")
     sx = cx + _radius(0.0, 0.0)
     writer.comment("move to fabric start")
     writer.safe_lift(z0 + travel_z_clearance)

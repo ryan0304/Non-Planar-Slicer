@@ -90,6 +90,19 @@
   var PROBE_LIMIT = 0.95;
   var AMP_MAX = 0.95, RAD_LO = 0.5, RAD_HI = 1.3;
 
+  // Bootstrap-only floor for the wave-slope readout (see "live wave-slope
+  // readout" below), used for the exact same reason and in the exact same
+  // way as PROBE_LIMIT/AMP_MAX just above: the very first synchronous
+  // updateSlope() runs before /api/printers has resolved. It also covers a
+  // served printer entry that omits quality_slope_max outright (an old
+  // cache, a hand-rolled dev response) -- see slopeCapFor() below. Once a
+  // real printer entry is on hand, PRINTER_SLOPE[design.printer] always
+  // wins; this constant is never consulted again. 0.25 is conservative
+  // because it is currently the tightest (and only) value any shipped
+  // profile declares -- if a future printer ever needs to declare something
+  // stricter, it must SEND that number; this floor does not stand in for it.
+  var SLOPE_LIMIT_FALLBACK = 0.25;
+
   // Formats a millimeter ceiling the way the machine bar / notices / hints
   // want it: "0.95", "4.0", "0.40" -- two decimals, trimmed to one only when
   // the second is a redundant zero (x.y0 stays, x.00 becomes x.0).
@@ -820,6 +833,7 @@
   var printerComboOpenState = false;
   var PRINTER_BEDS = {};   // key -> [bed_x, bed_y]
   var PRINTER_ZCAP = {};   // key -> max Z excursion below printed material (mm)
+  var PRINTER_SLOPE = {};  // key -> quality_slope_max, the peak printable wave wall slope
   var PRINTER_META = {};   // key -> full /api/printers entry (custom, source_format, warnings)
 
   // The amp ceiling a printer entry is allowed to contribute to the UI.
@@ -844,6 +858,72 @@
   // Exposed so the invariant is testable without standing up the whole
   // custom-printer flow -- see the assertions in viewer/dev_smoke.html.
   window.__zAmpCapFor = zAmpCapFor;
+
+  // The per-entry fallback for quality_slope_max, mirrored on zAmpCapFor's
+  // shape above but NOT its number: zAmpCapFor deliberately falls back to a
+  // 0.4 that belongs to no real printer, because z_amp_max varies widely
+  // across profiles (0.40 to 4.0) and defaulting to any one of them would be
+  // "silently inheriting a different machine's limit". quality_slope_max
+  // does not have that problem today -- every shipped profile currently
+  // declares the same 0.25 -- so an entry that omits the field reuses
+  // SLOPE_LIMIT_FALLBACK rather than inventing a third constant. If a
+  // printer ever needs a slope ceiling other than 0.25, the fix is for its
+  // profile to send one, not for this fallback to guess.
+  function slopeCapFor(v){
+    return (typeof v === 'number' && isFinite(v)) ? v : SLOPE_LIMIT_FALLBACK;
+  }
+  // The active printer's slope ceiling. Reads PRINTER_SLOPE[design.printer]
+  // (populated in loadPrinterOptions(), same funnel as PRINTER_ZCAP) so the
+  // wave-slope readout and the amp-editor reference line -- see "live
+  // wave-slope readout" below -- always agree on which number is live. Falls
+  // back to SLOPE_LIMIT_FALLBACK only when the printer list has not loaded
+  // yet (no entry at all for design.printer), never as a stand-in for a
+  // printer's real, declared value.
+  function activeSlopeLimit(){
+    var v = PRINTER_SLOPE[design.printer];
+    return (typeof v === 'number' && isFinite(v)) ? v : SLOPE_LIMIT_FALLBACK;
+  }
+
+  // Test-only injection point for viewer/dev_smoke.html's printer-dependent
+  // assertions: stands up a fake printer entry (any subset of the usual
+  // /api/printers fields -- bed, z_amp_max, quality_slope_max, has_probe,
+  // name) without a real network round trip. Registers the entry only --
+  // does NOT switch to it (see window.__testSelectPrinter right below) --
+  // so injecting a fake printer never disturbs whichever one is currently
+  // selected, and never derives a fallback bed/cap from "whatever happens to
+  // be selected right now" the way that would silently corrupt a REAL
+  // entry's data if this were reused to restore the original selection.
+  window.__testInjectPrinter = function(entry){
+    if(!entry || !entry.key) return;
+    PRINTER_BEDS[entry.key] = entry.bed || [235, 235];
+    PRINTER_ZCAP[entry.key] = zAmpCapFor(entry.z_amp_max);
+    PRINTER_SLOPE[entry.key] = slopeCapFor(entry.quality_slope_max);
+    PRINTER_META[entry.key] = entry;
+  };
+  // Test-only printer switch: the same design.printer + applyPrinterCaps()
+  // path a real printer switch uses (applyPrinterCaps() is "the one function
+  // every printer switch ... funnels through", per its own comment below),
+  // without selectPrinter()'s combo-box/notice/persistDesign side effects --
+  // chrome the assertions don't need. Works on any key already known to
+  // PRINTER_BEDS, real or injected via __testInjectPrinter above, so it also
+  // doubles as the restore path back to whatever was selected before a test.
+  window.__testSelectPrinter = function(key){
+    if(!PRINTER_BEDS.hasOwnProperty(key)) return;
+    design.printer = key;
+    applyPrinterCaps();
+  };
+  // Test-only curve override for the amp/silhouette editors -- mirrors the
+  // "Load design as JSON" path's ampEditor.setProfile()/silEditor.setProfile()
+  // calls. The wave-slope readout depends on the exact curve shape, and
+  // localStorage may be carrying a curve left over from an earlier manual
+  // session in this same browser profile, so an assertion that needs a KNOWN
+  // shape cannot just assume the shipped default is still in place. Pass
+  // null for either profile to leave that curve untouched.
+  window.__testSetCurves = function(ampProfile, silProfile){
+    if(ampProfile){ ampEditor.setProfile(ampProfile); design.amp_profile = ampEditor.profile(); }
+    if(silProfile){ silEditor.setProfile(silProfile); design.radius_profile = silEditor.profile(); }
+    updateSlope();
+  };
 
   // Prefers the server-computed loop_row_max/loop_up_max (see /api/printers)
   // so the client never re-derives the formula and the two can never drift.
@@ -874,6 +954,17 @@
     var caps = loopCapsFor(meta, cap);
     var changed = 0;
 
+    // The live draft clamps wave amplitude too, and it must clamp to the SAME
+    // ceiling the server will (serve.py's amp_ceiling). preview_math.js used
+    // to carry its own hardcoded 0.95, so on any printer declaring something
+    // else the draft silently stopped responding to amplitude edits partway
+    // up the curve -- the user drags a point, the request and the printed
+    // part change, the picture does not. Pushed from here because this is the
+    // one function every printer switch and the initial /api/printers load
+    // both funnel through, the same reasoning as the max_z_velocity contract
+    // below.
+    if(typeof window.setPreviewAmpMax === 'function') window.setPreviewAmpMax(cap);
+
     var up = document.getElementById('d-loop-up');
     var row = document.getElementById('d-loop-row');
     var floorUp = Math.min(1.0, caps.up);
@@ -899,8 +990,15 @@
     var note = document.getElementById('loop-zcap');
     if(note){
       var mname = (meta && meta.name) || 'This printer';
+      // caps.up < 1.5 is real signal that something is tightly limiting loop
+      // height, but it is only a PROBE if this printer actually declares
+      // one (meta.has_probe). The P1S has none -- its low ceiling is just
+      // z_amp_max, and saying "probe keep-out" on a probe-less machine is a
+      // false attribution the reader has no way to catch on their own.
+      var loopLimitNote = caps.up >= 1.5 ? ''
+        : ((meta && meta.has_probe) ? ' (probe keep-out limit)' : ' (z-amp ceiling)');
       note.textContent = mname + ' allows loops up to ' + fmtMm(caps.up) +
-        'mm tall' + (caps.up < 1.5 ? ' (probe keep-out limit)' : '') + '.';
+        'mm tall' + loopLimitNote + '.';
     }
 
     // Nozzle/bed temp ceilings: server-computed (see _printer_entry_json) so
@@ -931,14 +1029,25 @@
     // Amp curve: rescale the editor to the new ceiling and re-clamp every
     // control point into it, not just a number input -- the amp value lives
     // entirely in amp_profile's control points, there is no separate field.
+    // setRange() here carries ONLY the hard hi/lo ceiling -- it no longer
+    // takes a reference value/label at all (see its own comment in
+    // makeEditor()). updateSlope(), called immediately after, derives both
+    // ceiling labels from the same slope math as the readout (via
+    // ampEditor.setHardWallLabel()/setSoftLimit()) and always wins, so the
+    // panel can never show different numbers than the editor.
     if(typeof ampEditor !== 'undefined' && ampEditor){
-      changed += ampEditor.setRange(cap, cap, 'amp limit ' + fmtMm(cap));
+      changed += ampEditor.setRange(cap);
       design.amp_profile = ampEditor.profile();
+      updateSlope();
     }
     var ampHint = document.getElementById('amp-limit-hint');
     if(ampHint){
+      // Same false-attribution fix as loop-zcap above: this is a probe
+      // figure only when the selected printer actually has a probe.
+      var ampIsProbeLimit = !!(meta && meta.has_probe);
       ampHint.textContent = 'max ' + fmtMm(cap) + ' mm - ' +
-        ((meta && meta.name) || 'selected printer') + ' probe keep-out';
+        ((meta && meta.name) || 'selected printer') +
+        (ampIsProbeLimit ? ' probe keep-out' : ' z-amp ceiling');
     }
 
     // Cross-agent contract (see CLAUDE.md: "no machine limit may be a
@@ -951,7 +1060,14 @@
       key: design.printer,
       name: (meta && meta.name) || design.printer,
       max_z_velocity: (meta && typeof meta.max_z_velocity === 'number' && isFinite(meta.max_z_velocity))
-        ? meta.max_z_velocity : 10.0 // conservative default, matches printer_validate.py's unknown-limit fallback
+        ? meta.max_z_velocity : 10.0, // conservative default, matches printer_validate.py's unknown-limit fallback
+      // Same contract, same funnel, for the wave-slope ceiling: designer.js
+      // used to hardcode the Trident's own 0.25 for every printer (see
+      // SLOPE_LIMIT_FALLBACK's comment above for why that number in
+      // particular is no longer a module constant). activeSlopeLimit()
+      // resolves PRINTER_SLOPE[design.printer], set from this same printer's
+      // /api/printers entry a few lines above.
+      quality_slope_max: activeSlopeLimit()
     };
 
     return changed;
@@ -1215,10 +1331,11 @@
         if((p.name || '').indexOf('Voron') === 0) return 'Voron';
         return 'Other';
       }
-      PRINTER_BEDS = {}; PRINTER_ZCAP = {}; PRINTER_META = {};
+      PRINTER_BEDS = {}; PRINTER_ZCAP = {}; PRINTER_SLOPE = {}; PRINTER_META = {};
       (j.printers||[]).forEach(function(p){
         PRINTER_BEDS[p.key] = p.bed;
         PRINTER_ZCAP[p.key] = zAmpCapFor(p.z_amp_max);
+        PRINTER_SLOPE[p.key] = slopeCapFor(p.quality_slope_max);
         PRINTER_META[p.key] = p;
         var gname = groupFor(p);
         if(!byGroup[gname]){ byGroup[gname] = []; groupOrder.push(gname); }
@@ -2156,7 +2273,7 @@
   // rather than this shared factory guessing units. readoutElId (optional):
   // id of a persistent DOM node (with .cv-readout-mm / .cv-readout-sub
   // children) that mirrors the on-canvas label and survives mouseup.
-  function makeEditor(canvasId, lo, hi, defaults, refVal, refLabel, readoutFmt, readoutElId){
+  function makeEditor(canvasId, lo, hi, defaults, refVal, refLabel, readoutFmt, readoutElId, hardWall){
     var cv = document.getElementById(canvasId);
     var ctx = cv.getContext('2d');
     var W = cv.width, H = cv.height;
@@ -2173,6 +2290,34 @@
     var readoutMmEl = readoutEl ? readoutEl.querySelector('.cv-readout-mm') : null;
     var readoutSubEl = readoutEl ? readoutEl.querySelector('.cv-readout-sub') : null;
 
+    // ---- two-ceiling model (see the block comment above updateSlope()) -----
+    // `hardWall` (bool, only true for the amp-curve editor) switches draw()
+    // between two entirely different ceiling treatments:
+    //
+    //  - false (sil-curve, width-curve): the ORIGINAL plain dashed line at
+    //    refVal/refLabel, unchanged from before this rework. Neither editor
+    //    has a printer-derived ceiling, so there is nothing to distinguish.
+    //
+    //  - true (amp-curve): hi IS the printer's z_amp_max -- a physical wall
+    //    control points are clamped against (see setRange()) -- so the wall
+    //    is drawn at the axis TOP, always, on every printer, labelled with
+    //    wallLabel. A SEPARATE, optional soft limit (the print-quality slope
+    //    cap) can additionally be set via setSoftLimit(); it is advisory
+    //    only -- the server warns but still generates -- so it never moves
+    //    hi and never clamps a point, and is drawn only while it actually
+    //    falls inside the axis (softVal < hi). refVal/refLabel are UNUSED in
+    //    this mode (wallLabel below is the amp editor's own label channel,
+    //    seeded from refLabel at construction only so the very first
+    //    synchronous render -- before /api/printers resolves -- still shows
+    //    a sane bootstrap value, same trick AMP_MAX/PROBE_LIMIT already use).
+    var wallLabel = refLabel;
+    var softVal = null, softLabel = null;
+    // Last-drawn label geometry, canvas-pixel space -- test-only, refreshed
+    // every draw() so viewer/dev_smoke.html can assert a label rectangle
+    // never leaves the canvas (the exact regression this rework fixes: see
+    // ceilings() near the bottom of this factory).
+    var lastWallRect = null, lastSoftRect = null;
+
     function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
     function px(t){ return PADL + t*(W-PADL-PADR); }
     function py(v){ return PADT + (1-(v-lo)/(hi-lo))*(H-PADT-PADB); }
@@ -2181,9 +2326,80 @@
 
     function sortPts(){ pts.sort(function(a,b){ return a.t - b.t; }); }
 
+    // Fixed label-chip dimensions, shared between labelChip() itself and
+    // draw()'s "is there room above the line" hint below -- kept as named
+    // constants rather than two copies of the same numbers so the hint can
+    // never drift out of sync with what labelChip() actually needs to fit.
+    var LABEL_BOX_H = 13, LABEL_GAP = 3;
+
+    // Draws a filled chip (panel-background plate) behind `text` so it stays
+    // legible over the plot fill, the curve and (for the amp editor) the
+    // soft-limit band, then draws the text on top in `color`. Returns the
+    // chip's rectangle in canvas-pixel space so draw() can stash it for
+    // dev_smoke's off-canvas/clipping assertions.
+    //
+    // anchorRight: true pins the chip's right edge near the plot's right
+    // edge, false pins its left edge near the plot's left edge. The wall
+    // label and the soft-limit label are pinned to OPPOSITE edges (see their
+    // call sites in draw()) specifically so the two can never overlap each
+    // other, even when their lines sit only a few pixels apart -- the one
+    // geometry this canvas is too small to resolve by vertical spacing alone.
+    //
+    // preferAbove: try to sit the chip above lineY first; if that would run
+    // the chip off the top of the canvas (the exact clipping bug this
+    // rework fixes -- the old code drew the "amp limit" label at
+    // py(refVal)-2 with refVal===hi, i.e. right at the canvas edge), flip it
+    // below instead. The reverse flip (prefer below, flip up if it would run
+    // off the bottom) is available for symmetry even though nothing calls it
+    // with preferAbove:false today, keeping the helper reusable.
+    function labelChip(text, lineY, anchorRight, preferAbove, color){
+      ctx.font = '9px sans-serif';
+      var tw = ctx.measureText(text).width;
+      var padX = 3, boxW = tw + padX*2, boxH = LABEL_BOX_H, gap = LABEL_GAP;
+      var above = preferAbove;
+      var y = above ? (lineY - gap - boxH) : (lineY + gap);
+      if(above && y < 0){ above = false; y = lineY + gap; }
+      else if(!above && y + boxH > H){ above = true; y = lineY - gap - boxH; }
+      // Final defensive clamp: whichever side was chosen still has to fit.
+      // Reachable only in a degenerate axis (e.g. hi very close to lo) where
+      // neither side has boxH of room -- better a slightly overlapping label
+      // than one with a coordinate that pushes it off the canvas entirely.
+      y = Math.max(0, Math.min(y, H - boxH));
+      var x = anchorRight ? (W - PADR - boxW) : PADL;
+      x = Math.max(0, Math.min(x, W - boxW));
+      ctx.fillStyle = css('--panel') || '#1e2124';
+      ctx.fillRect(x, y, boxW, boxH);
+      ctx.fillStyle = color;
+      ctx.fillText(text, x + padX, y + boxH - 4);
+      return { x:x, y:y, w:boxW, h:boxH };
+    }
+
     function draw(){
       ctx.clearRect(0,0,W,H);
       var accent = css('--accent') || '#5a8aff';
+      var muted = css('--muted') || '#9aa0a6';
+      var warn = css('--warn') || '#ffb454';
+
+      // Soft-limit "may collapse" band, drawn FIRST so the curve fill/stroke
+      // and control points layer on top of it and stay the most legible
+      // thing on the chart (requirement: the tint must not bury the curve).
+      // Fills from the slope cap up to the axis top (hi) -- the region where
+      // amplitude is still inside the printer's hard z_amp_max wall but over
+      // the print-quality slope advisory. Clamp softVal into [lo, hi] before
+      // computing pixels: slopeAmpCap() cannot go negative for sane inputs,
+      // but a rect built from an unclamped value is exactly the kind of edge
+      // case that produces an inverted rect the moment an input changes.
+      var bandTop = null, bandBottom = null, clampedSoft = null;
+      if(hardWall && softVal !== null && isFinite(softVal) && softVal < hi){
+        clampedSoft = Math.min(hi, Math.max(lo, softVal));
+        bandTop = py(hi);
+        bandBottom = py(clampedSoft);
+        ctx.globalAlpha = 0.16;
+        ctx.fillStyle = warn;
+        ctx.fillRect(PADL, bandTop, W-PADL-PADR, Math.max(0, bandBottom - bandTop));
+        ctx.globalAlpha = 1;
+      }
+
       // filled area under the polyline
       ctx.beginPath();
       ctx.moveTo(px(pts[0].t), py(pts[0].v));
@@ -2198,22 +2414,73 @@
       ctx.moveTo(px(pts[0].t), py(pts[0].v));
       for(var j=1;j<pts.length;j++){ ctx.lineTo(px(pts[j].t), py(pts[j].v)); }
       ctx.strokeStyle = accent; ctx.lineWidth = 1.6; ctx.stroke();
-      // reference (dashed) line
-      ctx.setLineDash([4,3]);
-      ctx.beginPath();
-      ctx.moveTo(PADL, py(refVal)); ctx.lineTo(W-PADR, py(refVal));
-      ctx.strokeStyle = (refLabel.indexOf('probe')>=0) ? 'rgba(224,101,79,0.85)' : (css('--muted')||'#9aa0a6');
-      ctx.lineWidth = 1; ctx.stroke();
-      ctx.setLineDash([]);
+
+      var wallRect = null, softRect = null, softLineY = null;
+      if(hardWall){
+        // Hard wall: always the axis top (py(hi) === PADT), on every
+        // printer -- see the block comment above wallLabel's declaration.
+        // Drawn muted/dashed like the old plain reference line (same visual
+        // weight as sil-curve/width-curve's ceiling), just repositioned to a
+        // coordinate that can never clip: the label is placed BELOW its
+        // line by labelChip()'s preferAbove:false, because "above" here
+        // would be off the top of the canvas by construction.
+        ctx.setLineDash([4,3]);
+        ctx.beginPath();
+        ctx.moveTo(PADL, py(hi)); ctx.lineTo(W-PADR, py(hi));
+        ctx.strokeStyle = muted; ctx.lineWidth = 1; ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Soft limit line: a dash pattern visually distinct from the hard
+        // wall's, in --warn (the reserved "risk flag" token -- a collapse
+        // risk is exactly the safety state that token is for).
+        if(bandTop !== null){
+          softLineY = bandBottom;
+          ctx.setLineDash([2,2]);
+          ctx.beginPath();
+          ctx.moveTo(PADL, softLineY); ctx.lineTo(W-PADR, softLineY);
+          ctx.strokeStyle = warn; ctx.lineWidth = 1; ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      } else {
+        // Plain reference line -- sil-curve/width-curve, unchanged from
+        // before this rework. Never gets a band; never gets the hard-wall
+        // top-of-axis treatment. The old "probe" colour branch lived here
+        // and is gone: no label has said "probe" in a long time (that text
+        // now lives in the amp-limit hint elsewhere in the panel), so it was
+        // dead code a future reader could easily mistake for live behaviour.
+        ctx.setLineDash([4,3]);
+        ctx.beginPath();
+        ctx.moveTo(PADL, py(refVal)); ctx.lineTo(W-PADR, py(refVal));
+        ctx.strokeStyle = muted; ctx.lineWidth = 1; ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
       // control points
       for(var k=0;k<pts.length;k++){
         ctx.beginPath(); ctx.arc(px(pts[k].t), py(pts[k].v), 3.2, 0, Math.PI*2);
         ctx.fillStyle = accent; ctx.fill();
       }
+
       // labels (ASCII)
-      ctx.fillStyle = css('--muted')||'#9aa0a6';
+      if(hardWall){
+        wallRect = labelChip(wallLabel, py(hi), true, false, muted);
+        if(softLineY !== null){
+          // Mirrors labelChip()'s own "does above fit" test (y = lineY -
+          // gap - boxH >= 0) so this hint can never disagree with what the
+          // helper actually decides -- it only saves labelChip() a redundant
+          // flip-then-reclamp pass in the common case.
+          var fitsAbove = (softLineY - LABEL_GAP - LABEL_BOX_H) >= 0;
+          softRect = labelChip(softLabel, softLineY, false, fitsAbove, warn);
+        }
+      } else {
+        ctx.fillStyle = muted;
+        ctx.font = '9px sans-serif';
+        ctx.fillText(refLabel, PADL+2, py(refVal)-2);
+      }
+      lastWallRect = wallRect;
+      lastSoftRect = softRect;
+      ctx.fillStyle = muted;
       ctx.font = '9px sans-serif';
-      ctx.fillText(refLabel, PADL+2, py(refVal)-2);
       ctx.fillText('bottom', PADL, H-2);
       ctx.fillText('top', W-18, H-2);
       // Numeric readout for the active point (dragging, else hovered) --
@@ -2366,15 +2633,18 @@
         hoverIdx = -1; lastTouchedPt = null;
         draw();
       },
-      // Changes the editor's ceiling (e.g. a new printer's z_amp_max), the
-      // dashed reference line and its label, and re-clamps every existing
-      // control point into the new [lo, hi] range -- not just a paired
-      // number input, since the amp value lives entirely in these points.
-      // Returns how many points actually moved, so a caller can report it.
-      setRange: function(newHi, newRefVal, newRefLabel){
+      // Changes the editor's HARD ceiling (e.g. a new printer's z_amp_max)
+      // and re-clamps every existing control point into the new [lo, hi]
+      // range -- not just a paired number input, since the amp value lives
+      // entirely in these points. Deliberately takes ONLY newHi: the old
+      // 3-argument form also carried a reference value/label, but every real
+      // call site (applyPrinterCaps()) already passed just the ceiling and
+      // relied on the updateSlope() call immediately after to set the
+      // label -- see setHardWallLabel()/setSoftLimit() below, which is now
+      // that funnel. Returns how many points actually moved, so a caller can
+      // report it.
+      setRange: function(newHi){
         hi = newHi;
-        if(typeof newRefVal === 'number') refVal = newRefVal;
-        if(typeof newRefLabel === 'string') refLabel = newRefLabel;
         var moved = 0;
         for(var i = 0; i < pts.length; i++){
           var clamped = Math.min(hi, Math.max(lo, pts[i].v));
@@ -2382,6 +2652,68 @@
         }
         draw();
         return moved;
+      },
+      // Moves ONLY the plain dashed reference line and its label (sil-curve/
+      // width-curve's ceiling) -- never touches hi/lo, never re-clamps a
+      // control point. No shipped call site uses this today (both plain-line
+      // editors are constructed with a fixed refVal that never moves), but
+      // it is kept as the general "move the plain reference line" entry
+      // point the constructor's refVal/refLabel imply exists, parallel to
+      // setHardWallLabel()/setSoftLimit() below for the amp editor's two-
+      // ceiling model. hardWall-mode editors should use those instead --
+      // this setter's plain line is never drawn while hardWall is true.
+      setRef: function(newRefVal, newRefLabel){
+        if(typeof newRefVal === 'number') refVal = newRefVal;
+        if(typeof newRefLabel === 'string') refLabel = newRefLabel;
+        draw();
+      },
+      // ---- hardWall-mode ceiling setters (amp-curve only) ------------------
+      // Sets the hard-wall label. Its VALUE is deliberately not a parameter:
+      // hi already IS the wall (see the block comment above wallLabel's
+      // declaration), so the only thing left to carry is the text --
+      // duplicating hi here would just be a second number that could drift
+      // from the first. Called every updateSlope() run in designer.js,
+      // same as setSoftLimit()/clearSoftLimit() below, so the three can
+      // never disagree about which printer they are describing.
+      setHardWallLabel: function(label){
+        if(typeof label === 'string'){ wallLabel = label; draw(); }
+      },
+      // Sets the advisory slope-cap line/band/label. Never touches hi/lo and
+      // never re-clamps a control point -- see the CLAUDE.md-driven design
+      // note above updateSlope() in designer.js for why that must stay true
+      // (the server only warns on this ceiling, it does not reject; clamping
+      // here would silently discard geometry the print would actually run).
+      // draw() itself re-checks val < hi before showing anything, so passing
+      // a val that has drifted above hi (e.g. the printer switched under a
+      // stale slope-cap number) safely produces no band rather than a bad
+      // one -- this setter does not need to duplicate that guard.
+      setSoftLimit: function(val, label){
+        if(typeof val !== 'number' || !isFinite(val)){ softVal = null; softLabel = null; draw(); return; }
+        softVal = val;
+        softLabel = (typeof label === 'string') ? label : '';
+        draw();
+      },
+      clearSoftLimit: function(){
+        if(softVal !== null){ softVal = null; softLabel = null; draw(); }
+      },
+      // Test-only introspection of the two-ceiling model's current numbers
+      // AND drawn geometry -- the lines/bands/label chips are drawn to a
+      // <canvas>, which has no DOM to read back, so viewer/dev_smoke.html's
+      // ceiling assertions go through this instead of the pixels. Rects are
+      // canvas-pixel space (the same W x H coordinate system draw() uses),
+      // so a test can assert e.g. `rect.y >= 0 && rect.y + rect.h <= H` --
+      // exactly the clipping regression that motivated this rework.
+      ceilings: function(){
+        return {
+          hi: hi,
+          wall: { val: hi, label: wallLabel, rect: lastWallRect },
+          soft: (softVal !== null && isFinite(softVal) && softVal < hi)
+            ? { val: softVal, label: softLabel,
+                lineY: py(Math.min(hi, Math.max(lo, softVal))),
+                bandTop: py(hi), bandBottom: py(Math.min(hi, Math.max(lo, softVal))),
+                rect: lastSoftRect }
+            : null
+        };
       }
     };
   }
@@ -2432,12 +2764,19 @@
   // Default amp curve peaks at 1.6mm: with the default 5 waves on r=32 that is
   // wave slope 0.25 - the empirically printable ceiling on this machine
   // (2026-07-05 print: slopes beyond ~0.25 collapsed above half height).
+  // hardWall:true -- the amp editor is the one editor whose axis top is a
+  // physical printer limit (z_amp_max); see the block comment above
+  // wallLabel's declaration inside makeEditor(). refVal/refLabel here only
+  // seed the bootstrap label shown before /api/printers resolves.
   var ampEditor = makeEditor('amp-curve', 0, AMP_MAX, [0, 0.3, 0.6, 0.8, 0.8, 0.5],
-                             PROBE_LIMIT, 'amp limit 0.95', ampReadout, 'amp-readout');
+                             PROBE_LIMIT, 'amp limit 0.95', ampReadout, 'amp-readout', true);
   var silEditor = makeEditor('sil-curve', RAD_LO, RAD_HI, [1,1,1,1,1,1],
                              1.0, '1.0', silReadout, 'sil-readout');
   var widthEditor = makeEditor('width-curve', 0.6, 1.8, [1,1,1,1,1,1],
                                1.0, '1.0', widthReadout, 'width-readout');
+  // Test-only: see makeEditor()'s ceilings() and viewer/dev_smoke.html's
+  // amp-editor two-ceiling assertions.
+  window.__testAmpCeilings = function(){ return ampEditor.ceilings(); };
   // Restore persisted curve shapes.
   ampEditor.setProfile(design.amp_profile);
   silEditor.setProfile(design.radius_profile);
@@ -2687,11 +3026,15 @@
   })();
 
   // ---- live wave-slope readout --------------------------------------------
-  // Peak wall slope = amp(t) * z_waves / (radius * silhouette(t)). Empirical
-  // print-quality ceiling on this machine: ~0.25 (about 14 deg). The probe
-  // limit caps amplitude; THIS caps printability - waves steeper than it
-  // collapsed above half height on the 2026-07-05 test print.
-  var SLOPE_LIMIT = 0.25;
+  // Peak wall slope = amp(t) * z_waves / (radius * silhouette(t)). The
+  // Trident's own empirical print-quality ceiling is ~0.25 (about 14 deg,
+  // from the 2026-07-05 test print where waves steeper than it collapsed
+  // above half height) -- but per CLAUDE.md ("no machine limit may be a
+  // module constant") that ceiling now lives on the PrinterProfile as
+  // quality_slope_max and arrives over /api/printers like every other
+  // machine limit. See PRINTER_SLOPE / activeSlopeLimit() near the top of
+  // this file. z_amp_max caps amplitude outright; THIS caps printability of
+  // whatever amplitude is still inside that ceiling.
   function lerpProfile(prof, t){
     for(var i=1;i<prof.length;i++){
       if(t <= prof[i][0]){
@@ -2701,22 +3044,96 @@
     }
     return prof[prof.length-1][1];
   }
+
+  // The amplitude at which the slope check itself trips, for the CURRENT
+  // wave count / radius / silhouette curve: solving slope = amp*waves /
+  // (radius*sil) for amp at slope==slopeLimit, using the silhouette's
+  // narrowest point (its smallest v) because a narrower waist reads the
+  // same amplitude as a steeper slope -- the worst case, and therefore the
+  // amplitude that trips the check soonest as amp rises from 0. Returns null
+  // when there are no waves at all: no waves means no slope to constrain.
+  // This is the one place both the amp-editor's dashed reference line and
+  // the readout's explanatory hint compute this number, so they can never
+  // disagree about why a design got flagged.
+  // The narrowest effective wall radius (radius * the silhouette's smallest
+  // v). Both the cap below and the readout's hint quote THIS rather than the
+  // nominal radius: on a design waisted to 0.5 the nominal figure overstates
+  // the available amplitude headroom by 2x, and the hint would then name a
+  // radius the cap was not computed from. Mirrors serve.py's
+  // _min_wall_radius() so the browser and the server explain a flagged
+  // design with the same two numbers.
+  function minWallRadius(radius, sil){
+    var minSil = sil[0][1];
+    for(var i=1;i<sil.length;i++){ if(sil[i][1] < minSil) minSil = sil[i][1]; }
+    var r = (typeof radius === 'number' && isFinite(radius)) ? radius : 0;
+    return r * minSil;
+  }
+  function slopeAmpCap(slopeLimit, radius, waves, sil){
+    if(!waves) return null;
+    return slopeLimit * minWallRadius(radius, sil) / waves;
+  }
+
   function updateSlope(){
     var el = document.getElementById('slope-read');
     if(!el) return;
     var waves = Math.round(design.z_waves);
     var radius = design.radius;
     var amp = ampEditor.profile(), sil = silEditor.profile();
+    var slopeLimit = activeSlopeLimit();
     var peak = 0;
     for(var t=0; t<=1.0001; t+=0.02){
       var s = lerpProfile(amp, t) * waves / Math.max(radius * lerpProfile(sil, t), 1e-6);
       if(s > peak) peak = s;
     }
-    var over = peak > SLOPE_LIMIT + 1e-9;
-    el.textContent = 'peak wave slope: ' + peak.toFixed(2) + ' / ' + SLOPE_LIMIT.toFixed(2) +
-      (over ? '  TOO STEEP - waves may collapse' : '  ok');
-    // Safety-state readout: mirrors --danger / --ok in style.css (probe/collapse risk).
-    el.style.color = over ? '#ff5d5d' : '#3fdca0';
+    var over = peak > slopeLimit + 1e-9;
+
+    // Explain WHY, not just THAT: a printer's advertised z_amp_max can sit
+    // far above what the current wave geometry can actually reach once the
+    // slope check bites (a P1S's 4.0mm ceiling is unreachable at the default
+    // 5 waves / r32, which read as a flat contradiction before this line
+    // existed). Only computed when the design is actually over the limit --
+    // there is nothing to explain otherwise.
+    var hint = '';
+    if(over){
+      var ampCapHint = slopeAmpCap(slopeLimit, radius, waves, sil);
+      if(ampCapHint != null && isFinite(ampCapHint)){
+        hint = ' (' + waves + ' waves at r' +
+          minWallRadius(radius, sil).toFixed(0) + ' caps amp at ' +
+          ampCapHint.toFixed(2) + 'mm)';
+      }
+    }
+    el.textContent = 'peak wave slope: ' + peak.toFixed(2) + ' / ' + slopeLimit.toFixed(2) +
+      (over ? '  TOO STEEP - waves may collapse' + hint : '  ok');
+    // Safety-state readout: --danger / --ok are reserved for exactly this
+    // (style.css's token comment names "risk flags" explicitly) -- toggle
+    // the classes that spend them rather than setting style.color to a
+    // literal hex that can silently drift from the tokens it claims to
+    // mirror. See .cv-note.err / .cv-note.ok in style.css.
+    el.classList.toggle('err', over);
+    el.classList.toggle('ok', !over);
+
+    // Amp-editor ceilings: TWO of them, not one -- see the block comment
+    // above wallLabel's declaration in makeEditor() and the two-ceiling
+    // design note in this file's header comment. The hard wall (z_amp_max,
+    // the editor's axis top -- setRange() already put it there) is always
+    // labelled, on every printer. The slope cap is a SEPARATE, advisory
+    // ceiling drawn only while it actually falls inside that wall
+    // (slopeCap < zCap) -- setSoftLimit()/clearSoftLimit() never touch hi/lo
+    // and never re-clamp a control point, unlike setRange(), because this
+    // ceiling is print-quality advice the server warns about but still
+    // generates past, not a hard stop.
+    if(typeof ampEditor !== 'undefined' && ampEditor){
+      var zCap = PRINTER_ZCAP[design.printer];
+      if(typeof zCap === 'number' && isFinite(zCap)){
+        ampEditor.setHardWallLabel('amp limit ' + fmtMm(zCap));
+        var slopeCap = slopeAmpCap(slopeLimit, radius, waves, sil);
+        if(slopeCap != null && isFinite(slopeCap) && slopeCap < zCap){
+          ampEditor.setSoftLimit(slopeCap, 'slope cap ' + slopeCap.toFixed(2) + ' (' + waves + ' waves)');
+        } else {
+          ampEditor.clearSoftLimit();
+        }
+      }
+    }
   }
 
   // ---- bind inputs to design state ----------------------------------------
@@ -4038,6 +4455,20 @@
     ampEditor.setProfile(design.amp_profile);
     silEditor.setProfile(design.radius_profile);
     widthEditor.setProfile(design.width_profile);
+    // Re-apply the SELECTED printer's ceilings, and do it AFTER setProfile so
+    // the loaded control points are re-clamped rather than merely displayed.
+    // "Load design as JSON" assigns every key it recognises, and `printer` is
+    // one of them (see the load handler's `if(design.hasOwnProperty(k))`), so
+    // this function can land on a different machine than the one whose caps
+    // are currently applied. Without this, loading a design saved on a 4.0mm
+    // Bambu while a 0.95mm Trident is selected left the amp editor's ceiling,
+    // its control points and the draft's amplitude clamp all on the old
+    // machine's numbers -- the UI offering, drawing and SENDING amplitudes
+    // the server would clamp away, which is precisely what applyPrinterCaps'
+    // own comment forbids. Cheap and idempotent when the printer did not
+    // change, which is the common case.
+    applyPrinterCaps();
+    design.amp_profile = ampEditor.profile();
     ampEditor.draw(); silEditor.draw(); widthEditor.draw();
     if(typeof applyPointEditUIFromDesign === 'function') applyPointEditUIFromDesign();
     persistDesign();

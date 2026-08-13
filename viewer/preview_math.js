@@ -9,6 +9,20 @@
 
   var TWO_PI = 2.0 * Math.PI;
   var _MAX_AMP_STEP = 0.6;
+  // Wave-amplitude clamp. MUST equal the SELECTED printer's z_amp_max -- it
+  // mirrors serve.py's amp_ceiling(profile), which is what the real generator
+  // clamps amp_profile to. This was a hardcoded 0.95 (the Trident's own
+  // measured ceiling) applied to every machine, which is the module-constant
+  // machine limit CLAUDE.md forbids, and it broke the draft in the direction
+  // that matters: on a Bambu declaring 4.0 the preview stopped growing at
+  // 0.95, so dragging an amplitude point from 0.95 to 2.34 changed the
+  // request and the printed part but NOT the picture the user was judging it
+  // by. Understating is the dangerous direction here, exactly as the
+  // RADIUS_SCALE note below says -- the draft's whole job is to show what the
+  // server will actually generate. Overridden via setAmpMax() from
+  // designer.js's applyPrinterCaps(), the same funnel every other per-printer
+  // ceiling comes through; the initial value is only what stands until
+  // /api/printers resolves, and the preview does not run before then.
   var AMP_MAX = 0.95;
   // Radius-envelope clamp. MUST match serve.py's RADIUS_SCALE_MIN/MAX, not the
   // narrower [0.5, 1.3] range the silhouette editor limits dragging to: the
@@ -20,6 +34,16 @@
   // Default matches the Voron Trident's 235x235 bed; designer.js overrides
   // this (via setBedSize / design.bed_center) once /api/printers resolves.
   var BED_CX = 117.5, BED_CY = 117.5;
+
+  // Called by designer.js when the selected printer's amplitude ceiling is
+  // known. Non-finite is refused rather than clamped (CLAUDE.md: every
+  // comparison against NaN is False, so it would survive the min()/max() in
+  // makeInterp and defeat the clamp entirely); a legitimate 0 is accepted,
+  // since a printer declaring zero non-planar tolerance really does preview
+  // as a flat wall.
+  function setAmpMax(v){
+    if(typeof v === 'number' && isFinite(v) && v >= 0) AMP_MAX = v;
+  }
 
   // Called by designer.js when the selected printer's bed size is known.
   function setBedSize(bedSizeX, bedSizeY){
@@ -848,6 +872,10 @@
   window.makeInterp = makeInterp;
   window.makeSmoothInterp = makeSmoothInterp;
   window.setPreviewBedSize = setBedSize;
+  window.setPreviewAmpMax = setAmpMax;
+  // Test-only: lets viewer/dev_smoke.html assert the draft's clamp actually
+  // tracks the selected printer instead of inferring it from sampled geometry.
+  window.__previewAmpMax = function(){ return AMP_MAX; };
   window.cageScale = cageScale;
   // Point Edit Modifiers -- designer.js reuses buildFFDCageFromGrid() to
   // build the same cage shape it sends to /api/generate.

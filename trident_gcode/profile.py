@@ -55,6 +55,22 @@ class PrinterProfile:
     # printers can go much higher.
     z_amp_max: float = 0.95
 
+    # Peak printable wave-wall slope: amp * waves / (radius * silhouette).
+    # 0.25 (about 14 deg) is the Trident's own measured value -- the
+    # 2026-07-05 test print (R3D PETG) showed slopes beyond it collapsing
+    # above half height. This is a print-QUALITY ceiling, distinct from
+    # z_amp_max's hardware clearance above: the two gate each other
+    # independently, and either can be the binding one. At radius 32 with 5
+    # waves this caps amplitude at 1.60 mm regardless of a 4.0 mm z_amp_max.
+    #
+    # Every non-Trident profile below inherits 0.25 as a CONSERVATIVE
+    # PLACEHOLDER, not a measurement -- no print has been run on any of them.
+    # Lower is stricter here, so inheriting it over-restricts rather than
+    # risking a collapsed wall on hardware nobody has tested. Per CLAUDE.md
+    # ("print-tested claims need a print"), do NOT invent a different number
+    # for any built-in profile below; only a real test print earns one.
+    quality_slope_max: float = 0.25
+
     # --- Firmware-specific G-code templates ---
     # Placeholders: {nozzle_temp}, {bed_temp}, {material}
     start_gcode: str = (
