@@ -89,6 +89,7 @@ _FIELD_META: dict[str, tuple[str, str, str]] = {
     "probe_clearance":             ("Probe clearance", "mm", "probe"),
     "probe_radius":                ("Probe keep-out radius", "mm", "probe"),
     "z_amp_max":                   ("Max wave amplitude", "mm", "probe"),
+    "quality_slope_max":           ("Max wave slope", "", "hardware"),
     "max_nozzle_temp":             ("Max nozzle temp", "C", "thermal"),
     "max_bed_temp":                ("Max bed temp", "C", "thermal"),
     "pa_gcode_style":               ("Pressure advance style", "", "gcode"),
@@ -924,6 +925,74 @@ def _validate_z_amp_max(source, has_probe: bool, probe_clearance: float,
     return value
 
 
+# Peak printable wave-wall slope (amp*waves/(radius*silhouette)) for a machine
+# whose real quality ceiling we do not know. 0.25 is the TRIDENT's own
+# 2026-07-05 measurement (see PrinterProfile.quality_slope_max) -- reused
+# here as the unknown-machine default because it is the most conservative
+# figure this app has ever measured, NOT because it is claimed to hold for
+# any other machine. Unlike _Z_AMP_MAX_UNKNOWN_DEFAULT above, getting this
+# wrong costs print QUALITY, not hardware -- which is why (see
+# _validate_quality_slope_max) the absent-value path below emits no Issue.
+_QUALITY_SLOPE_UNKNOWN_DEFAULT = 0.25
+
+
+def _validate_quality_slope_max(source, issues: list[Issue], fields_out: list[FieldInfo]) -> float:
+    """Mirror _validate_z_amp_max's shape, with one deliberate divergence in
+    the absent-value case.
+
+    z_amp_max going missing can let the toolhead strike printed material, so
+    it warns on every import. quality_slope_max going missing only risks a
+    worse-looking upper wave on THIS ONE machine -- a cosmetic risk, not a
+    hardware one -- and no format parser this app ships extracts this field
+    from any real config today (it is not a real firmware/slicer setting,
+    same as z_amp_max), so "absent" is the ordinary case for every import,
+    not an exceptional one. Warning on every import for that would just
+    churn issue counts across the whole existing test suite for no safety
+    gain, so the absent case below emits a FieldInfo only, never an Issue.
+    """
+    label, unit, group = _FIELD_META["quality_slope_max"]
+    extracted = _extract(source, "quality_slope_max")
+    if extracted is not None:
+        raw_val, raw_text = extracted
+        try:
+            value = float(raw_val)
+        except (TypeError, ValueError):
+            value = None
+        # Same non-finite trap as z_amp_max: NaN/inf would survive the clamp
+        # below (every NaN comparison is False) and then defeat every
+        # downstream min() that bounds the wave slope. Fall through to the
+        # conservative default instead of clamping it.
+        if value is not None and (value != value or value in (float("inf"), float("-inf"))):
+            issues.append(Issue(
+                "quality_slope_max",
+                f"{label} value {raw_val!r} is not a finite number; using the "
+                f"conservative default instead.", "error"))
+            value = None
+        if value is not None:
+            clamped = min(max(value, 0.0), 10.0)
+            if clamped != value:
+                issues.append(Issue(
+                    "quality_slope_max",
+                    f"{label} {_fmt_num(value)} is outside [0,10]; clamped to {_fmt_num(clamped)}.",
+                    "warn"))
+                fields_out.append(FieldInfo("quality_slope_max", label, unit, group, value=clamped,
+                                             source="clamped", raw=raw_text,
+                                             note=f"config said {_fmt_num(value)}, clamped to {_fmt_num(clamped)}"))
+            else:
+                fields_out.append(FieldInfo("quality_slope_max", label, unit, group, value=clamped,
+                                             source="parsed", raw=raw_text, note=None))
+            return clamped
+
+    # Absent: the ordinary case (see docstring above) -- no Issue, just a
+    # FieldInfo recording that this is a guess, not a measurement.
+    value = _QUALITY_SLOPE_UNKNOWN_DEFAULT
+    fields_out.append(FieldInfo(
+        "quality_slope_max", label, unit, group, value=value, source="default", raw=None,
+        note="not recorded in any printer config; using the Trident's measured "
+             "0.25 as a conservative placeholder, not a measurement on this machine"))
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
@@ -970,6 +1039,7 @@ def _validate(source, *, allow_raw_gcode: bool = False, repair: bool = False) ->
         issues, fields_out)
 
     z_amp_max = _validate_z_amp_max(source, has_probe, probe_clearance, issues, fields_out)
+    quality_slope_max = _validate_quality_slope_max(source, issues, fields_out)
 
     max_nozzle_temp = _validate_numeric(source, "max_nozzle_temp", issues, fields_out)
     max_bed_temp = _validate_numeric(source, "max_bed_temp", issues, fields_out)
@@ -1108,6 +1178,7 @@ def _validate(source, *, allow_raw_gcode: bool = False, repair: bool = False) ->
         has_probe=has_probe, probe_dx=probe_dx, probe_dy=probe_dy,
         probe_clearance=probe_clearance, probe_radius=probe_radius,
         z_amp_max=z_amp_max,
+        quality_slope_max=quality_slope_max,
         start_gcode=clean_start, end_gcode=clean_end,
         pa_gcode_style=pa_gcode_style,
         max_nozzle_temp=max_nozzle_temp, max_bed_temp=max_bed_temp,

@@ -443,6 +443,20 @@ has not been print-tested on a Bambu by anyone. Start well under it and work
 up, or import your own machine profile from Bambu Studio and adjust in the
 review dialog.
 
+Every profile also carries `quality_slope_max`, a *print-quality* ceiling
+distinct from `z_amp_max`'s hardware clearance: the steepest printable
+wave-wall slope, `amp * waves / (radius * silhouette)`. The two gate
+independently -- a design can sit well under the amplitude ceiling and still
+be flagged for a slope this machine can't hold, or vice versa. `0.25`
+(about 14 degrees) is a real measurement, but only on the Trident: the
+2026-07-05 test print (R3D PETG) showed slopes steeper than that collapsing
+above half height. Every other built-in profile, Bambu and Creality alike,
+inherits the same `0.25` as an **unmeasured conservative placeholder** --
+nobody has print-tested a wave-wall slope limit on any of them, and a lower
+number is the safe direction to guess in, since it under-promises quality
+rather than risking a collapsed wall. Raise it for your own printer only
+after a test print confirms steeper waves survive.
+
 ## Adding your own printer
 
 Import a real config file and the app builds a validated profile from it:

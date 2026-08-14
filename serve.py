@@ -156,6 +156,100 @@ def amp_ceiling(profile) -> float:
     return max(0.0, float(profile.z_amp_max))
 
 
+def slope_ceiling(profile) -> float:
+    """Max printable wave-wall slope (amp*waves/(radius*silhouette)) for this
+    machine.
+
+    This used to be QUALITY_SLOPE_LIMIT, a module constant fixed at the
+    Trident's empirically measured 0.25 and applied to every printer -- the
+    exact shape of the already-fixed amp_ceiling defect (a hardcoded
+    AMP_MAX = 0.95 once capped a Bambu at 0.95 against its own 4.0 and
+    allowed 0.95 on a printer declaring 0.40). CLAUDE.md: "No machine limit
+    may be a module constant. Ceilings come from the selected
+    PrinterProfile." Reads profile.quality_slope_max instead.
+
+    Non-finite (NaN/inf) survives min()/max() clamping silently (every
+    comparison against NaN is False), so it is refused outright and mapped
+    to the conservative QUALITY_SLOPE_DEFAULT rather than being clamped.
+    A finite value is clamped into [0.0, 10.0]; a declared 0.0 stays 0.0,
+    mirroring the amp_ceiling/z_amp_max precedent where a printer declaring
+    zero tolerance keeps zero -- over-warning is the safe direction here.
+    """
+    value = getattr(profile, "quality_slope_max", None)
+    if value is None:
+        return QUALITY_SLOPE_DEFAULT
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return QUALITY_SLOPE_DEFAULT
+    if not math.isfinite(value):
+        return QUALITY_SLOPE_DEFAULT
+    return min(max(value, 0.0), 10.0)
+
+
+def _peak_wave_slope(amp_fn, z_waves, radius_at) -> float:
+    """Sample amp_fn(t) * z_waves / radius_at(t) across the design height and
+    return the peak -- the empirical print-quality metric slope_ceiling()
+    gates. ``radius_at(t)`` is the effective wall radius at height-fraction
+    t (radius * silhouette(t) for the parametric wall; a fixed bottom_radius
+    for the mesh-texture path, which has no separate silhouette function).
+
+    Factored out of generate_design/generate_mesh_texture_design so both
+    call sites (and the regression test that guards against slope_ceiling
+    ever being replaced by a constant again) share one sampling loop rather
+    than three copies that could quietly drift apart.
+    """
+    peak = 0.0
+    for k in range(51):
+        t = k / 50.0
+        peak = max(peak, amp_fn(t) * z_waves / max(radius_at(t), 1e-6))
+    return peak
+
+
+def _min_wall_radius(radius_at) -> float:
+    """Narrowest effective wall radius across the design height.
+
+    The slope-implied amplitude cap must be derived from THIS, not from the
+    design's nominal radius: slope is amp*waves/(radius*silhouette), so a
+    waisted silhouette reads the same amplitude as a steeper wall and trips
+    the check sooner. Quoting the nominal radius instead overstates the cap
+    by 1/min(silhouette) -- on a design waisted to 0.5 it would tell the user
+    they have twice the amplitude headroom they actually have.
+
+    Samples the same 51 points as _peak_wave_slope so the number in the
+    message is the one the check actually used.
+    """
+    return min(max(radius_at(k / 50.0), 1e-6) for k in range(51))
+
+
+def _slope_exceeded_message(peak_slope, limit, min_radius, z_waves, amp_cap_limit) -> str:
+    """Explain WHY the quality-slope check fired below the amplitude (z-amp)
+    ceiling: the two gate independently (see
+    PrinterProfile.quality_slope_max), and a design can be miles under
+    z_amp_max while still exceeding the slope this printer can hold.
+
+    Derives the amplitude this slope limit implies at the design's own
+    narrowest wall radius / wave count (limit * min_radius / waves) so the
+    number is actionable, not just descriptive. Guarded against z_waves == 0
+    -- zero waves has no meaningful slope-implied amplitude cap.
+
+    The "under the z-amp ceiling" clause is stated only when it is TRUE. The
+    slope cap is not always the binding one: on a waisted silhouette the
+    check can fire with a cap that sits ABOVE z_amp_max (the waist, not the
+    amplitude, is what got there first), and a message asserting otherwise
+    would be a false claim about which limit the user has to move.
+    """
+    msg = ("Peak wave slope %.2f exceeds this printer's printable ~%.2f "
+           "(amp*waves/radius) - upper waves may collapse" % (peak_slope, limit))
+    if z_waves > 0:
+        amp_cap = limit * min_radius / z_waves
+        msg += (". At its narrowest wall radius %.1f mm with %d waves that caps "
+                "amplitude at %.2f mm" % (min_radius, z_waves, amp_cap))
+        if amp_cap < amp_cap_limit:
+            msg += ", under this printer's %.2f mm z-amp ceiling" % amp_cap_limit
+    return msg + "; reduce amplitude or wave count."
+
+
 def loop_row_ceiling(profile) -> float:
     """Max loop-fabric row height (mm) for this machine.
 
@@ -171,9 +265,14 @@ def loop_row_ceiling(profile) -> float:
 
 # Server-side safety ceilings (mirror the UI clamps).
 RADIUS_SCALE_MIN, RADIUS_SCALE_MAX = 0.2, 1.5
-# Empirical print-quality slope ceiling (amp*waves/radius): waves steeper than
-# this collapsed above half height on the 2026-07-05 test print (R3D PETG).
-QUALITY_SLOPE_LIMIT = 0.25
+# Fallback ONLY for a profile object that lacks quality_slope_max entirely
+# (e.g. a bare object built outside PrinterProfile's dataclass default) --
+# see slope_ceiling() above. Every real PrinterProfile carries its own
+# quality_slope_max (0.25 for the Trident's 2026-07-05 measurement, 0.25 as
+# an unmeasured conservative placeholder for everything else); this constant
+# is deliberately NOT read directly by either quality check below, so it can
+# never regress into the module-constant defect slope_ceiling() replaced.
+QUALITY_SLOPE_DEFAULT = 0.25
 DEFAULT_FILAMENT = "R3D PETG"
 
 # Mesh upload caps and cache.
@@ -935,19 +1034,17 @@ def generate_design(body):
             pass
 
     # Empirical print-quality check: peak wall slope = amp*waves/(radius*sil).
-    # 2026-07-05 test print on this machine: wave slopes beyond ~0.25 (about
-    # 14 deg) collapsed above half height. Distinct from the probe amp ceiling.
-    peak_slope = 0.0
-    for k in range(51):
-        t = k / 50.0
-        s = amp_fn(t) * z_waves / max(radius * radius_fn(t), 1e-6)
-        peak_slope = max(peak_slope, s)
+    # The ceiling is this machine's own quality_slope_max (slope_ceiling()) --
+    # 0.25 (about 14 deg) is the Trident's 2026-07-05 measurement, not a
+    # constant applied to every printer. Distinct from the probe amp ceiling.
+    slope_limit = slope_ceiling(profile)
+    wall_radius_at = lambda t: radius * radius_fn(t)
+    peak_slope = _peak_wave_slope(amp_fn, z_waves, wall_radius_at)
     issues_extra = []
-    if peak_slope > QUALITY_SLOPE_LIMIT + 1e-9:
-        issues_extra.append(
-            "Peak wave slope %.2f exceeds the empirically printable ~%.2f "
-            "(amp*waves/radius) - upper waves may collapse; reduce amplitude "
-            "or wave count." % (peak_slope, QUALITY_SLOPE_LIMIT))
+    if peak_slope > slope_limit + 1e-9:
+        issues_extra.append(_slope_exceeded_message(
+            peak_slope, slope_limit, _min_wall_radius(wall_radius_at),
+            z_waves, amp_ceiling(profile)))
     if point_edit_issue:
         issues_extra.append(point_edit_issue)
     if point_gate_issue:
@@ -1530,20 +1627,17 @@ def generate_mesh_texture_design(body):
 
     # Empirical print-quality check: peak wall slope = amp*waves/(radius*sil).
     # pt[0]/pt[1] rather than unpacking (x, y): the bottom ring may be a
-    # 3-tuple (x, y, z) after point edits above.
+    # 3-tuple (x, y, z) after point edits above. Ceiling is this machine's
+    # own quality_slope_max (slope_ceiling()), not a constant -- see the
+    # generate_design() copy of this check for the full rationale.
     bottom_radius = (max(math.hypot(pt[0], pt[1]) for pt in contours[0])
                       if contours else 1.0)
-    peak_slope = 0.0
-    for k in range(51):
-        t = k / 50.0
-        s = amp_fn(t) * z_waves / max(bottom_radius, 1e-6)
-        peak_slope = max(peak_slope, s)
+    slope_limit = slope_ceiling(profile)
+    peak_slope = _peak_wave_slope(amp_fn, z_waves, lambda t: bottom_radius)
     issues_extra = []
-    if peak_slope > QUALITY_SLOPE_LIMIT + 1e-9:
-        issues_extra.append(
-            "Peak wave slope %.2f exceeds the empirically printable ~%.2f "
-            "(amp*waves/radius) - upper waves may collapse; reduce amplitude "
-            "or wave count." % (peak_slope, QUALITY_SLOPE_LIMIT))
+    if peak_slope > slope_limit + 1e-9:
+        issues_extra.append(_slope_exceeded_message(
+            peak_slope, slope_limit, bottom_radius, z_waves, amp_ceiling(profile)))
     # Point Mask and Point Protection are GATES, not deformations (see
     # point_edit.py): they scale how strongly FFD / Smooth / Radial Push act
     # at each point. On their own there is nothing to scale, so
@@ -1904,6 +1998,16 @@ def _printer_entry_json(key, profile, custom, meta=None):
         # pass a file at 20 mm/s on a machine declaring 10. Served from the
         # profile so the client never carries a ceiling of its own.
         "max_z_velocity": float(profile.max_z_velocity),
+        # quality_slope_max: same reasoning as max_z_velocity above -- this
+        # used to be QUALITY_SLOPE_LIMIT, a bare 0.25 baked into serve.py and
+        # applied to every printer regardless of what it actually declared.
+        # Served from slope_ceiling(profile) so the client never carries a
+        # quality ceiling of its own and the two can never drift apart.
+        "quality_slope_max": slope_ceiling(profile),
+        # has_probe: lets the client adapt copy (e.g. loop-fabric's "probe
+        # keep-out" note, see loop_fabric.py) to probe-less machines without
+        # hardcoding a machine list of its own.
+        "has_probe": bool(profile.has_probe),
         "custom": bool(custom),
         "source_format": meta.get("source_format") if custom else None,
         "warnings": len(warnings) if custom else 0,
