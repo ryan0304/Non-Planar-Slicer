@@ -52,10 +52,15 @@
   // constants. `hasProbe` matters because loop_fabric.py gates part of its
   // wave clamp on it. The bootstrap values are the Trident's and only stand
   // until /api/printers resolves; the preview does not run before then.
-  var LOOP_UP_MAX = 0.95, LOOP_ROW_MAX = 0.65, LOOP_HAS_PROBE = true;
-  function setLoopCaps(upMax, rowMax, hasProbe){
+  // LOOP_MIN is _parse_loop_spec's FLOOR, served as loop_min_mm. It is not a
+  // machine limit -- it is build_loop_fabric's own `max(0.5, row_mm)` -- but it
+  // still arrives from the server rather than being written here, so the draft
+  // and the request can never disagree about the bottom of the range either.
+  var LOOP_UP_MAX = 0.95, LOOP_ROW_MAX = 0.65, LOOP_MIN = 0.5, LOOP_HAS_PROBE = true;
+  function setLoopCaps(upMax, rowMax, hasProbe, minMm){
     if(typeof upMax === 'number' && isFinite(upMax) && upMax >= 0) LOOP_UP_MAX = upMax;
     if(typeof rowMax === 'number' && isFinite(rowMax) && rowMax >= 0) LOOP_ROW_MAX = rowMax;
+    if(typeof minMm === 'number' && isFinite(minMm) && minMm >= 0) LOOP_MIN = minMm;
     LOOP_HAS_PROBE = !!hasProbe;
   }
 
@@ -635,13 +640,13 @@
     if(align !== 'stagger' && align !== 'column' && align !== 'jitter') align = 'column';
     var mode = (design.loop_mode === 'spike') ? 'spike' : 'dip';
 
-    // _parse_loop_spec's floors are min(1.0, cap) -- on a machine whose cap is
-    // below 1.0 (the Trident: 0.65 row / 0.95 loop) floor and ceiling collapse
-    // onto the same number, and every style really does get the same row.
+    // _parse_loop_spec's range: [loop_min_mm, cap]. Both bounds come from the
+    // server (see setLoopCaps) so the draft resolves to the same numbers the
+    // request will.
     var capUp = LOOP_UP_MAX, capRow = LOOP_ROW_MAX;
-    var rowMm = Math.max(Math.min(1.0, capRow),
+    var rowMm = Math.max(Math.min(LOOP_MIN, capRow),
                          Math.min(numOr(design.loop_row, 2.5), capRow));
-    var upMm = Math.max(Math.min(1.0, capUp),
+    var upMm = Math.max(Math.min(LOOP_MIN, capUp),
                         Math.min(numOr(design.loop_up, 3.5), capUp));
     var outMm = Math.max(0.0, Math.min(numOr(design.loop_out, 0.5), 5.0));
     var waveAmp = Math.max(0.0, Math.min(numOr(design.loop_wave_amp, 0.0), 3.0));
@@ -1197,7 +1202,8 @@
   // Test-only, same purpose as __previewAmpMax: lets dev_smoke.html assert the
   // fabric draft clamps to the SELECTED printer rather than to a constant.
   window.__previewLoopCaps = function(){
-    return { up: LOOP_UP_MAX, row: LOOP_ROW_MAX, hasProbe: LOOP_HAS_PROBE };
+    return { up: LOOP_UP_MAX, row: LOOP_ROW_MAX, min: LOOP_MIN,
+             hasProbe: LOOP_HAS_PROBE };
   };
   window.__resolveLoopFabric = resolveLoopFabric;
   // Test-only: lets viewer/dev_smoke.html assert the draft's clamp actually

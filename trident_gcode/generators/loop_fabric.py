@@ -32,6 +32,15 @@ from ..paths import cage_scale
 _SEGS_PER_STITCH = 12
 _LOOP_Q = 0.30            # backtrack fraction: >1/(2*pi) guarantees self-crossing
 _CUFF_HOOK_MM = 0.8       # how far row 0's loops dip below the cuff top edge
+_MIN_ROW_MM = 0.5         # smallest row pitch this generator will build
+_INTERLOCK_MM = 0.3       # loop must clear the row pitch by at least this much
+# Least Z clearance a DIP-mode fabric can be built in: the row pitch cannot go
+# below _MIN_ROW_MM and the loop has to reach _INTERLOCK_MM past it, while in
+# dip mode the whole loop height is the nozzle's excursion below the line and
+# so must fit under z_amp_max. Spike mode is exempt -- its stitch stands ABOVE
+# the line, so only (loop_h - row_mm) is an excursion and it can interlock in
+# any clearance at all.
+_MIN_DIP_CLEARANCE_MM = _MIN_ROW_MM + _INTERLOCK_MM
 
 
 def build_loop_fabric(
@@ -65,14 +74,29 @@ def build_loop_fabric(
     writer.layer_height = strand_h
 
     stitches = max(4, spec.loops_per_turn)
-    row_mm = max(0.5, spec.row_mm)
+    row_mm = max(_MIN_ROW_MM, spec.row_mm)
     mode = spec.stitch_mode if spec.stitch_mode in ("dip", "spike") else "dip"
-    loop_h = max(row_mm + 0.3, spec.up_mm)   # must exceed pitch to interlock
+    loop_h = max(row_mm + _INTERLOCK_MM, spec.up_mm)  # exceed pitch to interlock
     wave_amp = max(0.0, spec.wave_amp)
     # Machine Z-excursion ceiling: on probe-behind-nozzle machines (Trident)
     # the nozzle may only sit z_amp_max below nearby printed material, or the
     # trailing probe strikes the fabric. Probe-less printers ride free.
     z_cap = getattr(profile, "z_amp_max", 0.95)
+    # Refuse rather than emit a fabric that cannot hold together. Below this
+    # clearance the dip-mode clamp further down drives loop_h under row_mm --
+    # the loop ends up SHORTER than the row pitch, so it never reaches the row
+    # beneath and the rows come out as separate, unconnected rings. The file
+    # looks fine and the part falls apart. No shipped profile is anywhere near
+    # this (the Trident's 0.95 is the tightest), but an imported custom printer
+    # can declare any clearance it likes.
+    if mode == "dip" and z_cap < _MIN_DIP_CLEARANCE_MM:
+        raise ValueError(
+            f"{getattr(profile, 'name', 'This printer')} allows only "
+            f"{z_cap:.2f}mm of Z clearance, and a dipped loop fabric needs at "
+            f"least {_MIN_DIP_CLEARANCE_MM:.2f}mm ({_MIN_ROW_MM:.2f}mm row "
+            f"pitch plus {_INTERLOCK_MM:.2f}mm of interlock) or the loops "
+            f"cannot reach the row below and the rows never join. Use the "
+            f"spike stitch, which stands above the row line instead.")
     z_clamped = False
     if mode == "spike":
         # Spikes rise ABOVE the line: the probe exposure is only the NEXT
@@ -89,7 +113,11 @@ def build_loop_fabric(
         # Dip mode: the nozzle descends the full loop height below the line.
         if loop_h > z_cap:
             loop_h = z_cap
-            row_mm = min(row_mm, max(loop_h - 0.3, 0.4))
+            # Pull the pitch down with it so the loop still clears the row
+            # beneath by _INTERLOCK_MM. The guard above guarantees z_cap is
+            # large enough for this to land at or above _MIN_ROW_MM, so the
+            # result can no longer invert (loop shorter than the pitch).
+            row_mm = min(row_mm, max(loop_h - _INTERLOCK_MM, _MIN_ROW_MM))
             z_clamped = True
         if (wave_amp > 0.0 and profile.has_probe
                 and loop_h + 2.0 * wave_amp > z_cap):

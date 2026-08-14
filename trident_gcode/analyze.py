@@ -13,6 +13,22 @@ from dataclasses import dataclass, field
 from .profile import PrinterProfile, TRIDENT
 
 
+# --- Support reach -----------------------------------------------------------
+# How far away already-printed material may be and still be something a new
+# extrusion can be deposited ONTO. These are process/material properties, not
+# machine limits -- a machine limit would live on the PrinterProfile (see
+# CLAUDE.md) -- so they are shared by every printer.
+#
+# Promoted from locals inside analyze_gcode() because they are no longer used
+# only there: serve.py derives loop fabric's row/stitch ceilings from
+# SUPPORT_Z_HI_MM, so the generator lays rows the analyzer can actually see as
+# supported instead of the two disagreeing with a duplicated 2.0 in each file.
+# Values unchanged, so every analysis result is exactly as before.
+SUPPORT_XY_MM = 1.0     # max XY distance to count as supporting
+SUPPORT_Z_LO_MM = 0.2   # a supporting pass must be at least this far below
+SUPPORT_Z_HI_MM = 2.0   # ...and at most this far below
+
+
 @dataclass
 class GcodeAnalysis:
     moves: int = 0
@@ -117,8 +133,8 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
     # the total point count across a whole print.
     CELL = 2.0
     ZCELL = 2.0             # Z bucket size, >= Z_HI so a query needs few buckets
-    XY_R2 = 1.0 * 1.0      # max XY distance^2 to count as supporting
-    Z_LO, Z_HI = 0.2, 2.0  # supporting layer must be this far below
+    XY_R2 = SUPPORT_XY_MM * SUPPORT_XY_MM  # max XY distance^2 to count as supporting
+    Z_LO, Z_HI = SUPPORT_Z_LO_MM, SUPPORT_Z_HI_MM  # supporting layer this far below
     grid: dict = {}
 
     # --- Probe keep-out state ---

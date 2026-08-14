@@ -1016,6 +1016,142 @@
           new Set(shapeKeys).size === shapeKeys.length,
           'got ' + shapeKeys.join(' | '));
 
+    // ---- every loop style must resolve to a DISTINCT fabric ----------------
+    // The toolpath half of the same complaint. _parse_loop_spec's floor was
+    // min(1.0, cap), which equals the ceiling on any machine whose ceiling is
+    // at or below 1.0 -- ten of the fifteen shipped profiles, the Trident and
+    // every Creality among them. Every style therefore resolved to the SAME
+    // row and loop height and printed the same fabric. Scaling each bundle by
+    // its own factor does not fix it either (the row stays the binding
+    // constraint and loop_h = max(row + 0.3, up) lands on one number for all
+    // of them), so applyLoopStyle() maps the styles' authored row spread onto
+    // the machine's usable range -- see fitLoopStyleToMachine().
+    const styleSelect = w.document.getElementById('d-loop-style');
+    const loopRowInput = w.document.getElementById('d-loop-row');
+    const loopUpInput = w.document.getElementById('d-loop-up');
+    const allStyles = [...styleSelect.options].map(o => o.value)
+                        .filter(v => v !== 'custom');
+    // buildGenerateBody() only carries loop_* when the pattern IS loops
+    // (they are gated behind `else if (patternVal === 'loops')`), and the
+    // block above restored the previous pattern -- so select loops for the
+    // duration of these assertions and put it back afterwards.
+    const patternBeforeLoopStyles = patternSelect.value;
+    patternSelect.value = 'loops';
+    patternSelect.dispatchEvent(new w.Event('change'));
+    check('loop-style assertions are running with the loops pattern selected',
+          w.__designSnapshot().loop_row !== undefined,
+          'loop_row missing from the request body');
+    check('the loop-style dropdown offers every shipped style', allStyles.length >= 7,
+          'got ' + allStyles.length + ': ' + allStyles.join(','));
+
+    function resolveStyles(printerKey) {
+      w.__testSelectPrinter(printerKey);
+      const caps = w.__previewLoopCaps();
+      const rows = {};
+      allStyles.forEach(s => {
+        styleSelect.value = s;
+        styleSelect.dispatchEvent(new w.Event('change'));
+        const snap = w.__designSnapshot();
+        // What build_loop_fabric will actually use, per its own first lines.
+        const rowMm = Math.max(0.5, snap.loop_row);
+        let loopH = Math.max(rowMm + 0.3, snap.loop_up);
+        if (snap.loop_mode !== 'spike' && loopH > caps.up) loopH = caps.up;
+        rows[s] = { row: snap.loop_row, up: snap.loop_up,
+                    loopH: Math.round(loopH * 1000) / 1000,
+                    spacing: snap.loop_spacing_mm, mode: snap.loop_mode };
+      });
+      return { caps, rows };
+    }
+
+    ['trident', 'creality_ender3'].forEach(pk => {
+      const { caps, rows } = resolveStyles(pk);
+      const vals = allStyles.map(s => rows[s]);
+      // Nothing may exceed the machine. This is the half that must never
+      // regress -- the spread below is worthless if it leaks over a ceiling.
+      check(pk + ': no style exceeds the row ceiling',
+            vals.every(v => v.row <= caps.row + 1e-9),
+            'cap ' + caps.row + ', got ' + vals.map(v => v.row).join(','));
+      check(pk + ': no style exceeds the loop ceiling',
+            vals.every(v => v.up <= caps.up + 1e-9 && v.loopH <= caps.up + 1e-9),
+            'cap ' + caps.up + ', got loopH ' + vals.map(v => v.loopH).join(','));
+      check(pk + ': no style falls below the generator floor',
+            vals.every(v => v.row >= caps.min - 1e-9),
+            'floor ' + caps.min + ', got ' + vals.map(v => v.row).join(','));
+      // ...and the styles must actually differ, which is the whole point.
+      const distinctRows = new Set(vals.map(v => v.row.toFixed(3)));
+      check(pk + ': loop styles resolve to more than one row height',
+            distinctRows.size >= 4,
+            'got ' + distinctRows.size + ' distinct of ' + vals.length
+              + ': ' + [...distinctRows].join(','));
+      const distinctLoop = new Set(vals.map(v => v.loopH.toFixed(3)));
+      check(pk + ': loop styles resolve to more than one loop height',
+            distinctLoop.size >= 4,
+            'got ' + distinctLoop.size + ': ' + [...distinctLoop].join(','));
+      const fingerprints = new Set(vals.map(v => JSON.stringify(v)));
+      check(pk + ': no two loop styles resolve to the same fabric',
+            fingerprints.size === vals.length,
+            'got ' + fingerprints.size + ' of ' + vals.length);
+      // The remap must preserve ORDER: the style authored finest stays finest.
+      check(pk + ': the finest style (fineknit) keeps the smallest row',
+            rows.fineknit.row === Math.min(...vals.map(v => v.row)),
+            'fineknit ' + rows.fineknit.row + ', min ' + Math.min(...vals.map(v => v.row)));
+      check(pk + ': the coarsest style (scallops) keeps the largest row',
+            rows.scallops.row === Math.max(...vals.map(v => v.row)),
+            'scallops ' + rows.scallops.row + ', max ' + Math.max(...vals.map(v => v.row)));
+    });
+
+    // A machine with more room must actually USE more of it -- the remap has
+    // to track the ceiling, not land on one fixed set of numbers. (No shipped
+    // style is applied verbatim any more: loop fabric is bounded by support
+    // reach as well as by the machine, and 1.6mm is below every authored row,
+    // so every bundle is scaled on every profile. The ceilings still differ
+    // per machine, which is what this checks.)
+    {
+      const wide = resolveStyles('bambu_a1');
+      const tight = resolveStyles('trident');
+      check('bambu_a1 allows a bigger loop ceiling than the trident',
+            wide.caps.row > tight.caps.row,
+            'bambu ' + wide.caps.row + ' vs trident ' + tight.caps.row);
+      // Every style scales up, EXCEPT one already sitting on the floor: the
+      // finest style maps to loop_min_mm, and the floor is a process bound
+      // shared by every machine, so it does not move with the ceiling.
+      const scaled = allStyles.every(
+        s => wide.rows[s].row > tight.rows[s].row
+             || tight.rows[s].row <= tight.caps.min + 1e-9);
+      check('every style scales up on the roomier machine (or sits on the shared floor)',
+            scaled,
+            'floor ' + tight.caps.min + '; '
+              + allStyles.map(s => s + ' ' + tight.rows[s].row + '->'
+                                   + wide.rows[s].row).join(', '));
+      check('at least one style does scale up between the two machines',
+            allStyles.some(s => wide.rows[s].row > tight.rows[s].row),
+            'none moved');
+      check('bambu_a1 still respects its own (support-bounded) ceiling',
+            allStyles.every(s => wide.rows[s].row <= wide.caps.row + 1e-9),
+            'cap ' + wide.caps.row);
+    }
+
+    // Back to the Trident, and confirm the panel is not left showing a number
+    // the request will not carry -- the inputs must equal what got sent.
+    w.__testSelectPrinter('trident');
+    styleSelect.value = 'chainmail';
+    styleSelect.dispatchEvent(new w.Event('change'));
+    {
+      const snap = w.__designSnapshot();
+      check('the row input shows exactly what the request carries',
+            Math.abs(parseFloat(loopRowInput.value) - snap.loop_row) < 1e-9,
+            'input ' + loopRowInput.value + ' vs request ' + snap.loop_row);
+      check('the loop input shows exactly what the request carries',
+            Math.abs(parseFloat(loopUpInput.value) - snap.loop_up) < 1e-9,
+            'input ' + loopUpInput.value + ' vs request ' + snap.loop_up);
+      check('picking a scaled preset says so in the ceiling note',
+            /scaled down to fit/.test(
+              w.document.getElementById('loop-zcap').textContent),
+            'got ' + w.document.getElementById('loop-zcap').textContent);
+    }
+    patternSelect.value = patternBeforeLoopStyles;
+    patternSelect.dispatchEvent(new w.Event('change'));
+
     // Loops with no sites at all (per-turn 0, no spacing) is the one case
     // _parse_loop_spec returns None for -- the server builds the ordinary
     // wall, so the draft must fall back to it rather than draw nothing.
