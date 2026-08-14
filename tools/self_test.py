@@ -423,6 +423,132 @@ def t_guards(srv: Server) -> None:
     check(st == 400, "unknown shape rejected as 400", "status %s" % st)
 
 
+def t_loop_fabric(srv: Server) -> None:
+    """Loop fabric must lay rows the machine can actually build on.
+
+    Two separate holes lived here, both silent -- the generator emitted a
+    clean-looking file either way -- so both are pinned by geometry, not by a
+    constant anyone could edit in sympathy with the code.
+    """
+    print("\n-- loop fabric -----------------------------------------------")
+    st, j = get(srv, "/api/printers")
+    by = {p["key"]: p for p in j.get("printers", [])}
+
+    # 1. The row/stitch range must not be a single point. The floor used to be
+    #    min(1.0, ceiling), which EQUALS the ceiling on any profile capped at
+    #    or below 1.0 -- ten of the fifteen shipped ones -- so every loop
+    #    style resolved to identical geometry and picking a style did nothing.
+    for key in ("trident", "creality_ender3", "bambu_x1c"):
+        p = by.get(key, {})
+        lo, hi = p.get("loop_min_mm"), p.get("loop_row_max")
+        check(lo is not None and hi is not None,
+              "%s serves a loop row floor and ceiling" % key,
+              "min %s max %s" % (lo, hi))
+        if lo is None or hi is None:
+            continue
+        check(lo < hi, "%s loop row range is not a single point" % key,
+              "[%s, %s]" % (lo, hi))
+
+    # 2. Rows must stay within depositing reach of the row beneath. A profile
+    #    with lots of Z clearance used to take the styles' authored 2.5-4.0mm
+    #    pitches as-is, and 5-28% of the print became extrusion into air.
+    #    z_amp_max is NOT the bound here -- support reach is, and it binds
+    #    independently (serve.py's loop_up_ceiling).
+    bam = by.get("bambu_x1c", {})
+    check(bam.get("z_amp_max", 0) > bam.get("loop_up_max", 0),
+          "a high-clearance profile's loop ceiling is below its z_amp_max",
+          "z_amp_max %s vs loop_up_max %s"
+          % (bam.get("z_amp_max"), bam.get("loop_up_max")))
+    # ...while the WAVE amplitude keeps the machine's full range: z_amp_max's
+    # other consumer must not be narrowed by a fabric-only bound.
+    check(bam.get("z_amp_max") == 4.0,
+          "the same profile still reports its full wave-amplitude ceiling",
+          "got %s" % bam.get("z_amp_max"))
+
+    # 3. The end-to-end proof: generate at each profile's own ceiling and let
+    #    the analyzer judge the result. Under the 2% threshold is the claim.
+    for key in ("trident", "creality_ender3", "bambu_x1c"):
+        p = by.get(key, {})
+        row, up = p.get("loop_row_max"), p.get("loop_up_max")
+        if row is None or up is None:
+            continue
+        bed = p.get("bed") or [235, 235]
+        radius = min(30.0, min(bed[0], bed[1]) / 2.0 - 15.0)
+        # The widest-spaced style is the hardest case: fewest stitches, so the
+        # least material anywhere for the next row to land on.
+        st, j = gen(srv, {"shape": "circle", "radius": radius, "height": 40,
+                          "layer_height": 0.3, "printer": key,
+                          "loop_spacing_mm": 8.0, "loop_row": row,
+                          "loop_up": up, "loop_out": 1.0,
+                          "loop_align": "stagger", "loop_cuff": 3})
+        if not check(st == 200, "%s: generate at the loop ceiling" % key,
+                     str(j)[:160]):
+            continue
+        stats = j.get("stats", {})
+        ext = max(1, stats.get("extrude_moves", 1))
+        pct = 100.0 * stats.get("unsupported_moves", 0) / ext
+        check(pct <= 2.0,
+              "%s: widest-spaced fabric stays under 2%% unsupported" % key,
+              "got %.2f%% (%d of %d)"
+              % (pct, stats.get("unsupported_moves", 0), ext))
+        check(stats.get("probe_hits", 0) == 0,
+              "%s: no probe strike in loop fabric" % key,
+              "got %s" % stats.get("probe_hits"))
+
+    # 4. Interlock. A dipped loop MUST end up taller than the row pitch or it
+    #    never reaches the row beneath, and the "fabric" prints as separate
+    #    unconnected rings -- a clean-looking file and a part that falls apart.
+    #    Below 0.8mm of clearance the dip clamp used to drive loop_h under
+    #    row_mm and emit exactly that. Unreachable with a shipped profile (the
+    #    Trident's 0.95 is the tightest), reachable with an imported one, so
+    #    this drives the generator directly rather than through /api/generate.
+    # This file otherwise talks to the server only over HTTP and never imports
+    # the package, so ROOT is not on the path yet -- put it there for this one
+    # in-process check. The condition is unreachable through the API (no
+    # shipped profile is tight enough), so there is no HTTP route to it.
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    import dataclasses
+    from trident_gcode.blobs import LoopSpec
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.generators.loop_fabric import (
+        _MIN_DIP_CLEARANCE_MM, build_loop_fabric)
+    from trident_gcode.profile import TRIDENT
+
+    def _fabric(z_amp_max, mode):
+        prof = dataclasses.replace(TRIDENT, name="Custom", z_amp_max=z_amp_max)
+        spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8,
+                        stitch_mode=mode)
+        return build_loop_fabric(GcodeWriter(prof), shape=lambda t: 30.0,
+                                 height=30.0, spec=spec)
+
+    tight = round(_MIN_DIP_CLEARANCE_MM - 0.01, 3)
+    try:
+        rep = _fabric(tight, "dip")
+        check(False, "a dip fabric under the interlock minimum is refused",
+              "built anyway: row %s loop %s"
+              % (rep["row_mm_effective"], rep["loop_mm_effective"]))
+    except ValueError as e:
+        check("interlock" in str(e) or "row below" in str(e),
+              "a dip fabric under the interlock minimum is refused",
+              "wrong message: %s" % str(e)[:120])
+
+    rep = _fabric(_MIN_DIP_CLEARANCE_MM, "dip")
+    check(rep["loop_mm_effective"] > rep["row_mm_effective"],
+          "at exactly the minimum, the loop still clears the row pitch",
+          "loop %s vs row %s"
+          % (rep["loop_mm_effective"], rep["row_mm_effective"]))
+
+    # Spike mode is exempt on purpose: its stitch stands ABOVE the row line,
+    # so only (loop_h - row_mm) is a Z excursion and it interlocks in any
+    # clearance. Refusing it too would be a limit with no cause behind it.
+    rep = _fabric(0.2, "spike")
+    check(rep["loop_mm_effective"] > rep["row_mm_effective"],
+          "spike mode still builds an interlocking fabric in tiny clearance",
+          "loop %s vs row %s"
+          % (rep["loop_mm_effective"], rep["row_mm_effective"]))
+
+
 def t_export(srv: Server) -> None:
     print("\n-- STL export ------------------------------------------------")
     st, data = post(srv, "/api/export_stl",
@@ -454,7 +580,7 @@ def main() -> int:
     t0 = time.time()
     with Server(port) as srv:
         for fn in (t_profiles, t_parametric, t_surface, t_mesh,
-                   t_streaming, t_guards, t_export):
+                   t_streaming, t_guards, t_loop_fabric, t_export):
             try:
                 fn(srv)
             except Exception as e:

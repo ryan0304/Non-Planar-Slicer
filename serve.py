@@ -50,7 +50,7 @@ from trident_gcode.generators import build_continuous_spiral, build_profile_spir
 from trident_gcode.generators.surface_spiral import _archimedean
 from trident_gcode.generators.loop_fabric import build_loop_fabric
 from trident_gcode import surface as surf
-from trident_gcode.analyze import analyze_gcode, format_report
+from trident_gcode.analyze import SUPPORT_Z_HI_MM, analyze_gcode, format_report
 from trident_gcode.mesh import load_stl, mesh_bounds, analyze_vase_compatibility
 from trident_gcode.profile_stack import stack_from_mesh, stack_from_shape, contour_normals
 from trident_gcode.point_edit import (MaskSpec, ProtectionSpec, FFDSpec, SmoothSpec,
@@ -259,18 +259,65 @@ def _slope_exceeded_message(peak_slope, limit, min_radius, z_waves, amp_cap_limi
 # still the profile's.
 LOOP_MIN_MM = 0.5
 
+# How far apart loop-fabric rows may sit, in mm, REGARDLESS of how much Z
+# clearance the machine has. Not a machine limit -- machine limits come from
+# the PrinterProfile and never live here -- but a process one, and it binds
+# separately from z_amp_max via the min() in loop_up_ceiling().
+#
+# A fabric row has to land on the row beneath it. SUPPORT_Z_HI_MM is the
+# analyzer's statement of how far below already-printed material may sit and
+# still be something you can deposit onto; a row pitch wider than that leaves
+# each stitch hanging with nothing in reach. On machines with clearance to
+# spare that is exactly what happened: the shipped styles ask for 2.5-4.0mm
+# rows, and on a 4.0mm-clearance profile they were used as authored, so 5-28%
+# of every loop-fabric print was extrusion into air the analyzer could not
+# find support for -- against 0.1% on the Trident, whose 0.95mm ceiling had
+# been holding the pitch down by accident rather than by intent.
+#
+# The 0.8 factor is margin, and it IS a guess: the support test measures the
+# MIDPOINT of each move, while the pitch is measured line-to-line, so a stitch
+# sample sits partway down its own dip and needs the row below closer than the
+# raw ceiling. 0.8 * 2.0 = 1.6mm puts all seven shipped styles under 1%
+# unsupported where 1.8mm leaves the widest at 1.98% -- right on the 2%
+# threshold. Conservative default, NOT print-tested: bridging really does
+# depend on part cooling, so a machine with strong cooling could likely carry
+# a wider pitch. If that is ever measured, it belongs on the PrinterProfile as
+# its own field, not as a bigger number here.
+LOOP_SUPPORT_REACH_MM = round(0.8 * SUPPORT_Z_HI_MM, 3)
+
+
+def loop_up_ceiling(profile) -> float:
+    """Max loop-fabric stitch height (mm) for this machine.
+
+    The machine's own Z-excursion ceiling AND the process support reach,
+    whichever is tighter. Both bind: z_amp_max is what the toolhead can
+    physically clear (see amp_ceiling), LOOP_SUPPORT_REACH_MM is how far a
+    stitch can get from the material it has to attach to.
+
+    Deliberately NOT amp_ceiling() itself -- the wave amplitude is a different
+    consumer of z_amp_max and must keep the machine's full range; only the
+    fabric is bounded by reach. Leaves the Trident (0.95) and every Creality
+    (1.0) exactly where they were, and brings the 4.0mm profiles down to 1.6.
+    """
+    return min(amp_ceiling(profile), LOOP_SUPPORT_REACH_MM)
+
 
 def loop_row_ceiling(profile) -> float:
     """Max loop-fabric row height (mm) for this machine.
 
-    Derived from amp_ceiling the same way the client used to derive it, so the
-    two can never drift. Rounded because the naive subtraction is not exact in
-    binary floating point -- 0.95 - 0.3 is 0.6499999999999999, which reached
-    the browser and ended up as a number input's literal `min` attribute. A
-    clearance is a physical measurement; three decimals is far finer than
-    anyone can set a nozzle.
+    Derived from loop_up_ceiling the same way the client used to derive it, so
+    the two can never drift. The 0.3 subtraction is build_loop_fabric's own
+    interlock margin (``loop_h = max(row_mm + 0.3, up_mm)``): keeping the row
+    that far under the stitch ceiling is what stops the derived loop height
+    from exceeding it and quietly undoing the cap.
+
+    Rounded because the naive subtraction is not exact in binary floating
+    point -- 0.95 - 0.3 is 0.6499999999999999, which reached the browser and
+    ended up as a number input's literal `min` attribute. A clearance is a
+    physical measurement; three decimals is far finer than anyone can set a
+    nozzle.
     """
-    return round(max(0.4, amp_ceiling(profile) - 0.3), 3)
+    return round(max(0.4, loop_up_ceiling(profile) - 0.3), 3)
 
 
 # Server-side safety ceilings (mirror the UI clamps).
@@ -735,7 +782,7 @@ def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | N
     profile declaring less than LOOP_MIN_MM of clearance still gets a valid
     (if degenerate) range rather than an inverted one.
     """
-    cap = amp_ceiling(profile)
+    cap = loop_up_ceiling(profile)
     cap_row = loop_row_ceiling(profile)
     floor_row = min(LOOP_MIN_MM, cap_row)
     floor_up = min(LOOP_MIN_MM, cap)
@@ -2002,9 +2049,12 @@ def _printer_entry_json(key, profile, custom, meta=None):
     meta = meta or {}
     warnings = meta.get("warnings") or []
     # loop_row_max / loop_up_max mirror _parse_loop_spec's cap/cap_row formula
-    # exactly, computed here from the same amp_ceiling() so the client never
-    # re-derives it and the two can never drift apart.
-    cap = amp_ceiling(profile)
+    # exactly, computed here from the same loop_up_ceiling() so the client
+    # never re-derives it and the two can never drift apart. Note this is
+    # loop_up_ceiling, NOT amp_ceiling: the fabric is bounded by the support
+    # reach as well as by the machine, while z_amp_max below stays the raw
+    # machine figure the amp curve and the draft's wave clamp need.
+    cap = loop_up_ceiling(profile)
     cap_row = loop_row_ceiling(profile)
     # max_nozzle_temp/max_bed_temp: computed here (mirroring the 320 C
     # absolute backstop _parse_nozzle_temp applies server-side) so the client

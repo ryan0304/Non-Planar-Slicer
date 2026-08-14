@@ -1100,16 +1100,35 @@
             'scallops ' + rows.scallops.row + ', max ' + Math.max(...vals.map(v => v.row)));
     });
 
-    // A machine with headroom must get the numbers as AUTHORED -- the remap is
-    // a concession to a tight ceiling, not something that reshapes every job.
+    // A machine with more room must actually USE more of it -- the remap has
+    // to track the ceiling, not land on one fixed set of numbers. (No shipped
+    // style is applied verbatim any more: loop fabric is bounded by support
+    // reach as well as by the machine, and 1.6mm is below every authored row,
+    // so every bundle is scaled on every profile. The ceilings still differ
+    // per machine, which is what this checks.)
     {
-      const { rows } = resolveStyles('bambu_a1');
-      check('bambu_a1: a style that fits is applied exactly as authored',
-            rows.chainmail.row === 2.5 && rows.chainmail.up === 3.5,
-            'got row ' + rows.chainmail.row + ', up ' + rows.chainmail.up);
-      check('bambu_a1: fineknit is applied as authored too',
-            rows.fineknit.row === 1.8 && rows.fineknit.up === 2.4,
-            'got row ' + rows.fineknit.row + ', up ' + rows.fineknit.up);
+      const wide = resolveStyles('bambu_a1');
+      const tight = resolveStyles('trident');
+      check('bambu_a1 allows a bigger loop ceiling than the trident',
+            wide.caps.row > tight.caps.row,
+            'bambu ' + wide.caps.row + ' vs trident ' + tight.caps.row);
+      // Every style scales up, EXCEPT one already sitting on the floor: the
+      // finest style maps to loop_min_mm, and the floor is a process bound
+      // shared by every machine, so it does not move with the ceiling.
+      const scaled = allStyles.every(
+        s => wide.rows[s].row > tight.rows[s].row
+             || tight.rows[s].row <= tight.caps.min + 1e-9);
+      check('every style scales up on the roomier machine (or sits on the shared floor)',
+            scaled,
+            'floor ' + tight.caps.min + '; '
+              + allStyles.map(s => s + ' ' + tight.rows[s].row + '->'
+                                   + wide.rows[s].row).join(', '));
+      check('at least one style does scale up between the two machines',
+            allStyles.some(s => wide.rows[s].row > tight.rows[s].row),
+            'none moved');
+      check('bambu_a1 still respects its own (support-bounded) ceiling',
+            allStyles.every(s => wide.rows[s].row <= wide.caps.row + 1e-9),
+            'cap ' + wide.caps.row);
     }
 
     // Back to the Trident, and confirm the panel is not left showing a number
