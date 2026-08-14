@@ -852,6 +852,180 @@
           near(maxRadiusAtZ(narrowingBase, expectedBaseZ, 0.01), 10.0, 0.3),
           'got ' + maxRadiusAtZ(narrowingBase, expectedBaseZ, 0.01));
 
+    // ---- undo coalesces one edit into one history entry ---------------------
+    // persistDesign() used to push a snapshot on EVERY 'input' event, so one
+    // slider drag or one typed number landed as dozens of undo entries and
+    // Ctrl+Z crawled the value back a step at a time instead of returning to
+    // where the control stood before the edit. A stream of edits from one
+    // control now folds into a single entry (see persistDesign's coalescing
+    // note in designer.js), and the commit event closes the run.
+    const radiusInput = w.document.getElementById('d-radius');
+    const prevRadiusValue = radiusInput.value;
+    w.__histEndRun();
+    const histBefore = w.__hist().undo;
+    const radiusStart = w.__designSnapshot().radius;
+
+    // Drag: eight successive values from one control, no commit in between.
+    [21, 22, 23, 24, 25, 26, 27, 28].forEach(v => {
+      radiusInput.value = String(v);
+      radiusInput.dispatchEvent(new w.Event('input'));
+    });
+    check('a run of 8 edits from one control adds exactly 1 undo entry',
+          w.__hist().undo === histBefore + 1,
+          'got ' + (w.__hist().undo - histBefore) + ' entries');
+    check('the run is still open before the control commits',
+          w.__hist().run === 'num:d-radius', 'got ' + w.__hist().run);
+
+    radiusInput.dispatchEvent(new w.Event('change'));
+    check('committing the control closes the run',
+          w.__hist().run === null, 'got ' + w.__hist().run);
+    check('committing does not add a second entry for the same edit',
+          w.__hist().undo === histBefore + 1,
+          'got ' + (w.__hist().undo - histBefore) + ' entries');
+
+    // One undo must jump back to where the value started, not to 27.
+    w.document.getElementById('undo-btn').click();
+    check('one undo returns to the value held BEFORE the run, not the previous step',
+          near(w.__designSnapshot().radius, radiusStart, 1e-6),
+          'got ' + w.__designSnapshot().radius + ', want ' + radiusStart);
+    w.document.getElementById('redo-btn').click();
+    check('redo restores the settled end of the run',
+          near(w.__designSnapshot().radius, 28, 1e-6),
+          'got ' + w.__designSnapshot().radius);
+
+    // A DIFFERENT control must start its own entry, never fold into the last.
+    const heightInput = w.document.getElementById('d-height');
+    const prevHeightValue = heightInput.value;
+    const beforeSecond = w.__hist().undo;
+    heightInput.value = '41';
+    heightInput.dispatchEvent(new w.Event('input'));
+    heightInput.value = '42';
+    heightInput.dispatchEvent(new w.Event('input'));
+    check('a second control starts its own undo entry',
+          w.__hist().undo === beforeSecond + 1,
+          'got ' + (w.__hist().undo - beforeSecond) + ' entries');
+    heightInput.dispatchEvent(new w.Event('change'));
+
+    radiusInput.value = prevRadiusValue;
+    radiusInput.dispatchEvent(new w.Event('input'));
+    radiusInput.dispatchEvent(new w.Event('change'));
+    heightInput.value = prevHeightValue;
+    heightInput.dispatchEvent(new w.Event('input'));
+    heightInput.dispatchEvent(new w.Event('change'));
+
+    // ---- loop fabric: the draft draws the fabric, not a vase with dots ------
+    // A parametric loops design goes to build_loop_fabric(), which REPLACES
+    // the wall with a cuff + planar stitch rows + a closing rim. The draft
+    // used to show the ordinary spiral wall with blob-style dots marking the
+    // stitch sites, so every loop style previewed as the same smooth vase and
+    // none of them looked like what would print. Each assertion below is
+    // anchored on a number taken from loop_fabric.py's own layout, so the two
+    // cannot drift.
+    const loopCaps = w.__previewLoopCaps();
+    const fabricDesign = {
+      shape: 'circle', radius: 30, height: 60, layer_height: 0.3,
+      z_waves: 0, squish: 0.75, spacing_factor: 1.25,
+      amp_profile: [[0,0],[1,0]], radius_profile: [[0,1],[1,1]],
+      base_style: 'spiral', nozzle: 0.4, pattern: 'loops',
+      bed_center: [117.5, 117.5],
+      loop_per_turn: 0, loop_spacing_mm: 4.0, loop_align: 'stagger',
+      loop_row: 2.5, loop_up: 3.5, loop_out: 0.5, loop_cuff: 3,
+      loop_mode: 'dip', loop_wave_amp: 0, loop_waves: 12, loop_lean: 20
+    };
+    const fabricSpec = { base_layers: 0, brim: 0, skirt: 0, loop_fabric: true };
+    const fabricSegs = w.generatePreview(fabricDesign, fabricSpec);
+    const fabricInfo = w.__loopFabricPreview;
+
+    check('a loops design produces a fabric report, not blob dots',
+          !!fabricInfo && w.__blobPreviewSites === null,
+          'info ' + JSON.stringify(fabricInfo) + ', sites ' + w.__blobPreviewSites);
+    // spacing 4.0 on radius 30: round(2*pi*30/4) = 47, under the 48 cap.
+    check('stitch count comes from the spacing, like _parse_loop_spec',
+          fabricInfo.stitches === 47, 'got ' + fabricInfo.stitches);
+    // The row/loop heights are the MACHINE's, not the panel's 2.5/3.5: the
+    // draft has to show what the server will actually build.
+    check('the draft clamps the row height to this printer, not the panel value',
+          near(fabricInfo.row_mm, loopCaps.row, 1e-6),
+          'got ' + fabricInfo.row_mm + ', printer allows ' + loopCaps.row);
+    check('the draft clamps the loop height to this printer, not the panel value',
+          fabricInfo.loop_mm <= loopCaps.up + 1e-9,
+          'got ' + fabricInfo.loop_mm + ', printer allows ' + loopCaps.up);
+
+    // Geometry: the fabric spans from the cuff's first flat ring
+    // (squish * layer_height) to the second rim ring, and reaches out to
+    // radius + loop_out at the deepest point of a stitch.
+    let fabMinY = Infinity, fabMaxY = -Infinity, fabMaxR = 0;
+    for (let i = 0; i < fabricSegs.length; i += 3) {
+      const y = fabricSegs[i + 1];
+      if (y < fabMinY) fabMinY = y;
+      if (y > fabMaxY) fabMaxY = y;
+      const rr = Math.hypot(fabricSegs[i], fabricSegs[i + 2]);
+      if (rr > fabMaxR) fabMaxR = rr;
+    }
+    check('the fabric starts on the cuff\'s flat first ring (squish * layer height)',
+          near(fabMinY, 0.75 * 0.3, 1e-3), 'got ' + fabMinY);
+    check('the fabric reaches radius + loop_out at the stitch\'s widest point',
+          near(fabMaxR, 30 + 0.5, 0.02), 'got ' + fabMaxR);
+    check('the fabric tops out at the closing rim, inside the requested height',
+          fabMaxY > 59 && fabMaxY < 61, 'got ' + fabMaxY);
+    // Rows must actually be planar rings at row_mm pitch, not a fine helix:
+    // 90 rows of 0.65mm is the whole point of the fabric looking knitted.
+    check('rows are counted at the row pitch, not the layer height',
+          fabricInfo.rows === Math.max(1, Math.trunc(
+            (60 - (0.75*0.3 + 3*0.3 + fabricInfo.loop_mm
+                   - Math.min(0.8, 0.4*fabricInfo.loop_mm))) / fabricInfo.row_mm) + 1),
+          'got ' + fabricInfo.rows);
+
+    // Every shipped loop style must draw a DISTINCT fabric -- that is the
+    // whole complaint the fabric draft exists to answer. Compare on the two
+    // things a style can still change once the machine has capped the Z
+    // excursions: stitch count (spacing) and footprint (loop_out).
+    const styleCases = [
+      { name: 'tiedspikes', loop_spacing_mm: 4.0, loop_out: 0,   loop_mode: 'spike', loop_align: 'stagger', loop_wave_amp: 0 },
+      { name: 'chainmail',  loop_spacing_mm: 4.0, loop_out: 0.5, loop_mode: 'dip',   loop_align: 'stagger', loop_wave_amp: 0 },
+      { name: 'fineknit',   loop_spacing_mm: 2.2, loop_out: 0.3, loop_mode: 'dip',   loop_align: 'stagger', loop_wave_amp: 0 },
+      { name: 'opennet',    loop_spacing_mm: 10.0, loop_out: 0.8, loop_mode: 'dip',  loop_align: 'stagger', loop_wave_amp: 0 },
+      { name: 'ribs',       loop_spacing_mm: 5.0, loop_out: 0.5, loop_mode: 'dip',   loop_align: 'column',  loop_wave_amp: 0 },
+      { name: 'zigzag',     loop_spacing_mm: 5.0, loop_out: 0.6, loop_mode: 'dip',   loop_align: 'stagger', loop_wave_amp: 1.2 },
+      { name: 'scallops',   loop_spacing_mm: 8.0, loop_out: 1.0, loop_mode: 'dip',   loop_align: 'stagger', loop_wave_amp: 0 }
+    ];
+    const styleShapes = {};
+    styleCases.forEach(sc => {
+      const d = Object.assign({}, fabricDesign, sc);
+      const segs = w.generatePreview(d, fabricSpec);
+      const info = w.__loopFabricPreview;
+      let maxR = 0;
+      for (let i = 0; i < segs.length; i += 3) {
+        const rr = Math.hypot(segs[i], segs[i + 2]);
+        if (rr > maxR) maxR = rr;
+      }
+      styleShapes[sc.name] = {
+        stitches: info.stitches, mode: info.mode,
+        maxR: Math.round(maxR * 100) / 100, segs: segs.length / 6
+      };
+      check(sc.name + ': the draft reaches radius + its own loop_out',
+            near(maxR, 30 + sc.loop_out, 0.02),
+            'got ' + maxR + ', want ' + (30 + sc.loop_out));
+      check(sc.name + ': the draft uses the style\'s own stitch mode',
+            info.mode === sc.loop_mode, 'got ' + info.mode);
+      check(sc.name + ': the draft draws a real fabric (>1000 segments)',
+            segs.length / 6 > 1000, 'got ' + (segs.length / 6));
+    });
+    const shapeKeys = Object.keys(styleShapes).map(k => JSON.stringify(styleShapes[k]));
+    check('no two loop styles draw an identical fabric',
+          new Set(shapeKeys).size === shapeKeys.length,
+          'got ' + shapeKeys.join(' | '));
+
+    // Loops with no sites at all (per-turn 0, no spacing) is the one case
+    // _parse_loop_spec returns None for -- the server builds the ordinary
+    // wall, so the draft must fall back to it rather than draw nothing.
+    const noSites = Object.assign({}, fabricDesign,
+                                  { loop_spacing_mm: 0, loop_per_turn: 0 });
+    const noSiteSegs = w.generatePreview(noSites, fabricSpec);
+    check('loops with no resolvable sites falls back to the ordinary wall draft',
+          noSiteSegs.length > 0 && w.__loopFabricPreview === null,
+          'segs ' + noSiteSegs.length + ', info ' + JSON.stringify(w.__loopFabricPreview));
+
     // ---- how-to-use guide must never auto-open inside this harness ----------
     // The guide auto-opens on a true first visit (no trident-guide-seen key,
     // no stored design, top-level window) -- but this harness runs index.html

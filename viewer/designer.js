@@ -349,6 +349,41 @@
   var histSuppress = false;                       // true while applying undo/redo
   var lastSnap = JSON.stringify(design);          // state as of last persist
 
+  // Coalescing. A continuous edit -- dragging a range slider, holding a number
+  // spinner, dragging a curve point or a cage handle -- fires `input` once per
+  // pixel of travel. Pushing a snapshot per event made one drag land as dozens
+  // of history entries, so Ctrl+Z crawled the value back a step at a time
+  // instead of returning to where the control stood before the drag. Callers
+  // that fire in a stream pass a stable `coalesceKey` (one per control): the
+  // FIRST persist of a run pushes the pre-edit snapshot and every later persist
+  // in the same run folds into that one entry, so a single undo jumps straight
+  // back to the previously settled value.
+  //
+  // A run ends when: the control commits (change/blur -- bindNumber calls
+  // endHistRun() there), a DIFFERENT key or an un-keyed discrete change takes
+  // over, the pointer is released (below), or HIST_IDLE_MS passes with no
+  // further edits. The idle timer is the backstop for controls with no commit
+  // event at all (the curve editors and the shape cage, which only ever report
+  // through a change handler).
+  var HIST_IDLE_MS = 700;
+  var histRunKey = null, histRunTimer = null;
+
+  function endHistRun(){
+    histRunKey = null;
+    if(histRunTimer){ clearTimeout(histRunTimer); histRunTimer = null; }
+  }
+  function armHistRun(key){
+    histRunKey = key;
+    if(histRunTimer) clearTimeout(histRunTimer);
+    histRunTimer = setTimeout(endHistRun, HIST_IDLE_MS);
+  }
+  // Letting go of the pointer ends a manipulation, whatever was being
+  // manipulated -- slider, curve canvas or cage handle. Registered on the
+  // capture phase so it still lands if a handler stops propagation, and on
+  // `pointerup` (mouse, pen and touch alike) rather than `mouseup`.
+  document.addEventListener('pointerup', endHistRun, true);
+  document.addEventListener('pointercancel', endHistRun, true);
+
   // Stale-gcode tracking: designRev bumps on every real design change;
   // generatedRev records the revision the loaded G-code was generated from.
   var designRev = 0, generatedRev = -1;
@@ -361,14 +396,27 @@
     if(btn) btn.classList.toggle('stale', stale);
   }
 
-  function persistDesign(){
+  // `coalesceKey` (optional): a stable id for the control being edited. Passing
+  // one folds a stream of edits from that control into a single undo entry --
+  // see the coalescing note above. Omit it for discrete, one-shot changes
+  // (a select, a checkbox, a preset apply); each of those gets its own entry.
+  function persistDesign(coalesceKey){
+    var key = coalesceKey || null;
+    // A different control (or any un-keyed discrete change) taking over closes
+    // the previous run, so the next push starts a fresh entry.
+    if(key === null || key !== histRunKey) endHistRun();
     var snap = JSON.stringify(design);
     if(snap !== lastSnap){
       designRev++;
       if(!histSuppress){
-        undoStack.push(lastSnap);
-        if(undoStack.length > HIST_MAX) undoStack.shift();
-        redoStack.length = 0;
+        // histRunKey is non-null only mid-run, and mid-run the entry already on
+        // top of the stack IS the pre-edit state -- keep it, don't stack another.
+        if(histRunKey === null){
+          undoStack.push(lastSnap);
+          if(undoStack.length > HIST_MAX) undoStack.shift();
+          redoStack.length = 0;
+        }
+        if(key !== null) armHistRun(key);
       }
     }
     lastSnap = snap;
@@ -395,11 +443,15 @@
   }
 
   function doUndo(){
+    // Close any run first: the entry we are about to pop must be complete, and
+    // the next edit must not fold itself into a pre-undo run.
+    endHistRun();
     if(!undoStack.length) return;
     redoStack.push(JSON.stringify(design));
     restoreSnapshot(undoStack.pop());
   }
   function doRedo(){
+    endHistRun();
     if(!redoStack.length) return;
     undoStack.push(JSON.stringify(design));
     restoreSnapshot(redoStack.pop());
@@ -415,8 +467,13 @@
     if(u) u.addEventListener('click', doUndo);
     if(r) r.addEventListener('click', doRedo);
   })();
-  // Debug hook (harmless in production).
-  window.__hist = function(){ return { undo: undoStack.length, redo: redoStack.length }; };
+  // Debug hook (harmless in production). `run` is the open coalescing key, if
+  // any -- dev_smoke.html asserts a drag stays in one run and one entry.
+  window.__hist = function(){
+    return { undo: undoStack.length, redo: redoStack.length, run: histRunKey };
+  };
+  // Test-only: force a coalescing run closed without waiting out HIST_IDLE_MS.
+  window.__histEndRun = endHistRun;
 
   document.addEventListener('keydown', function(e){
     // Leave native text-field undo alone while typing in an input.
@@ -450,6 +507,9 @@
           if(ov) ov.style.display = 'none';
           if(design.sil3d) refreshShapeCage();
         }
+        // The fabric draft resolves build_loop_fabric's own clamps; report
+        // anything it had to cut. No-op for every non-fabric design.
+        refreshLoopFabricNote();
       }
     }, 100);
   }
@@ -935,6 +995,60 @@
     return { up: up, row: row };
   }
 
+  // Set by applyLoopStyle() when a style bundle asked for more loop/row height
+  // than this machine allows, and by the fabric draft when build_loop_fabric's
+  // OWN clamps (loop height, and the wave amplitude that rides on top of it)
+  // cut something further. Both are appended to the ceiling note below so a
+  // trim is stated rather than silently applied.
+  var loopStyleTrimmed = null;     // style name, or null
+  var loopWaveTrimmed = false;
+
+  // Single writer for #loop-zcap. Called from applyPrinterCaps() (which knows
+  // the caps and profile meta) and re-called whenever a clamp flag changes, so
+  // the two facts can never overwrite each other.
+  var _loopNoteCaps = null, _loopNoteMeta = null;
+  function refreshLoopZcapNote(caps, meta){
+    if(caps){ _loopNoteCaps = caps; _loopNoteMeta = meta; }
+    caps = _loopNoteCaps; meta = _loopNoteMeta;
+    var note = document.getElementById('loop-zcap');
+    if(!note || !caps) return;
+    var mname = (meta && meta.name) || 'This printer';
+    // caps.up < 1.5 is real signal that something is tightly limiting loop
+    // height, but it is only a PROBE if this printer actually declares
+    // one (meta.has_probe). The P1S has none -- its low ceiling is just
+    // z_amp_max, and saying "probe keep-out" on a probe-less machine is a
+    // false attribution the reader has no way to catch on their own.
+    var loopLimitNote = caps.up >= 1.5 ? ''
+      : ((meta && meta.has_probe) ? ' (probe keep-out limit)' : ' (z-amp ceiling)');
+    var text = mname + ' allows loops up to ' + fmtMm(caps.up) +
+      'mm tall' + loopLimitNote + '.';
+    if(loopStyleTrimmed){
+      text += ' The "' + loopStyleTrimmed + '" preset asked for more and was'
+        + ' trimmed to fit.';
+    }
+    if(loopWaveTrimmed){
+      text += ' The stitch wave does not fit under that ceiling on top of the'
+        + ' loop height, so it was flattened out.';
+    }
+    note.textContent = text;
+  }
+
+  // Reads the resolved-fabric report the draft leaves behind (see
+  // preview_math.js's __loopFabricPreview) and reflects build_loop_fabric's
+  // own clamps into the note. Called after each fabric draft.
+  function refreshLoopFabricNote(){
+    var info = window.__loopFabricPreview;
+    // `clamped` covers loop height AND wave amplitude; the height half is
+    // already carried by loopStyleTrimmed, so only report a wave that the
+    // design asked for and the machine removed.
+    var wanted = Math.max(0, parseFloat(design.loop_wave_amp) || 0);
+    var trimmed = !!(info && info.clamped && wanted > 0 && info.wave_amp < wanted);
+    if(trimmed !== loopWaveTrimmed){
+      loopWaveTrimmed = trimmed;
+      refreshLoopZcapNote();
+    }
+  }
+
   // The machine's z-amp ceiling is the single source of truth for every Z-
   // excursion control: the loop row/height inputs' min/max AND the amp curve
   // editor's scale + control points. Reflect it everywhere so the UI can
@@ -964,6 +1078,15 @@
     // both funnel through, the same reasoning as the max_z_velocity contract
     // below.
     if(typeof window.setPreviewAmpMax === 'function') window.setPreviewAmpMax(cap);
+    // Same contract for the loop-fabric draft: it re-runs _parse_loop_spec's
+    // and build_loop_fabric's clamps client-side, so it needs this machine's
+    // row/loop ceilings and whether it has a trailing probe (spike mode's wave
+    // clamp is gated on that). Pushed from here for the same reason as the
+    // amplitude ceiling above -- this is the one funnel every printer switch
+    // and the initial /api/printers load both pass through.
+    if(typeof window.setPreviewLoopCaps === 'function'){
+      window.setPreviewLoopCaps(caps.up, caps.row, !!(meta && meta.has_probe));
+    }
 
     var up = document.getElementById('d-loop-up');
     var row = document.getElementById('d-loop-row');
@@ -987,19 +1110,7 @@
         if(cr !== rv){ row.value = cr; design.loop_row = cr; changed++; }
       }
     }
-    var note = document.getElementById('loop-zcap');
-    if(note){
-      var mname = (meta && meta.name) || 'This printer';
-      // caps.up < 1.5 is real signal that something is tightly limiting loop
-      // height, but it is only a PROBE if this printer actually declares
-      // one (meta.has_probe). The P1S has none -- its low ceiling is just
-      // z_amp_max, and saying "probe keep-out" on a probe-less machine is a
-      // false attribution the reader has no way to catch on their own.
-      var loopLimitNote = caps.up >= 1.5 ? ''
-        : ((meta && meta.has_probe) ? ' (probe keep-out limit)' : ' (z-amp ceiling)');
-      note.textContent = mname + ' allows loops up to ' + fmtMm(caps.up) +
-        'mm tall' + loopLimitNote + '.';
-    }
+    refreshLoopZcapNote(caps, meta);
 
     // Nozzle/bed temp ceilings: server-computed (see _printer_entry_json) so
     // the client never re-derives max_nozzle_temp's 320 C absolute backstop
@@ -2782,9 +2893,12 @@
   silEditor.setProfile(design.radius_profile);
   widthEditor.setProfile(design.width_profile);
   ampEditor.draw(); silEditor.draw(); widthEditor.draw();
-  ampEditor.setChangeHandler(function(){ design.amp_profile = ampEditor.profile(); persistDesign(); updateSlope(); schedulePreview(); });
-  silEditor.setChangeHandler(function(){ design.radius_profile = silEditor.profile(); persistDesign(); updateSlope(); schedulePreview(); refreshShapeCage(); });
-  widthEditor.setChangeHandler(function(){ design.width_profile = widthEditor.profile(); persistDesign(); schedulePreview(); });
+  // Curve editors report per mousemove while a point is dragged, so each gets
+  // its own coalescing key: one drag of one curve = one undo entry, closed by
+  // the document-level pointerup ender (these canvases have no commit event).
+  ampEditor.setChangeHandler(function(){ design.amp_profile = ampEditor.profile(); persistDesign('curve:amp'); updateSlope(); schedulePreview(); });
+  silEditor.setChangeHandler(function(){ design.radius_profile = silEditor.profile(); persistDesign('curve:sil'); updateSlope(); schedulePreview(); refreshShapeCage(); });
+  widthEditor.setChangeHandler(function(){ design.width_profile = widthEditor.profile(); persistDesign('curve:width'); schedulePreview(); });
   document.getElementById('amp-reset').addEventListener('click', function(){ ampEditor.reset(); });
   document.getElementById('sil-reset').addEventListener('click', function(){ silEditor.reset(); });
   document.getElementById('width-reset').addEventListener('click', function(){ widthEditor.reset(); });
@@ -2878,7 +2992,9 @@
       for(var k = 0; k < changes.length; k++){
         design.cage[changes[k].i][changes[k].j] = changes[k].scale;
       }
-      persistDesign();
+      // One cage drag = one undo entry (fires per move event, like the curve
+      // editors above); the pointerup ender closes the run on release.
+      persistDesign('cage');
       schedulePreview();
       updateCageResetState();
     });
@@ -3170,20 +3286,30 @@
       // events" among them -- a value over this printer's ceiling is one.
       el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
       if(commit){ el.value = v; el.classList.remove('out-of-range'); }
-      persistDesign();
+      // Typing "3" then "0" into a radius, or dragging a range slider, is ONE
+      // edit: coalesce the whole stream under this field's id so a single
+      // Ctrl+Z returns to the value the field held before the edit started.
+      // The commit (change/blur, or a spinner click) folds into the same entry
+      // and then closes the run.
+      persistDesign('num:' + id);
+      if(commit) endHistRun();
       updateSlope();
       schedulePreview();
     }
     el.addEventListener('input', function(){ applyValue(false); });
     el.addEventListener('change', function(){ applyValue(true); });
   }
-  function bindSelect(id, field){
+  // `coalesceKey` (optional) lets a caller that adds a SECOND listener to the
+  // same change event (bindBlobSelect / bindLoopSelect, which also flip the
+  // style dropdown to "Custom") fold both writes into one undo entry instead
+  // of leaving two.
+  function bindSelect(id, field, coalesceKey){
     var el = document.getElementById(id);
     if(!el) return;
     if(design[field]) el.value = design[field];
     el.addEventListener('change', function(){
       design[field] = el.value;
-      persistDesign();
+      persistDesign(coalesceKey || null);
       schedulePreview();
     });
   }
@@ -3225,8 +3351,9 @@
     el.addEventListener('input', function(){
       var v = parseFloat(el.value);
       design.first_layer_height = (el.value === '' || Number.isNaN(v)) ? null : v;
-      persistDesign();
+      persistDesign('num:d-flh');
     });
+    el.addEventListener('change', endHistRun);
   })();
   bindNumber('d-spacing', 'spacing_factor');
 
@@ -3314,23 +3441,30 @@
 
   // Any manual edit to an individual blob control detaches it from the
   // selected style bundle (switches the dropdown to "Custom").
-  function markBlobCustom(){
+  // `coalesceKey` is the key the control's OWN handler just persisted under,
+  // so the style->Custom switch joins that same undo entry rather than adding
+  // one of its own (see persistDesign's coalescing note).
+  function markBlobCustom(coalesceKey){
     if(design.blob_style !== 'custom'){
       design.blob_style = 'custom';
       var styleSel = document.getElementById('d-blob-style');
       if(styleSel) styleSel.value = 'custom';
-      persistDesign();
+      persistDesign(coalesceKey || null);
     }
   }
   function bindBlobNumber(id, field, isInt){
     bindNumber(id, field, isInt);
     var el = document.getElementById(id);
-    if(el) el.addEventListener('input', markBlobCustom);
+    if(el) el.addEventListener('input', function(){ markBlobCustom('num:' + id); });
   }
   function bindBlobSelect(id, field){
-    bindSelect(id, field);
+    var key = 'sel:' + id;
+    bindSelect(id, field, key);
     var el = document.getElementById(id);
-    if(el) el.addEventListener('change', markBlobCustom);
+    if(el) el.addEventListener('change', function(){
+      markBlobCustom(key);
+      endHistRun();   // a select commits immediately; nothing more to fold in
+    });
   }
 
   (function(){
@@ -3452,29 +3586,52 @@
       for(var k in bundle){ if(bundle.hasOwnProperty(k)) design[k] = bundle[k]; }
     }
     updateLoopControlsFromDesign();
+    // The bundles are authored as design INTENT (chainmail wants a 2.5mm row,
+    // a 3.5mm loop) on a machine with the headroom for it. Writing them
+    // straight into `design` walked straight past bindNumber's per-field clamp
+    // and left the panel showing -- and the draft drawing -- numbers this
+    // printer cannot do: on the Trident every one of these rows is trimmed to
+    // 0.65mm and every loop to 0.95mm by _parse_loop_spec, so picking a style
+    // promised a 3.5mm loop and printed a 0.95mm one. Run the values back
+    // through the machine's own ceilings (the same funnel a printer switch
+    // uses) so the panel, the draft and the G-code all agree.
+    var wantRow = design.loop_row, wantUp = design.loop_up;
+    // Cleared first so applyPrinterCaps()'s note write starts from a clean
+    // slate -- the previous style's trim must not stick to this one.
+    loopStyleTrimmed = null;
+    applyPrinterCaps();
+    if(design.loop_row !== wantRow || design.loop_up !== wantUp){
+      loopStyleTrimmed = styleName;
+      refreshLoopZcapNote();
+    }
     persistDesign();
     schedulePreview();
   }
 
   // Any manual edit to an individual loop control detaches it from the
   // selected style bundle (switches the dropdown to "Custom").
-  function markLoopCustom(){
+  // See markBlobCustom() for why this takes the caller's coalescing key.
+  function markLoopCustom(coalesceKey){
     if(design.loop_style !== 'custom'){
       design.loop_style = 'custom';
       var styleSel = document.getElementById('d-loop-style');
       if(styleSel) styleSel.value = 'custom';
-      persistDesign();
+      persistDesign(coalesceKey || null);
     }
   }
   function bindLoopNumber(id, field, isInt){
     bindNumber(id, field, isInt);
     var el = document.getElementById(id);
-    if(el) el.addEventListener('input', markLoopCustom);
+    if(el) el.addEventListener('input', function(){ markLoopCustom('num:' + id); });
   }
   function bindLoopSelect(id, field){
-    bindSelect(id, field);
+    var key = 'sel:' + id;
+    bindSelect(id, field, key);
     var el = document.getElementById(id);
-    if(el) el.addEventListener('change', markLoopCustom);
+    if(el) el.addEventListener('change', function(){
+      markLoopCustom(key);
+      endHistRun();
+    });
   }
 
   function refreshLoopDwellRow(){
@@ -3542,8 +3699,9 @@
     slider.addEventListener('input', function(){
       design.overhang_flow_k = parseFloat(slider.value);
       if(read) read.textContent = design.overhang_flow_k.toFixed(2);
-      persistDesign();
+      persistDesign('num:d-overhang-k');
     });
+    slider.addEventListener('change', endHistRun);
   })();
 
   // Overhang-adaptive fan sliders (min ramps up to max at a steep overhang).
@@ -3557,8 +3715,9 @@
       slider.addEventListener('input', function(){
         design[field] = parseFloat(slider.value);
         if(read) read.textContent = slider.value + '%';
-        persistDesign();
+        persistDesign('num:' + id);
       });
+      slider.addEventListener('change', endHistRun);
     }
     bindFanSlider('d-fan-min', 'fan-min-read', 'fan_overhang_min');
     bindFanSlider('d-fan-max', 'fan-max-read', 'fan_overhang_max');
@@ -3572,8 +3731,9 @@
     el.addEventListener('input', function(){
       var v = parseInt(el.value, 10);
       design.fan_off_layers = Number.isNaN(v) ? 0 : Math.max(0, Math.min(v, 50));
-      persistDesign();
+      persistDesign('num:d-fan-off-layers');
     });
+    el.addEventListener('change', endHistRun);
   })();
 
   // ---- Point Edit Modifiers: popup panel + live-preview wiring -------------
@@ -3670,10 +3830,13 @@
           inp.addEventListener('input', function(){
             var v = parseFloat(inp.value);
             design.point_ffd_grid[ri][ci] = Number.isNaN(v) ? 0 : Math.max(-4, Math.min(4, v));
-            persistDesign();
+            // Per-cell key: editing one FFD cell is one undo entry, and moving
+            // to a different cell starts a new one.
+            persistDesign('ffd:' + ri + ',' + ci);
             schedulePreview();
             updatePointEditActiveDot();
           });
+          inp.addEventListener('change', endHistRun);
           container.appendChild(inp);
         })(i, j);
       }
@@ -3770,10 +3933,11 @@
         if(Number.isNaN(v)) return;
         design[field] = v;
         previewArmed = true;
-        persistDesign();
+        persistDesign('num:' + id);
         schedulePreview();
         updatePointEditActiveDot();
       });
+      el.addEventListener('change', endHistRun);
     }
     function bindPESelect(id, field){
       var el = document.getElementById(id);
@@ -3871,9 +4035,10 @@
     el.addEventListener('input', function(){
       var v = parseFloat(el.value);
       design.line_width = (el.value === '' || Number.isNaN(v)) ? null : v;
-      persistDesign();
+      persistDesign('num:d-lwoverride');
       widthEditor.draw();   // its mm readout depends on the nominal bead width
     });
+    el.addEventListener('change', endHistRun);
   })();
 
   // Optional temperature override. Blank = auto (the selected filament's own
@@ -3905,7 +4070,8 @@
         el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
         if(commit){ el.value = v; el.classList.remove('out-of-range'); }
       }
-      persistDesign();
+      persistDesign('num:' + id);
+      if(commit) endHistRun();
     }
     el.addEventListener('input', function(){ applyTemp(false); });
     el.addEventListener('change', function(){ applyTemp(true); });
@@ -3969,7 +4135,13 @@
       // exact asymmetry: brim is gated on loop-fabric alone.
       brim: lf ? 0 : Math.round(design.brim),
       skirt: (lf || mesh) ? 0 : Math.round(design.skirt || 0),
-      base_style_applies: !mesh
+      base_style_applies: !mesh,
+      // Which GENERATOR the request will hit. serve.py sends a parametric
+      // loops design to build_loop_fabric(), which replaces the wall outright,
+      // so the draft has to draw the fabric rather than a spiral. Carried on
+      // the same object for the same reason as the fields above: one place
+      // decides, and the request and the draft cannot disagree about it.
+      loop_fabric: lf
     };
   }
 
