@@ -992,7 +992,12 @@
   function loopCapsFor(meta, cap){
     var up = (meta && typeof meta.loop_up_max === 'number') ? meta.loop_up_max : cap;
     var row = (meta && typeof meta.loop_row_max === 'number') ? meta.loop_row_max : Math.max(0.4, cap - 0.3);
-    return { up: up, row: row };
+    // Server-published floor (see _printer_entry_json's loop_min_mm). The
+    // fallback mirrors LOOP_MIN_MM only for an older /api/printers response
+    // that predates the field, and is capped the same way the server caps it.
+    var min = (meta && typeof meta.loop_min_mm === 'number')
+      ? meta.loop_min_mm : Math.min(0.5, row, up);
+    return { up: up, row: row, min: min };
   }
 
   // Set by applyLoopStyle() when a style bundle asked for more loop/row height
@@ -1023,8 +1028,9 @@
     var text = mname + ' allows loops up to ' + fmtMm(caps.up) +
       'mm tall' + loopLimitNote + '.';
     if(loopStyleTrimmed){
-      text += ' The "' + loopStyleTrimmed + '" preset asked for more and was'
-        + ' trimmed to fit.';
+      text += ' The "' + loopStyleTrimmed + '" preset asks for more, so its'
+        + ' whole stitch was scaled down to fit (its row-to-loop proportion is'
+        + ' kept).';
     }
     if(loopWaveTrimmed){
       text += ' The stitch wave does not fit under that ceiling on top of the'
@@ -1085,13 +1091,21 @@
     // amplitude ceiling above -- this is the one funnel every printer switch
     // and the initial /api/printers load both pass through.
     if(typeof window.setPreviewLoopCaps === 'function'){
-      window.setPreviewLoopCaps(caps.up, caps.row, !!(meta && meta.has_probe));
+      window.setPreviewLoopCaps(caps.up, caps.row, !!(meta && meta.has_probe),
+                                caps.min);
     }
 
     var up = document.getElementById('d-loop-up');
     var row = document.getElementById('d-loop-row');
-    var floorUp = Math.min(1.0, caps.up);
-    var floorRow = Math.min(1.0, caps.row);
+    // The floor is the server's loop_min_mm, NOT the old min(1.0, cap). That
+    // expression equals the ceiling on any machine capped at or below 1.0 --
+    // ten of the fifteen shipped profiles -- so it pinned both inputs to a
+    // single value, re-clamped every loop style back onto that same number
+    // (undoing fitLoopStyleToMachine's spread) and left the user unable to
+    // type anything finer. See _parse_loop_spec's docstring for the full
+    // account; the CEILINGS below are unchanged.
+    var floorUp = Math.min(caps.min, caps.up);
+    var floorRow = Math.min(caps.min, caps.row);
     if(up){
       up.min = floorUp;
       up.max = Math.round(caps.up * 100) / 100;
@@ -3579,31 +3593,100 @@
     refreshLoopJitterRow();
   }
 
+  // Widest and narrowest row height any shipped style asks for. Read off the
+  // table rather than written down, so adding a style re-spreads the others
+  // instead of quietly falling outside the mapping below.
+  function authoredRowSpan(){
+    var lo = Infinity, hi = -Infinity;
+    for(var k in LOOP_STYLES){
+      if(!LOOP_STYLES.hasOwnProperty(k)) continue;
+      var r = LOOP_STYLES[k].loop_row;
+      if(!(r > 0)) continue;
+      if(r < lo) lo = r;
+      if(r > hi) hi = r;
+    }
+    return (lo <= hi) ? { lo: lo, hi: hi } : null;
+  }
+
+  // Fits a style bundle's Z excursions to the selected machine.
+  //
+  // The bundles are authored as design INTENT in absolute mm, sized for a
+  // machine with the headroom to print them (chainmail wants a 2.5mm row and
+  // a 3.5mm loop). Ten of the fifteen shipped profiles have far less -- the
+  // Trident allows 0.65mm of row, every Creality 0.7mm -- and EVERY style asks
+  // for more than that, so any scheme that clips to the ceiling lands all
+  // seven on the identical row and the fabric looks the same whichever style
+  // is picked.
+  //
+  // Scaling each bundle by its own factor does not fix it either, which is
+  // worth recording because it looks like it should: the row is always the
+  // binding constraint, so every style still pins to the row ceiling, and
+  // build_loop_fabric then derives loop_h = max(row + 0.3, up) -- which lands
+  // on the SAME number for all of them and discards the scaled `up` entirely.
+  //
+  // So map the styles' authored row SPREAD onto the machine's usable row
+  // range instead. The coarsest style gets the ceiling, the finest gets the
+  // floor, the rest land in between: relative order and relative coarseness --
+  // what actually makes a style recognisable -- survive on any machine, and
+  // loop_h genuinely differs because row does. `up` follows the style's own
+  // authored up:row ratio so each keeps its hook depth relative to its pitch.
+  //
+  // Every result stays inside [loop_min_mm, ceiling], so this only ever moves
+  // values DOWN from what the panel used to send -- smaller Z excursions are
+  // strictly safer, and the ceiling itself is untouched. applyPrinterCaps()
+  // and the server clamp both still stand behind it.
+  //
+  // Returns null when the bundle already fits as authored, or when the printer
+  // list has not loaded yet; the bundle is then applied unchanged.
+  function fitLoopStyleToMachine(bundle){
+    var cap = PRINTER_ZCAP[design.printer];
+    if(cap == null || typeof cap !== 'number' || !isFinite(cap)) return null;
+    var caps = loopCapsFor(PRINTER_META[design.printer], cap);
+    var row = bundle.loop_row, up = bundle.loop_up;
+    if(!(row > 0) || !(up > 0)) return null;
+    if(row <= caps.row && up <= caps.up) return null;   // fits as authored
+    var span = authoredRowSpan();
+    var fittedRow;
+    if(!span || span.hi <= span.lo || caps.min >= caps.row){
+      // One style, or a machine with no usable range at all: nothing to
+      // spread across, so take the ceiling.
+      fittedRow = caps.row;
+    } else {
+      var f = (row - span.lo) / (span.hi - span.lo);       // 0 = finest
+      fittedRow = caps.min + f * (caps.row - caps.min);
+    }
+    var fittedUp = fittedRow * (up / row);                 // keep the hook ratio
+    function snap(v, hi){
+      // Round to the 0.01mm the inputs step in, then re-clamp -- rounding must
+      // never be what pushes a value back over the machine's ceiling.
+      return Math.max(caps.min, Math.min(hi, Math.round(v * 100) / 100));
+    }
+    return { loop_row: snap(fittedRow, caps.row), loop_up: snap(fittedUp, caps.up) };
+  }
+
   function applyLoopStyle(styleName){
     design.loop_style = styleName;
     var bundle = LOOP_STYLES[styleName];
     if(bundle){
       for(var k in bundle){ if(bundle.hasOwnProperty(k)) design[k] = bundle[k]; }
+      var fitted = fitLoopStyleToMachine(bundle);
+      if(fitted){
+        design.loop_row = fitted.loop_row;
+        design.loop_up = fitted.loop_up;
+      }
     }
     updateLoopControlsFromDesign();
-    // The bundles are authored as design INTENT (chainmail wants a 2.5mm row,
-    // a 3.5mm loop) on a machine with the headroom for it. Writing them
-    // straight into `design` walked straight past bindNumber's per-field clamp
-    // and left the panel showing -- and the draft drawing -- numbers this
-    // printer cannot do: on the Trident every one of these rows is trimmed to
-    // 0.65mm and every loop to 0.95mm by _parse_loop_spec, so picking a style
-    // promised a 3.5mm loop and printed a 0.95mm one. Run the values back
-    // through the machine's own ceilings (the same funnel a printer switch
-    // uses) so the panel, the draft and the G-code all agree.
-    var wantRow = design.loop_row, wantUp = design.loop_up;
-    // Cleared first so applyPrinterCaps()'s note write starts from a clean
-    // slate -- the previous style's trim must not stick to this one.
+    // Writing the bundle straight into `design` also walked past bindNumber's
+    // per-field clamp, so the panel could show a number the request would not
+    // carry. applyPrinterCaps() is the funnel a printer switch already uses;
+    // running it here keeps the panel, the draft and the G-code in agreement,
+    // and stands as the backstop behind the scaling above.
+    // Cleared first so its note write starts from a clean slate -- the
+    // previous style's trim must not stick to this one.
     loopStyleTrimmed = null;
     applyPrinterCaps();
-    if(design.loop_row !== wantRow || design.loop_up !== wantUp){
-      loopStyleTrimmed = styleName;
-      refreshLoopZcapNote();
-    }
+    if(fitted) loopStyleTrimmed = styleName;
+    refreshLoopZcapNote();
     persistDesign();
     schedulePreview();
   }

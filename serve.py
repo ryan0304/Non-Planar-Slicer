@@ -250,6 +250,16 @@ def _slope_exceeded_message(peak_slope, limit, min_radius, z_waves, amp_cap_limi
     return msg + "; reduce amplitude or wave count."
 
 
+# Smallest loop-fabric row / stitch height the server will accept, in mm.
+# NOT a machine limit -- machine limits come from the PrinterProfile and never
+# live here (see CLAUDE.md). This is the GENERATOR's own lower bound:
+# build_loop_fabric() starts with ``row_mm = max(0.5, spec.row_mm)``, so
+# accepting anything smaller would just be silently raised there, and the panel
+# would show a row height the print does not use. Every ceiling that matters is
+# still the profile's.
+LOOP_MIN_MM = 0.5
+
+
 def loop_row_ceiling(profile) -> float:
     """Max loop-fabric row height (mm) for this machine.
 
@@ -704,12 +714,31 @@ def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | N
     ceilings are derived from the selected machine's amp_ceiling() rather than
     a fixed constant -- see amp_ceiling() for why. row_mm's cap mirrors the
     formula the client already uses in applyPrinterCaps() (cap - 0.3, floored
-    at 0.4) so both paths agree. Each floor is min(1.0, cap): the old floor of
-    1.0 was larger than the Trident's 0.95 ceiling, which made the permitted
-    range empty.
+    at 0.4) so both paths agree.
+
+    The FLOOR is LOOP_MIN_MM, not the old min(1.0, cap). That expression was a
+    patch for a genuinely empty range (a hardcoded 1.0 floor sat above the
+    Trident's 0.95 ceiling) but it overshot: whenever the ceiling is at or
+    below 1.0 it makes floor == ceiling, and the whole control collapses to a
+    single value. Ten of the fifteen shipped profiles are in that band -- the
+    Trident (0.65 row / 0.95 loop) and every Creality (0.7 / 1.0) -- so on all
+    of them EVERY loop style resolved to identical row and loop heights, and
+    picking a different style changed nothing about the fabric's proportions.
+    Only the three Bambus (4.0) had a usable range.
+
+    A floor is not a safety bound in this direction: smaller row/loop values
+    are strictly smaller Z excursions, i.e. strictly safer. The safety-relevant
+    bound is the CEILING, and it is untouched -- z_amp_max still caps both, as
+    it must. LOOP_MIN_MM matches build_loop_fabric's own row floor
+    (``row_mm = max(0.5, spec.row_mm)``) so the server never accepts a row the
+    generator would silently raise, and is itself capped by the machine so a
+    profile declaring less than LOOP_MIN_MM of clearance still gets a valid
+    (if degenerate) range rather than an inverted one.
     """
     cap = amp_ceiling(profile)
     cap_row = loop_row_ceiling(profile)
+    floor_row = min(LOOP_MIN_MM, cap_row)
+    floor_up = min(LOOP_MIN_MM, cap)
     per_turn = int(body.get("loop_per_turn", 0))
     spacing_mm = float(body.get("loop_spacing_mm", 0) or 0)
     if spacing_mm > 0 and radius:
@@ -732,8 +761,8 @@ def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | N
         turn_stride=max(1, int(body.get("loop_turn_stride", 1))),
         align=align,
         jitter=max(0.0, min(float(body.get("loop_jitter", 0.5)), 1.0)),
-        row_mm=max(min(1.0, cap_row), min(float(body.get("loop_row", 2.5)), cap_row)),
-        up_mm=max(min(1.0, cap), min(float(body.get("loop_up", 3.5)), cap)),
+        row_mm=max(floor_row, min(float(body.get("loop_row", 2.5)), cap_row)),
+        up_mm=max(floor_up, min(float(body.get("loop_up", 3.5)), cap)),
         out_mm=max(0.0, min(float(body.get("loop_out", 0.5)), 5.0)),
         rejoin_mm=max(0.5, min(float(body.get("loop_rejoin", 2.0)), 6.0)),
         dwell_ms=max(0, min(int(body.get("loop_dwell", 0)), 2000)),
@@ -1989,6 +2018,13 @@ def _printer_entry_json(key, profile, custom, meta=None):
         "z_amp_max": profile.z_amp_max,
         "loop_row_max": cap_row,
         "loop_up_max": cap,
+        # loop_min_mm: the FLOOR of the same two ranges, served for the same
+        # reason as the ceilings above -- the client scales its loop-style
+        # presets into [loop_min_mm, loop_row_max] and must not carry its own
+        # copy of a bound the server enforces. Capped by the machine so a
+        # profile with less clearance than LOOP_MIN_MM still reports a floor at
+        # or below its own ceiling instead of an inverted range.
+        "loop_min_mm": min(LOOP_MIN_MM, cap_row, cap),
         "max_nozzle_temp": min(320.0, float(profile.max_nozzle_temp)),
         "max_bed_temp": float(profile.max_bed_temp),
         # max_z_velocity: the viewer's Print Stats panel flags the peak Z-rate
