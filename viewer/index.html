@@ -63,10 +63,13 @@
     </div>
     <!-- ================================================================ -->
     <!-- Tool rail. Instruments that only READ the model in the viewport   -->
-    <!-- dock here, against the panel edge: the panel owns parameters      -->
-    <!-- (things that change what gets printed), the rail owns tools       -->
-    <!-- (things that just look at it). Hidden until G-code is loaded --   -->
-    <!-- there is nothing to measure before that.                          -->
+    <!-- dock here. CSS anchors it to the canvas edge by default, but the  -->
+    <!-- rail is draggable by dragging the BUTTON itself -- there is no    -->
+    <!-- grip strip and no lock control, so the rail stays a single clean  -->
+    <!-- button; viewer.js tells a click apart from a drag by a few px of  -->
+    <!-- movement. Hidden until there is something to measure -- loaded    -->
+    <!-- G-code in G-code Viewer mode, or a live draft in Design mode      -->
+    <!-- (see syncCanvasChromeForMode in viewer.js).                       -->
     <!-- ================================================================ -->
     <div id="tool-rail" class="tool-rail" style="display:none">
       <button id="tool-measure" class="tool-btn" type="button" aria-pressed="false"
