@@ -428,11 +428,28 @@ label.radio-inline { cursor:pointer; }
 
 .tool-rail { position:absolute; right:12px; z-index:6;
   /* Centred when there is room, pushed clear of the telemetry card when there
-     is not, and never allowed to reach the readout strip. */
+     is not, and never allowed to reach the readout strip. This is only the
+     RESTING default -- the rail is dragged by its own button (see the "tool
+     rail: drag" IIFE in viewer.js, which tells a click from a drag by a few
+     px of travel), which switches it to an explicit left/top the same way
+     .measure-card's drag already does, and this CSS default stops applying
+     once it has. There is no separate grip or lock strip: the rail is one
+     button, and the drag affordance is the cursor alone.
+     touch-action:none so the same drag works on touch instead of being eaten
+     by the browser's scroll gesture; user-select:none so a drag across the
+     button's "MEASURE" label cannot start a text selection (viewer.js
+     deliberately does not preventDefault() the pointerdown, which would also
+     cost the button its focus). */
   top:min(max(50%, var(--overlay-top)), calc(100% - var(--overlay-bottom) - 64px));
   display:flex; flex-direction:column; gap:6px; padding:6px;
   background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius);
-  box-shadow:0 8px 24px rgba(0,0,0,.35); }
+  box-shadow:0 8px 24px rgba(0,0,0,.35);
+  cursor:grab; touch-action:none; user-select:none; }
+/* Only while a drag is actually running -- viewer.js adds the class once the
+   pointer crosses the movement threshold. .tool-btn keeps its own
+   cursor:pointer, so hovering the button reads as "click me" (its primary
+   action) and only the rail's 6px padding advertises the grab. */
+.tool-rail.rail-dragging, .tool-rail.rail-dragging .tool-btn { cursor:grabbing; }
 
 .tool-btn { display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:2px; width:44px; padding:6px 2px; cursor:pointer;
@@ -446,8 +463,12 @@ label.radio-inline { cursor:pointer; }
 .tool-btn[aria-pressed="true"] { color:var(--measure); background:var(--measure-dim);
   border-color:var(--measure); }
 
-/* right: clears the rail, which occupies 68px (12 offset + 6 padding + 44 button
-   + 6 padding), leaving an 8px gap so the card never clips the button. */
+/* right:76px is only a defensive pre-JS fallback. In practice viewer.js
+   positions the card the instant it opens -- directly below the rail's
+   CURRENT spot, wherever the rail has been dragged to -- rather than at a
+   fixed canvas corner that has no relationship to where the Measure button
+   actually is once the rail moves. See the "tool rail" / "measure card:
+   drag / lock / reset" IIFEs in viewer.js. */
 .measure-card { position:absolute; right:76px; width:246px; z-index:6;
   bottom:var(--overlay-bottom);
   max-height:calc(100% - var(--overlay-top) - var(--overlay-bottom)); overflow-y:auto;

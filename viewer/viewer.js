@@ -1402,11 +1402,65 @@ window.__colorStats = function(){
 let previewObj = null;
 let previewBlobObj = null;
 let previewLabel = null;
+// The measure tool's Design-mode source: the same flat [x0,y0,z0,x1,y1,z1,...]
+// world-space segment array showPreview() draws, plus its bounding box (kept
+// alongside rather than recomputed per pick -- see measureRaySpan). Both null
+// whenever there is no draft on screen.
+let previewPositions = null;
+let previewBounds = null;
+
+// Disposes the drawn objects only -- NOT previewPositions/previewBounds, and
+// NOT the measure-tool invalidation that goes with them. showPreview() uses
+// this to clear the old draft's THREE objects a beat before it draws the new
+// one; going through the public clearPreview() there would null
+// previewPositions in between and read as "the draft is gone" to
+// syncCanvasChromeForMode(), which would silently switch the measure tool off
+// on every single slider tweak instead of just once when the draft actually
+// ends.
+function disposePreviewObjects(){
+  if(previewObj){
+    scene.remove(previewObj);
+    previewObj.geometry.dispose();
+    previewObj.material.dispose();
+    previewObj = null;
+  }
+  if(previewBlobObj){
+    scene.remove(previewBlobObj);
+    previewBlobObj.geometry.dispose();
+    previewBlobObj.material.dispose();
+    previewBlobObj = null;
+  }
+  if(previewLabel) previewLabel.style.display = 'none';
+  if(window.hideShapeCage) window.hideShapeCage();
+  // Restore the generated (rainbow) path that showPreview hid, so viewing the
+  // G-code again brings it back. Travels follow their own toggle.
+  if(pathObj) pathObj.visible = true;
+  if(travelObj) travelObj.visible = document.getElementById('t-travel').checked;
+  // Restore drop overlay only if no real gcode is loaded.
+  if(!lastData){
+    var ov = document.getElementById('overlay');
+    if(ov) ov.style.display = '';
+  }
+}
 
 window.showPreview = function(positions){
   // positions: Float32Array [x0,y0,z0, x1,y1,z1, ...]
   if(!positions || positions.length < 6) return;
-  window.clearPreview();
+  disposePreviewObjects();
+
+  // Measure tool's Design-mode source array, plus its bounds for
+  // measureRaySpan's slab test -- computed once here rather than per pick.
+  previewPositions = positions;
+  {
+    let minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity,minz=Infinity,maxz=-Infinity;
+    for(let i = 0; i < positions.length; i += 3){
+      const x = positions[i], y = positions[i+1], z = positions[i+2];
+      if(x < minx) minx = x; if(x > maxx) maxx = x;
+      if(y < miny) miny = y; if(y > maxy) maxy = y;
+      if(z < minz) minz = z; if(z > maxz) maxz = z;
+    }
+    previewBounds = {minx,maxx,miny,maxy,minz,maxz};
+  }
 
   const nSeg = positions.length / 6;
   // Uniform colour: semi-transparent accent blue.
@@ -1470,33 +1524,25 @@ window.showPreview = function(positions){
   if(travelObj) travelObj.visible = false;
   nozzle.visible = false;
 
+  // The shape just changed under the measure tool: its Design-mode pick grid
+  // was built from the previous draft and any in-progress pick pointed at a
+  // vertex that no longer exists. syncCanvasChromeForMode() drops both (see
+  // its own comment) and reveals the rail the first time Design mode has
+  // something to measure.
+  syncCanvasChromeForMode();
+
   render();
 };
 
 window.clearPreview = function(){
-  if(previewObj){
-    scene.remove(previewObj);
-    previewObj.geometry.dispose();
-    previewObj.material.dispose();
-    previewObj = null;
-  }
-  if(previewBlobObj){
-    scene.remove(previewBlobObj);
-    previewBlobObj.geometry.dispose();
-    previewBlobObj.material.dispose();
-    previewBlobObj = null;
-  }
-  if(previewLabel) previewLabel.style.display = 'none';
-  if(window.hideShapeCage) window.hideShapeCage();
-  // Restore the generated (rainbow) path that showPreview hid, so viewing the
-  // G-code again brings it back. Travels follow their own toggle.
-  if(pathObj) pathObj.visible = true;
-  if(travelObj) travelObj.visible = document.getElementById('t-travel').checked;
-  // Restore drop overlay only if no real gcode is loaded.
-  if(!lastData){
-    var ov = document.getElementById('overlay');
-    if(ov) ov.style.display = '';
-  }
+  disposePreviewObjects();
+  // The draft the measure tool was reading from in Design mode is gone.
+  // syncCanvasChromeForMode() drops its pick grid and any in-progress pick
+  // (see its own comment) and hides the rail if there is nothing left to
+  // measure -- it just needs previewPositions cleared first so it sees that.
+  previewPositions = null;
+  previewBounds = null;
+  syncCanvasChromeForMode();
   render();
 };
 
@@ -2132,9 +2178,11 @@ window.hideShapeCage = function(){
 };
 
 // ---- measure tool -----------------------------------------------------------
-// A read-only instrument. It reports distances read off the toolpath that is
-// already on screen; it never writes G-code and never feeds a value back into
-// the design.
+// A read-only instrument. It reports distances read off whatever is already
+// on screen -- the loaded G-code's toolpath in G-code Viewer mode, or the
+// live draft preview in Design mode -- and it never writes G-code or feeds a
+// value back into the design. See measureSourceArr() for which one backs a
+// given pick.
 //
 // What the numbers mean, precisely: every figure is measured on the toolpath
 // CENTRELINE, which is not what calipers read off the finished part. A bead
@@ -2192,16 +2240,27 @@ function measureKey(x, y, z){
          Math.floor(z/MEASURE_CELL);
 }
 
+// Which flat [x0,y0,z0,x1,y1,z1,...] segment array the measure tool reads
+// from right now: the loaded G-code's world-space extrude path in G-code
+// Viewer mode, or the live draft preview's in Design mode. Both share the
+// same layout and world-space coordinates (previewPositions is exactly what
+// showPreview() draws), so every function below can stay agnostic of which
+// one it got.
+function measureSourceArr(){
+  return viewerModeActive() ? extArr : previewPositions;
+}
+
 function measureBuildGrid(){
   msX = msY = msZ = msSeg = null;
   msGrid = null;
-  if(!extArr || extArr.length < 6) return;
-  const nSeg = extArr.length / 6;
+  const arr = measureSourceArr();
+  if(!arr || arr.length < 6) return;
+  const nSeg = arr.length / 6;
   const xs = [], ys = [], zs = [], sg = [];
   for(let s = 0; s < nSeg; s++){
     const b = s*6;
-    const ax = extArr[b], ay = extArr[b+1], az = extArr[b+2];
-    const dx = extArr[b+3]-ax, dy = extArr[b+4]-ay, dz = extArr[b+5]-az;
+    const ax = arr[b], ay = arr[b+1], az = arr[b+2];
+    const dx = arr[b+3]-ax, dy = arr[b+4]-ay, dz = arr[b+5]-az;
     // Long moves (a calibration disk's straight fills) would otherwise only
     // register at their endpoints, and clicking the middle of one would snap
     // the marker to an end. Subdivide anything longer than MEASURE_STEP.
@@ -2212,7 +2271,7 @@ function measureBuildGrid(){
     }
   }
   const lb = (nSeg-1)*6;                        // close with the final vertex
-  xs.push(extArr[lb+3]); ys.push(extArr[lb+4]); zs.push(extArr[lb+5]); sg.push(nSeg-1);
+  xs.push(arr[lb+3]); ys.push(arr[lb+4]); zs.push(arr[lb+5]); sg.push(nSeg-1);
 
   msX = new Float32Array(xs); msY = new Float32Array(ys); msZ = new Float32Array(zs);
   msSeg = new Uint32Array(sg);
@@ -2227,7 +2286,9 @@ function measureBuildGrid(){
 // How much of the print is currently on screen. Measuring a wall the scrubber
 // has not drawn yet would report a number for something the user cannot see.
 // A fresh InstancedBufferGeometry starts at Infinity (= draw everything).
+// Design mode has no scrubber -- the whole draft is always on screen.
 function measureDrawnSegs(){
+  if(!viewerModeActive()) return previewPositions ? previewPositions.length/6 : 0;
   if(!pathObj || !pathObj.geometry || !extArr) return 0;
   const n = pathObj.geometry.instanceCount;
   const all = extArr.length/6;
@@ -2243,19 +2304,33 @@ function measureMmPerPx(dist){
   return 2 * dist * Math.tan(camera.fov*Math.PI/360) / h;
 }
 
-// Slab test: [entry, exit] parameters of `ray` through the loaded model's
+// Slab test: [entry, exit] parameters of `ray` through the drawn model's
 // bounds, padded so a pick just off the surface still starts marching inside.
 // null when the ray misses the model entirely.
+//
+// G-code Viewer mode uses lastData's PRINTER-space bounds (BED_X/BED_Y below
+// convert them to world), because parseGcode already computed them. Design
+// mode has no such record: previewBounds is computed straight off the draft's
+// own vertices in showPreview(), which are already world-space, so no BED
+// conversion applies there.
 function measureRaySpan(ray, pad){
-  if(!lastData) return null;
-  const d = lastData;
-  // World Z runs OPPOSITE printer Y (wz = cy - printerY), so the printer-Y
-  // span [miny, maxy] maps to the world-Z span [cy-maxy, cy-miny] -- max and
-  // min swap sides. Subtracting cy from each without the flip gave the
-  // mirror-image slab, which for an off-centre model does not contain the
-  // model at all and made every measure pick miss.
-  const lo = [d.minx-BED_X/2-pad, d.minz-pad, BED_Y/2-d.maxy-pad];
-  const hi = [d.maxx-BED_X/2+pad, d.maxz+pad, BED_Y/2-d.miny+pad];
+  let lo, hi;
+  if(viewerModeActive()){
+    if(!lastData) return null;
+    const d = lastData;
+    // World Z runs OPPOSITE printer Y (wz = cy - printerY), so the printer-Y
+    // span [miny, maxy] maps to the world-Z span [cy-maxy, cy-miny] -- max and
+    // min swap sides. Subtracting cy from each without the flip gave the
+    // mirror-image slab, which for an off-centre model does not contain the
+    // model at all and made every measure pick miss.
+    lo = [d.minx-BED_X/2-pad, d.minz-pad, BED_Y/2-d.maxy-pad];
+    hi = [d.maxx-BED_X/2+pad, d.maxz+pad, BED_Y/2-d.miny+pad];
+  } else {
+    if(!previewBounds) return null;
+    const b = previewBounds;
+    lo = [b.minx-pad, b.miny-pad, b.minz-pad];
+    hi = [b.maxx+pad, b.maxy+pad, b.maxz+pad];
+  }
   const o = [ray.origin.x, ray.origin.y, ray.origin.z];
   const v = [ray.direction.x, ray.direction.y, ray.direction.z];
   let t0 = 0, t1 = Infinity;
@@ -2277,9 +2352,10 @@ function measureRaySpan(ray, pad){
 // Standard closest-approach between two lines; the ray direction is unit
 // length, so its own squared length drops out of the denominator.
 function measureClosestOnSeg(s, ray, out){
+  const arr = measureSourceArr();
   const b = s*6;
-  const ax = extArr[b], ay = extArr[b+1], az = extArr[b+2];
-  const ux = extArr[b+3]-ax, uy = extArr[b+4]-ay, uz = extArr[b+5]-az;
+  const ax = arr[b], ay = arr[b+1], az = arr[b+2];
+  const ux = arr[b+3]-ax, uy = arr[b+4]-ay, uz = arr[b+5]-az;
   const o = ray.origin, d = ray.direction;
   const wx = ax-o.x, wy = ay-o.y, wz = az-o.z;
   const uu = ux*ux + uy*uy + uz*uz;
@@ -2454,10 +2530,15 @@ function measureRingAt(p, band, drawn){
 // card, because a reading smeared over 2 mm of height is a different claim
 // from one taken over 0.2 mm.
 function measureRing(p){
-  if(!msX || !lastData) return null;
+  // lastData is only used below for its (optional) layer height, to pick a
+  // starting band size -- it is not required for the ring search itself.
+  // Gating the whole function on it meant Design mode, which has no
+  // lastData until a file is actually loaded, could never form a
+  // cross-section at all.
+  if(!msX) return null;
   const drawn = measureDrawnSegs();
   if(drawn <= 0) return null;
-  const lh = (lastData.meta && lastData.meta.layerHeight) || null;
+  const lh = (lastData && lastData.meta && lastData.meta.layerHeight) || null;
   // Half a layer is the floor: a spiral vase climbs one layer height per
   // revolution, so a thinner band cannot contain a whole turn even on a
   // perfectly flat-layered print.
@@ -2641,13 +2722,20 @@ function measureSetHint(text){
 function measureRenderCard(){
   const body = document.getElementById('measure-read');
   if(!body) return;
-  const lw = (lastData && lastData.meta && lastData.meta.lineWidth) || null;
+  const modeIsViewer = viewerModeActive();
+  // Line width is read off the loaded G-code's own header. In Design mode
+  // there is no G-code yet -- reusing a value left over from a PREVIOUS
+  // viewer session would derive bead offsets for this draft from an
+  // unrelated file's line width, so it is withheld instead.
+  const lw = modeIsViewer ? ((lastData && lastData.meta && lastData.meta.lineWidth) || null) : null;
+  // What the picked points sit on, for wording that stays true in both modes.
+  const src = modeIsViewer ? 'toolpath' : 'draft';
   let html = '', hint = '';
 
   if(measureMode === 'span'){
     if(measurePts.length < 2){
       html = '<div class="measure-empty">Click two points on the model to span ' +
-             'between them. Picks snap to the nearest toolpath point.</div>';
+             'between them. Picks snap to the nearest ' + src + ' point.</div>';
       hint = measurePts.length ? 'Click the second point.' : 'Click the first point.';
     } else {
       const a = measurePts[0], b = measurePts[1];
@@ -2660,10 +2748,12 @@ function measureRenderCard(){
              measureRow('Delta Y', measureFmt(dz)) +
              measureRow('Delta Z (height)', measureFmt(dh)) +
              measureRow('In the XY plane', measureFmt(Math.hypot(dx, dz))) +
-             '<div class="measure-note">Toolpath centreline, not the outside of the ' +
-             'wall. ' + (lw
+             '<div class="measure-note">' + (modeIsViewer ? 'Toolpath' : 'Draft') +
+             ' centreline, not the outside of the wall. ' + (lw
                ? 'The printed bead stands ' + (lw/2).toFixed(2) + ' mm beyond it on each side.'
-               : 'This file declares no line width, so the bead offset is unknown.') +
+               : (modeIsViewer
+                 ? 'This file declares no line width, so the bead offset is unknown.'
+                 : 'Generate G-code to see the bead offset -- this draft has no line width yet.')) +
              '</div>';
       hint = 'Click again to start a new span.';
     }
@@ -2674,8 +2764,9 @@ function measureRenderCard(){
       hint = 'Click a point on the wall.';
     } else if(!measureRingInfo){
       html = '<div class="measure-empty">Not enough of the model is drawn at this ' +
-             'height to form a cross-section. Scrub the timeline further along, or ' +
-             'pick a point lower down.</div>';
+             'height to form a cross-section. ' +
+             (modeIsViewer ? 'Scrub the timeline further along, or pick a point ' +
+               'lower down.' : 'Pick a point lower down.') + '</div>';
       hint = 'No cross-section here.';
     } else {
       const p = measurePts[0], r = measureRingInfo;
@@ -2700,7 +2791,7 @@ function measureRenderCard(){
         }
       }
       html += '<div class="measure-note">Cross-section at Z ' + p.y.toFixed(2) +
-        ', from ' + r.count + ' toolpath points within +/-' + r.band.toFixed(2) +
+        ', from ' + r.count + ' ' + src + ' points within +/-' + r.band.toFixed(2) +
         ' mm of that height; the centre above is their centroid, not an assumed ' +
         'axis. Outer wall traced in ' + r.coverage + ' of ' + r.bins +
         ' sectors, ranging ' + r.outerMin.toFixed(2) + ' to ' + r.outerMax.toFixed(2) +
@@ -2724,8 +2815,11 @@ function measureRenderCard(){
         html += lw
           ? ' Outer and inner add and remove one full ' + lw.toFixed(2) +
             ' mm line width -- derived from the file header, not measured.'
-          : ' This file declares no line width, so the outer and inner wall ' +
-            'diameters cannot be derived.';
+          : (modeIsViewer
+            ? ' This file declares no line width, so the outer and inner wall ' +
+              'diameters cannot be derived.'
+            : ' This draft has no line width yet, so the outer and inner wall ' +
+              'diameters cannot be derived -- generate G-code to get them.');
       }
       html += '</div>';
       hint = 'Click elsewhere to move the measurement.';
@@ -2739,7 +2833,11 @@ function measureRenderCard(){
 
 function measureAddPoint(clientX, clientY){
   const hit = measurePick(clientX, clientY);
-  if(!hit){ measureSetHint('Nothing there -- click on the toolpath itself.'); return; }
+  if(!hit){
+    measureSetHint('Nothing there -- click on the ' +
+      (viewerModeActive() ? 'toolpath' : 'draft') + ' itself.');
+    return;
+  }
   if(measureMode === 'ring'){
     measurePts = [hit.point];
     measureRingInfo = measureRing(hit.point);
@@ -2814,6 +2912,11 @@ function measureSetOn(on){
   if(on){
     measureBindListeners();
     if(!msGrid) measureBuildGrid();
+    // Place the card fresh below wherever the rail currently is, unless the
+    // user has already dragged the card somewhere of its own (see the
+    // "measure card: drag / lock / reset" IIFE below) -- so opening the tool
+    // always puts the readout right next to the button that opened it.
+    measureRepositionCard();
   } else {
     measurePts = [];
     measureHoverPt = null;
@@ -2836,14 +2939,10 @@ function measureReload(){
   measureRenderCard();
 }
 
-// The rail is an instrument of the G-code viewer, so it follows the mode as
-// well as the file. Called on load and from designer.js's mode switch.
-// Without the mode half, the rail stayed on the canvas in Design mode -- one
-// click away from measuring the loaded G-code while the canvas is showing the
-// blue draft preview of a shape that has since been edited.
 // Everything that floats ON the canvas has to follow the app mode by hand.
 // The canvas is visible in BOTH modes, so none of this chrome is covered by
-// the panel's own .active class toggling -- it has to be told.
+// the panel's own .active class toggling -- it has to be told. Called on
+// load and from designer.js's mode switch.
 //
 // The telemetry card is here for exactly that reason: load() shows it when a
 // file loads (see the has-timeline block) and nothing hid it again, so
@@ -2854,9 +2953,26 @@ function measureReload(){
 function syncCanvasChromeForMode(){
   const show = viewerModeActive() && !!extArr;
 
+  // The measure rail is an instrument of BOTH modes now -- G-code Viewer
+  // measures the loaded toolpath, Design measures the live draft -- so it is
+  // gated on "is there anything to measure right now" rather than on `show`.
+  // Without that split the rail stayed on the canvas in Design mode with no
+  // draft loaded yet, one click away from measuring stale G-code the canvas
+  // was no longer showing.
+  const measureAvailable = viewerModeActive() ? !!extArr : !!previewPositions;
   const rail = document.getElementById('tool-rail');
-  if(rail) rail.style.display = show ? '' : 'none';
-  if(!show && measureOn) measureSetOn(false);
+  if(rail) rail.style.display = measureAvailable ? '' : 'none';
+  if(!measureAvailable && measureOn) measureSetOn(false);
+  // Whichever array measureSourceArr() reads from just changed with the mode,
+  // so drop the grid and any in-progress pick -- otherwise a measurement taken
+  // on the OTHER mode's geometry keeps floating over this one (same failure
+  // as the telemetry/timeline leaks below, same fix: the mode switch owns it).
+  msGrid = null; msX = msY = msZ = msSeg = null;
+  measurePts = [];
+  measureHoverPt = null;
+  measureRingInfo = null;
+  measureRedraw();
+  measureRenderCard();
 
   const tele = document.getElementById('telemetry-card');
   if(tele) tele.style.display = show ? '' : 'none';
@@ -2934,14 +3050,10 @@ window.addEventListener('keydown', function(e){
   if(typingInField(e)) return;
   if(e.key === 'm' || e.key === 'M'){
     const rail = document.getElementById('tool-rail');
-    if(!rail || rail.style.display === 'none') return;   // nothing loaded to measure
-    // Same trap the playback shortcuts fell into: the rail is revealed once on
-    // load and never hidden, so it says "a file exists", not "the viewer is on
-    // screen". Measuring from Design mode would report distances off the
-    // loaded G-code while the canvas is showing the blue draft preview of a
-    // shape that has since been edited -- a number describing something other
-    // than what the user is looking at.
-    if(!viewerModeActive()) return;
+    // The rail's own display already tracks "is there anything to measure in
+    // THIS mode right now" (syncCanvasChromeForMode), so checking it alone is
+    // enough in both G-code Viewer and Design.
+    if(!rail || rail.style.display === 'none') return;   // nothing to measure
     measureSetOn(!measureOn);
     e.preventDefault();
   } else if(e.key === 'Escape' && measureOn){
@@ -3009,13 +3121,171 @@ window.__measureState = function(){
   };
 };
 
+// ---- tool rail: drag -------------------------------------------------------
+// The rail ships CSS-anchored to the canvas's right edge (.tool-rail in
+// style.css). Dragging it swaps it to an explicit inline left/top, same
+// pattern .measure-card's own drag (below) already uses -- and #measure-card,
+// in turn, follows wherever the rail ends up (see measureRepositionCard,
+// assigned inside that IIFE).
+//
+// There is deliberately no grip strip and no lock button here: the rail is one
+// button, and a head strip above it both doubled its height and (having been
+// built in BOTH index.html and this file at one point) rendered twice. The
+// drag is driven straight off the rail element, with a movement threshold
+// separating "click the Measure button" from "move the rail".
+const RAIL_POS_KEY = 'tool-rail-pos';
+const RAIL_REACH_PAD = 24;     // px of the rail that must stay reachable, however far it is dragged
+const RAIL_DRAG_SLOP = 4;      // px of travel before a press on the rail counts as a drag, not a click
+
+// Lock-toggle glyphs for the measure card's lock button (the rail has no lock).
+// Drawn as inline SVG using stroke="currentColor" rather than the U+1F512/1F513
+// padlock emoji: those codepoints have no BMP text-presentation form, so Windows
+// renders them via the full-color emoji font -- a jarring glyph next to the
+// rest of the UI's thin monochrome symbol glyphs (the card's reset arrow, the
+// close X). This stays crisp and on-theme at any OS/font.
+const LOCK_GLYPH_CLOSED = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+const LOCK_GLYPH_OPEN = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
+
+// Repositions #measure-card under the rail's current spot, if the card has
+// no custom position of its own -- installed by the "measure card: drag /
+// lock / reset" IIFE below. A no-op until then (there is nothing to
+// reposition before the card's own setup has run), and a plain module-scope
+// `let` rather than a `window.__` export because both IIFEs, and
+// measureSetOn() above, already share this module's scope.
+let measureRepositionCard = function(){};
+
+(function(){
+  const rail = document.getElementById('tool-rail');
+  if(!rail) return;   // defensive: markup shape changed elsewhere
+
+  // `armed` is the gap between "pointer went down on the rail" and "this is a
+  // drag": the press is recorded but nothing moves until the pointer has
+  // travelled RAIL_DRAG_SLOP, so a plain click still reaches #tool-measure.
+  let armed = false;
+  let dragging = false;
+  let suppressClick = false;
+  let hasCustomPos = false;
+  let dragStartX = 0, dragStartY = 0, dragOrigLeft = 0, dragOrigTop = 0;
+
+  // Same reasoning as measure-card's clamp() below: keep at least
+  // RAIL_REACH_PAD px reachable on every side so a bad drag can never strand
+  // the rail (and with it, the only way to reopen the measure tool) somewhere
+  // the user can't click back from.
+  function clamp(left, top){
+    const w = rail.offsetWidth || 56;
+    const minLeft = RAIL_REACH_PAD - w;
+    const maxLeft = Math.max(minLeft, wrap.clientWidth - RAIL_REACH_PAD);
+    const maxTop = Math.max(0, wrap.clientHeight - RAIL_REACH_PAD);
+    return {
+      left: Math.min(maxLeft, Math.max(minLeft, left)),
+      top: Math.min(maxTop, Math.max(0, top))
+    };
+  }
+
+  function applyPos(left, top){
+    const c = clamp(left, top);
+    rail.style.right = 'auto';
+    rail.style.left = c.left + 'px';
+    rail.style.top = c.top + 'px';
+  }
+
+  function savePos(){
+    try {
+      localStorage.setItem(RAIL_POS_KEY, JSON.stringify({
+        left: parseFloat(rail.style.left), top: parseFloat(rail.style.top)
+      }));
+    } catch(e){}
+  }
+
+  function endDrag(){
+    armed = false;
+    if(!dragging) return;
+    dragging = false;
+    // The browser fires a click after the pointerup that ended this drag, on
+    // whatever is under the pointer -- which is #tool-measure, the rail's only
+    // child. Without this flag every drag would also toggle the measure tool.
+    suppressClick = true;
+    // Belt and braces: if the drag ended somewhere that produces no click at
+    // all (released off the rail, pointercancel, window blur), nothing would
+    // consume the flag and the NEXT genuine click on Measure would be eaten.
+    // A click is dispatched in the same turn as the pointerup that spawned it,
+    // well before a zero-delay timer, so this only ever clears a stale flag.
+    setTimeout(function(){ suppressClick = false; }, 0);
+    rail.classList.remove('rail-dragging');
+    savePos();
+    measureRepositionCard();   // the card follows, unless it has its own custom spot
+  }
+
+  rail.addEventListener('pointerdown', function(e){
+    if(e.button !== 0) return;
+    const railRect = rail.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    dragOrigLeft = railRect.left - wrapRect.left;
+    dragOrigTop = railRect.top - wrapRect.top;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    armed = true;
+    // Deliberately NOT preventDefault()ed here. This handler sits on the rail
+    // itself, so the press it sees is usually a press on the Measure button,
+    // and cancelling the default action would also cancel that button's focus.
+    // Text/image selection during a drag is handled in CSS instead
+    // (user-select:none on .tool-rail in style.css).
+  });
+
+  // move/up/cancel + blur all live on window, the same freeze-safety pattern
+  // the measure card, shape-cage and nav-cube drags in this file use.
+  window.addEventListener('pointermove', function(e){
+    if(!armed) return;
+    const dx = e.clientX - dragStartX, dy = e.clientY - dragStartY;
+    if(!dragging){
+      // Under the threshold this is still a click in progress: leave the rail
+      // exactly where it is, so releasing now moves nothing.
+      if(Math.abs(dx) <= RAIL_DRAG_SLOP && Math.abs(dy) <= RAIL_DRAG_SLOP) return;
+      dragging = true;
+      hasCustomPos = true;
+      rail.classList.add('rail-dragging');
+    }
+    applyPos(dragOrigLeft + dx, dragOrigTop + dy);
+    measureRepositionCard();   // live-follow while dragging, not just on release
+  });
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+  window.addEventListener('blur', endDrag);
+
+  // Capture phase on the RAIL runs before the bubble-phase click listener
+  // #tool-measure registers (see the measureSetOn toggle above), so stopping
+  // the event here keeps it from ever reaching that handler.
+  rail.addEventListener('click', function(e){
+    if(!suppressClick) return;
+    suppressClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+
+  window.addEventListener('resize', function(){
+    if(hasCustomPos){
+      applyPos(parseFloat(rail.style.left) || 0, parseFloat(rail.style.top) || 0);
+      savePos();
+    }
+    measureRepositionCard();
+  });
+
+  let storedPos = null;
+  try { storedPos = JSON.parse(localStorage.getItem(RAIL_POS_KEY) || 'null'); } catch(e){}
+  if(storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)){
+    hasCustomPos = true;
+    applyPos(storedPos.left, storedPos.top);
+  }
+})();
+
 // ---- measure card: drag / lock / reset -------------------------------------
-// The card ships CSS-anchored bottom-right of the canvas (.measure-card in
-// style.css: right:76px, bottom:var(--overlay-bottom)) so by design it can sit
-// right on top of the geometry someone is trying to measure. Dragging swaps it
-// to an explicit inline left/top; Reset just deletes those inline styles so
-// the CSS anchor takes back over -- no separate "remembered original spot" to
-// keep in sync with a stylesheet this task does not own.
+// The card's RESTING spot is no longer a fixed canvas corner: it opens
+// directly below the tool rail's current position (see positionBelowRail,
+// called from measureSetOn() and whenever the rail moves), so it always
+// appears next to the button that opened it -- including after the rail
+// itself has been dragged. Dragging the CARD swaps it to an explicit inline
+// left/top of its own, same as before; Reset drops that custom spot and
+// snaps back to following the rail, rather than back to a fixed corner.
 //
 // This file owns every DOM/CSS change for this feature (index.html and
 // style.css are being edited elsewhere right now), so the lock/reset buttons
@@ -3026,6 +3296,7 @@ const MEASURE_POS_KEY = 'measure-card-pos';
 const MEASURE_LOCK_KEY = 'measure-card-locked';
 const MEASURE_CARD_W = 246;      // mirrors .measure-card's width in style.css
 const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, however far it is dragged
+const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the card, when following it
 
 (function(){
   const card = document.getElementById('measure-card');
@@ -3039,7 +3310,8 @@ const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, how
     '.measure-head.measure-dragging{cursor:grabbing;}' +
     '.measure-head.measure-locked{cursor:default;}' +
     '.measure-head-actions{display:flex;align-items:center;gap:2px;}' +
-    '.measure-drag-btn{background:none;border:none;color:var(--ink);cursor:pointer;' +
+    '.measure-drag-btn{display:inline-flex;align-items:center;justify-content:center;' +
+      'background:none;border:none;color:var(--ink);cursor:pointer;' +
       'font-size:12px;min-width:22px;min-height:22px;padding:2px 5px;line-height:1;' +
       'border-radius:4px;font-family:var(--font-ui);opacity:.75;' +
       'transition:color .15s,background-color .15s,opacity .15s;}' +
@@ -3077,13 +3349,14 @@ const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, how
 
   let locked = false;
   let dragging = false;
+  let hasCustomPos = false;   // false = follow the rail; true = the user dragged it
   let dragStartX = 0, dragStartY = 0, dragOrigLeft = 0, dragOrigTop = 0;
 
   function updateLockUI(){
     lockBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
     lockBtn.title = locked ? 'Unlock card position' : 'Lock card position (prevents dragging)';
     lockBtn.setAttribute('aria-label', lockBtn.title);
-    lockBtn.innerHTML = locked ? '&#128274;' : '&#128275;';   // closed / open padlock
+    lockBtn.innerHTML = locked ? LOCK_GLYPH_CLOSED : LOCK_GLYPH_OPEN;
     head.classList.toggle('measure-locked', locked);
   }
 
@@ -3119,14 +3392,34 @@ const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, how
     } catch(e){}
   }
 
+  // Right-aligns the card under the rail's current bottom-right corner --
+  // the same spatial relationship (card beside/below the button, never
+  // covering it) the old fixed CSS default had, just anchored to wherever
+  // the rail actually is instead of a corner that stops meaning anything
+  // once the rail itself can move.
+  function positionBelowRail(){
+    const rail = document.getElementById('tool-rail');
+    if(!rail) return;
+    const railRect = rail.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    applyPos(
+      (railRect.right - wrapRect.left) - MEASURE_CARD_W,
+      (railRect.bottom - wrapRect.top) + MEASURE_RAIL_GAP
+    );
+  }
+
+  function repositionIfFollowing(){
+    if(hasCustomPos || locked) return;   // a custom spot, or a locked one, holds still
+    positionBelowRail();
+  }
+  measureRepositionCard = repositionIfFollowing;
+
   function resetPos(){
-    card.style.left = '';
-    card.style.top = '';
-    card.style.right = '';
-    card.style.bottom = '';
+    hasCustomPos = false;
     // Reset only clears the remembered position; a reload without this would
     // put the card right back where it was, which is not what "reset" means.
     try { localStorage.removeItem(MEASURE_POS_KEY); } catch(e){}
+    positionBelowRail();
   }
 
   function endDrag(){
@@ -3146,6 +3439,7 @@ const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, how
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     dragging = true;
+    hasCustomPos = true;
     applyPos(dragOrigLeft, dragOrigTop);
     head.classList.add('measure-dragging');
     // The card is a sibling of the canvas, not a descendant, so this can
@@ -3169,11 +3463,18 @@ const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, how
   window.addEventListener('blur', endDrag);
 
   // A stored (or mid-session) position can be stranded off-screen by a window
-  // resize -- reclamp live, not just on the next load.
+  // resize -- reclamp live, not just on the next load. A card still following
+  // the rail re-follows instead (the rail's own resize handler also calls
+  // measureRepositionCard(), but only once the rail itself has a custom
+  // position to reclamp -- this covers the "rail is still at its CSS
+  // default" case, which that handler skips).
   window.addEventListener('resize', function(){
-    if(!card.style.left) return;   // still at the CSS default; nothing to reclamp
-    applyPos(parseFloat(card.style.left) || 0, parseFloat(card.style.top) || 0);
-    savePos();
+    if(hasCustomPos){
+      applyPos(parseFloat(card.style.left) || 0, parseFloat(card.style.top) || 0);
+      savePos();
+    } else {
+      positionBelowRail();
+    }
   });
 
   resetBtn.addEventListener('click', resetPos);
@@ -3190,6 +3491,7 @@ const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, how
   let storedPos = null;
   try { storedPos = JSON.parse(localStorage.getItem(MEASURE_POS_KEY) || 'null'); } catch(e){}
   if(storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)){
+    hasCustomPos = true;
     applyPos(storedPos.left, storedPos.top);
   }
   let storedLock = null;
