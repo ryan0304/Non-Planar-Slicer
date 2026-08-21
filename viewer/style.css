@@ -1,9 +1,9 @@
 /* =========================================================================
-   Trident Non-Planar Viewer — design tokens
+   Trident Non-Planar Viewer -- design tokens
    Precision-instrument / CNC-metrology aesthetic. Cool-slate dark palette
    (lifted off near-black so long sessions are easier on the eyes), systematic
    spacing, monospaced data. The --ok/--warn/--danger trio is reserved for
-   safety states (probe limits, melt-ceiling, risk flags, clamp events) —
+   safety states (probe limits, melt-ceiling, risk flags, clamp events) --
    nothing else may use them.
    ========================================================================= */
 :root {
@@ -12,7 +12,25 @@
   --line:#31363b;
   --ink:#e8eaed;
   --ink-muted:#9aa0a6;
-  --accent:#2f6bff;
+  /* DESIGN.md ("Apple-design-analysis") splits its blue into three roles and
+     is explicit that Action Blue #0066cc "disappears on dark surfaces" --
+     this whole app is a dark surface. --accent is therefore Sky Link Blue
+     (#2997ff, DESIGN.md's primary-on-dark), used for accent TEXT, links,
+     borders, focus rings and unfilled active-tab/step indicators.
+     It is deliberately NOT used as a solid fill behind white text -- see
+     --accent-fill below for why. */
+  --accent:#2997ff;
+  /* Filled Action Blue: the ONLY role this token exists for is a solid fill
+     with --ink-on-accent (white) text sitting on top of it (the primary
+     button, and every other place in this file that was doing the same
+     "white label on a blue chip" thing). Sky Link Blue is a UI-text/border
+     colour, not a fill -- white-on-#2997ff measures ~3:1 contrast, which
+     fails WCAG's 4.5:1 floor for body-size text. #0071e3 (DESIGN.md's
+     primary-focus) measures ~4.7:1 and #0b5ed7 (its hover step, chosen for
+     the same reason, not lifted from DESIGN.md) measures ~5.8:1 -- both
+     verified against #ffffff by the sRGB relative-luminance formula. */
+  --accent-fill:#0071e3;
+  --accent-fill-hover:#0b5ed7;
 
   --ok:#3fdca0;
   --warn:#ffb454;
@@ -68,15 +86,63 @@
   --busy: var(--accent);
   --busy-track: var(--surface-raised);
 
-  --font-ui: "Inter", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* system-ui/-apple-system/BlinkMacSystemFont lead so Apple platforms
+     resolve real SF Pro (DESIGN.md's "Note on Font Substitutes"); Inter is
+     the off-system fallback everywhere else. */
+  /* Apple-only tokens FIRST so macOS/iOS resolve the real SF Pro, then Inter,
+     then the platform UI face. Order matters more than it looks: a bare
+     `system-ui` at the head resolves on EVERY platform (Segoe UI on Windows,
+     Roboto on Android), so it pre-empts Inter everywhere and the stack never
+     reaches it -- which is the opposite of what DESIGN.md's substitute note
+     asks for ("Inter for non-Apple platforms"). -apple-system and
+     BlinkMacSystemFont resolve only on Apple/Blink-on-Apple, so they select
+     SF Pro without swallowing the non-Apple case. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Inter", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 
-  /* 4px base spacing scale */
-  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-6:24px; --sp-8:32px;
-  --radius:8px;
-  --radius-lg:12px;
+  /* 4px base spacing scale (--sp-N = N * 4px), already DESIGN.md's 8px-base
+     grammar. DESIGN.md's own md rung is 17px, not 16 -- but that value is
+     derived from Apple's 17px BODY COPY line-height rhythm, which does not
+     exist anywhere in this 12-13px dense panel. Snapping --sp-4 to 17 would
+     shift dozens of padding/gap declarations by 1px for no rhythm this UI
+     actually has, so it stays 16. --sp-12 (48px) is added for completeness
+     with DESIGN.md's xxl rung; nothing currently needs it. */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-6:24px; --sp-8:32px; --sp-12:48px;
 
-  /* legacy variable names — kept as aliases so designer.js/viewer.js, which
+  /* Radius grammar (DESIGN.md {rounded.*}, translated to what this app
+     actually has -- no full-bleed 0-radius tiles, no rare 5px inline-chip
+     case):
+       --radius-sm   8px    compact utility controls -- buttons, selects,
+                             inputs, chips, tabs, badges.
+       --radius-md   11px   cards and floating popovers -- dropdown lists,
+                             tooltips, drop zones, instrument overlays.
+       --radius-lg   18px   modal dialogs only.
+       --radius-pill 9999px actions -- the primary button and anything else
+                             that should read as an action.
+     --radius and --radius-lg are the pre-existing token NAMES (read only by
+     other rules in this file, not by JS) kept working per the redesign
+     brief: --radius now resolves to the same 8px it always did (aliased to
+     --radius-sm), and --radius-lg keeps its name but becomes the true 18px
+     modal rung -- the handful of rules that used to read var(--radius-lg)
+     for a CARD (not a modal) were repointed to var(--radius-md) directly
+     wherever they're declared below, so nothing silently jumped to 18px. */
+  --radius-sm:8px;
+  --radius-md:11px;
+  --radius-lg:18px;
+  --radius-pill:9999px;
+  --radius: var(--radius-sm);
+
+  /* One shadow value for every floating surface over the busy 3-D canvas
+     (modals, dropdowns, telemetry/measure cards) that still needs to
+     separate from the scene after a hairline border + backdrop-blur --
+     DESIGN.md permits exactly one non-decorative shadow in the whole system
+     and this app's equivalent is "the thing that keeps an overlay legible
+     over a spinning toolpath," not product photography, but the same
+     "exactly one value" discipline applies. Replaces what used to be six
+     different depth/opacity pairs scattered across modals, cards and tags. */
+  --shadow-float: 0 8px 24px rgba(0,0,0,.4);
+
+  /* legacy variable names -- kept as aliases so designer.js/viewer.js, which
      read a handful of these via getComputedStyle(), keep resolving without
      needing their own edits (out of scope per the redesign brief). --input-bg
      used to be one of these aliases (= var(--bg)); it is now a real token in
@@ -102,7 +168,7 @@ a:focus-visible, button:focus-visible, .btn:focus-visible, [tabindex]:focus-visi
 }
 
 /* =========================================================================
-   Custom form controls — native OS checkbox/radio/range chrome doesn't
+   Custom form controls -- native OS checkbox/radio/range chrome doesn't
    match the theme, so these render as switches/dots/slim-track sliders.
    The Point Edit subsystem's purple override for its own checkboxes lives
    near its own section further down, not here.
@@ -114,7 +180,7 @@ input[type=checkbox]:focus-visible, input[type=radio]:focus-visible, input[type=
 
 input[type=checkbox] {
   appearance:none; -webkit-appearance:none; margin:0; flex:none; vertical-align:middle;
-  position:relative; width:34px; height:20px; border-radius:999px;
+  position:relative; width:34px; height:20px; border-radius:var(--radius-pill);
   background:var(--surface-raised); border:1px solid var(--line); cursor:pointer;
   transition:background .15s, border-color .15s;
 }
@@ -146,10 +212,10 @@ input[type=range] {
   background:transparent; cursor:pointer;
 }
 input[type=range]::-webkit-slider-runnable-track {
-  height:4px; border-radius:999px; background:var(--surface-raised); border:1px solid var(--line);
+  height:4px; border-radius:var(--radius-pill); background:var(--surface-raised); border:1px solid var(--line);
 }
 input[type=range]::-moz-range-track {
-  height:4px; border-radius:999px; background:var(--surface-raised); border:1px solid var(--line);
+  height:4px; border-radius:var(--radius-pill); background:var(--surface-raised); border:1px solid var(--line);
 }
 input[type=range]::-webkit-slider-thumb {
   appearance:none; -webkit-appearance:none; margin-top:-6px; box-sizing:border-box;
@@ -174,7 +240,7 @@ input[type=range]:disabled { opacity:.4; cursor:default; }
 select {
   appearance:none; -webkit-appearance:none; -moz-appearance:none;
   background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; font-size:12px; padding:3px 24px 3px 5px;
+  border-radius:var(--radius-sm); font-size:12px; padding:3px 24px 3px 5px;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23989898' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
   background-repeat:no-repeat; background-position:right 8px center;
   transition:border-color .15s;
@@ -229,7 +295,18 @@ canvas { display:block; }
 .panel { width:340px; flex:0 0 340px; background:var(--surface); border-left:1px solid var(--line);
   padding:0; overflow-y:auto; display:flex; flex-direction:column; height:100%; }
 .panel-scroll { padding:var(--sp-4); overflow-y:auto; flex:1 1 auto; min-height:0; }
-h1 { font-size:16px; font-weight:700; margin:0 0 var(--sp-1); letter-spacing:-0.01em; }
+/* 600, not 700 -- DESIGN.md's headline weight, with 700 held back for rare
+   assertion (see .tl-read .turn-count and .cv-readout-mm below, the two
+   places that keep it). ss03 nudges Inter's "a" toward SF Pro's rounded
+   form per DESIGN.md's font-substitute note; harmless no-op on real SF Pro. */
+h1 { font-size:16px; font-weight:600; margin:0 0 var(--sp-1); letter-spacing:-0.01em;
+  font-feature-settings:"ss03"; }
+/* Every other real heading in the app (modal titles, the guide's slide
+   titles, the drop-a-file card's title) gets the same Inter substitute
+   feature -- scoped to headings only, per DESIGN.md, not applied file-wide
+   where it could shift a numeral or a mono readout nobody asked to move. */
+.card-title, .sr-modal-header h2, .pe-modal-header h2, .pm-modal-header h2,
+.guide-modal-header h2, .guide-slide h3 { font-feature-settings:"ss03"; }
 .sub { color:var(--ink-muted); font-size:12px; margin-bottom:var(--sp-4); }
 
 /* ---- brand mark: "the toolpath is the logo" (header glyph, favicon, empty-
@@ -283,7 +360,7 @@ h1 { font-size:16px; font-weight:700; margin:0 0 var(--sp-1); letter-spacing:-0.
     animation:none; stroke-dasharray:none; stroke-dashoffset:0; opacity:.55;
   }
 }
-.drop { border:1.5px dashed var(--line); border-radius:var(--radius-lg); padding:var(--sp-4); text-align:center;
+.drop { border:1.5px dashed var(--line); border-radius:var(--radius-md); padding:var(--sp-4); text-align:center;
   color:var(--ink-muted); font-size:13px; cursor:pointer; transition:.15s; }
 .drop:hover, .drop.hot { border-color:var(--accent); color:var(--ink); background:var(--surface-raised); }
 .stat { display:flex; justify-content:space-between; font-size:12.5px; padding:var(--sp-2) 0;
@@ -311,13 +388,17 @@ label.radio-inline { cursor:pointer; }
 /* Section sub-heading (was inline-styled <h3> repeated throughout the panel). */
 .section-heading { font-size:11px; font-weight:600; margin:0 0 var(--sp-2); }
 
-/* ---- generic buttons: ids stay JS hooks only, styling lives in classes ---- */
-.btn { border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); color:var(--ink);
-  font-size:12px; font-weight:600; cursor:pointer; transition:border-color .15s, color .15s, background .15s, opacity .15s, transform .1s ease, box-shadow .15s;
-  padding:7px 10px; font-family:var(--font-ui); white-space:nowrap; box-shadow:0 1px 2px rgba(0,0,0,.3); }
-.btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent-hover); transform:translateY(-1px); box-shadow:0 4px 10px rgba(0,0,0,.35); }
-.btn:active:not(:disabled) { transform:translateY(0); box-shadow:0 1px 2px rgba(0,0,0,.3); }
-.btn:disabled { opacity:.35; cursor:default; box-shadow:none; }
+/* ---- generic buttons: ids stay JS hooks only, styling lives in classes ----
+   No shadow, no hover-lift: DESIGN.md reserves shadow for product photography
+   and treats hover as a colour change only, never a translateY. Press state
+   is the one system-wide micro-interaction (scale(0.95)) instead of the old
+   translateY(0)/shadow-shrink pairing. */
+.btn { border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--surface-raised); color:var(--ink);
+  font-size:12px; font-weight:600; cursor:pointer; transition:border-color .15s, color .15s, background .15s, opacity .15s, transform .1s ease;
+  padding:7px 10px; font-family:var(--font-ui); white-space:nowrap; }
+.btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent-hover); }
+.btn:active:not(:disabled) { transform:scale(0.95); }
+.btn:disabled { opacity:.35; cursor:default; }
 .btn:disabled:hover { border-color:var(--line); color:var(--ink); }
 .btn-block { width:100%; display:block; }
 /* Two equal-width buttons side by side. Buttons default to white-space:nowrap,
@@ -328,56 +409,100 @@ label.radio-inline { cursor:pointer; }
 .btn-sm { padding:4px 10px; font-size:11px; }
 /* Undo/redo carry no text label, so they answer to the icon-only standard. */
 .btn-icon { padding:4px 7px; font-size:15px; line-height:1; min-width:26px; }
-.btn-primary { background:var(--accent); color:var(--ink-on-accent); border-color:var(--accent); font-weight:700; box-shadow:0 2px 8px rgba(47,107,255,.35); }
-.btn-primary:hover:not(:disabled) { color:var(--ink-on-accent); opacity:.9; border-color:var(--accent); background:var(--accent-hover); box-shadow:0 4px 14px rgba(47,107,255,.45); }
-.btn-primary:disabled { background:var(--surface-raised); color:var(--ink); border-color:var(--line); box-shadow:none; }
+/* The primary action gets the pill -- DESIGN.md's single strongest signal
+   ("the full-pill radius IS the brand action signal"). --accent-fill, not
+   --accent: this is a solid fill with white text on top (see the token
+   comment at the top of the file for the contrast math). font-weight 600,
+   not 700 -- matches every other .btn's weight, so the pill shape and colour
+   carry the "this is the primary action" signal instead of extra boldness. */
+.btn-primary { background:var(--accent-fill); color:var(--ink-on-accent); border-color:var(--accent-fill);
+  border-radius:var(--radius-pill); font-weight:600; }
+.btn-primary:hover:not(:disabled) { color:var(--ink-on-accent); border-color:var(--accent-fill-hover); background:var(--accent-fill-hover); }
+.btn-primary:disabled { background:var(--surface-raised); color:var(--ink); border-color:var(--line); }
+
+/* =========================================================================
+   Interaction: DESIGN.md's one system-wide micro-interaction is a press
+   scale, not a hover-lift. Collected here as one rule rather than repeated
+   fourteen times, covering every discrete button/chip/icon-toggle control in
+   the app (the timeline transport buttons have their own :active rule next
+   to their own styles, above). Deliberately EXCLUDES full-width list/row
+   items that happen to be clickable (.param-search-item, .mb-combo-option,
+   .pe-rail-item, .pm-field rows) -- shrinking an entire row that spans the
+   panel reads as the row detaching from its neighbours, not as a press; the
+   scale affordance is for things shaped like buttons. Keyboard activation
+   does not trigger :active in most browsers, which is fine here -- the
+   global focus-visible ring (top of file) already marks keyboard focus. */
+.tool-btn:active, .telemetry-toggle:active, .measure-close:active,
+.measure-mode:active, .sil-mode-btn:active, .mode-btn:active,
+.mb-combo-btn:active, .mb-notice-close:active, .step-item:active,
+.drop:active, .import-drop:active, .cv-editor .cv-reset:active,
+.pm-link:active, .pm-report-copy:active, button.pm-issue-msg:active,
+.pm-quickfix:active, .pm-repaired-toggle:active, .pm-stripped-toggle:active,
+.sec-toggle:active, .chip:active, .hint-toggle:active,
+input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabled) {
+  transform:scale(0.95);
+}
 
 /* ---- overlay (drop-a-gcode card / canvas-centered messages) ---- */
 .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   pointer-events:none; }
 .overlay .card { pointer-events:auto; background:rgba(30,33,36,.92); border:1px solid var(--line);
-  border-radius:var(--radius-lg); padding:28px 34px; text-align:center; }
+  border-radius:var(--radius-md); padding:28px 34px; text-align:center;
+  /* Floats directly over the (empty, but still busy-looking) canvas with no
+     backdrop scrim of its own, so it gets the blur DESIGN.md sanctions for
+     floating bars plus the one shared shadow, same as the other canvas
+     overlays below. */
+  backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
 .card-title { font-size:14px; margin-bottom:6px; }
 
 /* =========================================================================
-   Machine readout strip — the timeline scrubber (sparkline + scrub bar)
+   Machine readout strip -- the timeline scrubber (sparkline + scrub bar)
    only. Slim, full-width, bottom of the canvas. Turn/revolution count gets
    visual primacy since per-turn playback stepping is this tool's signature
    interaction. Live telemetry lives in the floating card below instead.
    ========================================================================= */
 .machine-readout { position:absolute; left:var(--sp-4); right:var(--sp-4); bottom:var(--sp-3);
-  background:rgba(30,33,36,.94); border:1px solid var(--line); border-radius:var(--radius-lg);
-  overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.35); }
+  background:rgba(30,33,36,.94); border:1px solid var(--line); border-radius:var(--radius-md);
+  overflow:hidden; backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
 
 .spark { display:block; width:100%; height:26px; background:transparent; cursor:pointer; }
 
 .timeline { height:42px; display:flex; align-items:center; gap:var(--sp-2); padding:0 var(--sp-3);
   border-top:1px solid var(--line); }
-.timeline button { width:30px; height:26px; border:none; border-radius:6px; cursor:pointer;
-  background:var(--accent); color:var(--ink-on-accent); font-size:14px; font-weight:700;
-  transition:background .15s, transform .1s, box-shadow .15s; box-shadow:0 1px 2px rgba(0,0,0,.3); }
-.timeline button:hover { transform:translateY(-1px); box-shadow:0 3px 8px rgba(47,107,255,.4); }
-.timeline button:active { transform:translateY(0); }
+/* background is --accent-fill, not --accent: this is a solid chip with
+   white text on top, same contrast reasoning as .btn-primary (see the
+   --accent-fill token comment). font-weight 600, not 700 -- DESIGN.md's
+   ladder reserves 700 for rare assertion; a transport glyph doesn't need it
+   (contrast with .tl-read .turn-count below, which keeps 700 on purpose). */
+.timeline button { width:30px; height:26px; border:none; border-radius:var(--radius-sm); cursor:pointer;
+  background:var(--accent-fill); color:var(--ink-on-accent); font-size:14px; font-weight:600;
+  transition:background .15s, transform .1s; }
+/* No lift, no shadow bloom -- DESIGN.md's system-wide micro-interaction is a
+   press-scale, not a hover-elevate. Hover still moves colour so the row of
+   buttons stays legible as clickable without any motion. */
+.timeline button:hover { background:var(--accent-fill-hover); }
+.timeline button:active { transform:scale(0.95); }
 .timeline input[type=range] { flex:1; cursor:pointer; }
 .timeline select { background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:3px 24px 3px 4px; font-size:12px; }
+  border-radius:var(--radius-sm); padding:3px 24px 3px 4px; font-size:12px; }
 .tl-read { font-size:12px; color:var(--ink-muted); min-width:150px; text-align:right; }
 .tl-read .turn-count { color:var(--ink); font-weight:700; font-size:13px; }
 
 /* =========================================================================
-   Telemetry card — Orca-style floating overlay, anchored top-right of the
+   Telemetry card -- Orca-style floating overlay, anchored top-right of the
    canvas (mirrors .overlay .card's translucent-surface idiom). Collapsible
    via #telemetry-toggle; state persisted in localStorage.
    ========================================================================= */
 /* Draft-preview badge -- top-left corner, so it never collides with the
    telemetry card (which owns top-right at any collapsed/expanded height). */
 .draft-preview-label { position:absolute; top:16px; left:16px; z-index:5;
-  padding:2px 8px; border-radius:4px; background:rgba(47,107,255,.18);
+  padding:2px 8px; border-radius:4px; background:rgba(41,151,255,.18);
+  backdrop-filter:blur(20px) saturate(180%);
   color:var(--accent-hover); font-size:11px; font-family:var(--font-ui); pointer-events:none; }
 
 .telemetry-card { position:absolute; top:16px; right:16px; width:190px; z-index:5;
-  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius);
-  overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.35); }
+  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius-md);
+  overflow:hidden; backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
 .telemetry-header { display:flex; align-items:center; justify-content:space-between;
   padding:6px 8px; border-bottom:1px solid var(--line); }
 .telemetry-title { font-size:9.5px; margin:0; }
@@ -453,8 +578,8 @@ label.radio-inline { cursor:pointer; }
      cost the button its focus). */
   top:min(max(50%, var(--overlay-top)), calc(100% - var(--overlay-bottom) - 64px));
   display:flex; flex-direction:column; gap:6px; padding:6px;
-  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius);
-  box-shadow:0 8px 24px rgba(0,0,0,.35);
+  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius-md);
+  backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float);
   cursor:grab; touch-action:none; user-select:none; }
 /* Only while a drag is actually running -- viewer.js adds the class once the
    pointer crosses the movement threshold. .tool-btn keeps its own
@@ -464,7 +589,7 @@ label.radio-inline { cursor:pointer; }
 
 .tool-btn { display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:2px; width:44px; padding:6px 2px; cursor:pointer;
-  background:transparent; border:1px solid transparent; border-radius:6px;
+  background:transparent; border:1px solid transparent; border-radius:var(--radius-sm);
   color:var(--ink-muted); font-family:var(--font-ui);
   transition:color .15s, background-color .15s, border-color .15s; }
 .tool-btn:hover { color:var(--ink); background:var(--surface-raised); }
@@ -483,8 +608,8 @@ label.radio-inline { cursor:pointer; }
 .measure-card { position:absolute; right:76px; width:246px; z-index:6;
   bottom:var(--overlay-bottom);
   max-height:calc(100% - var(--overlay-top) - var(--overlay-bottom)); overflow-y:auto;
-  background:rgba(30,33,36,.94); border:1px solid var(--measure); border-radius:var(--radius);
-  box-shadow:0 8px 24px rgba(0,0,0,.45); }
+  background:rgba(30,33,36,.94); border:1px solid var(--measure); border-radius:var(--radius-md);
+  backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
 .measure-head { display:flex; align-items:center; justify-content:space-between;
   padding:6px 8px; border-bottom:1px solid var(--line); }
 .measure-title { font-size:9.5px; text-transform:uppercase; letter-spacing:.06em;
@@ -528,7 +653,7 @@ label.radio-inline { cursor:pointer; }
 .measure-modes { display:flex; gap:4px; padding:6px 8px 0; }
 .measure-mode { flex:1 1 0; padding:4px 0; cursor:pointer; font-size:11px;
   font-family:var(--font-ui); color:var(--ink-muted);
-  background:var(--input-bg); border:1px solid var(--line); border-radius:6px;
+  background:var(--input-bg); border:1px solid var(--line); border-radius:var(--radius-sm);
   transition:color .15s, background-color .15s, border-color .15s; }
 .measure-mode:hover { color:var(--ink); border-color:var(--measure); }
 .measure-mode.is-on { color:var(--measure); background:var(--measure-dim);
@@ -568,8 +693,11 @@ label.radio-inline { cursor:pointer; }
   white-space:nowrap; text-align:center; line-height:1.45; }
 /* Secondary facts (the multiplier, the range end, the count of points moving
    together, the this-drag delta) -- present but not competing with the mm. */
-.cage-tag .cage-tag-meta { color:var(--ink-muted); font-weight:500; }
-.cage-tag .cage-tag-delta { display:block; color:var(--ink-muted); font-weight:500;
+/* 400, not 500: DESIGN.md's weight ladder is 300/400/600/700 with 500
+   deliberately absent -- these were the only two 500s in the file. Plain
+   body weight is enough; --ink-muted already carries the "secondary" cue. */
+.cage-tag .cage-tag-meta { color:var(--ink-muted); font-weight:400; }
+.cage-tag .cage-tag-delta { display:block; color:var(--ink-muted); font-weight:400;
   font-size:10.5px; }
 
 /* ---- Design a vase panel ---- */
@@ -578,9 +706,9 @@ label.radio-inline { cursor:pointer; }
 .drow > span { color:var(--ink-muted); white-space:nowrap; transition:color .15s; }
 .drow:hover > span:first-child { color:var(--ink); }
 .drow input[type=number] { background-color:var(--input-bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; width:92px; }
 .drow select { background-color:var(--input-bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; width:92px; }
 .drow select { width:116px; padding-right:24px; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
 /* Typed value is past the SELECTED PRINTER's ceiling for this field, so the
@@ -614,12 +742,12 @@ label.radio-inline { cursor:pointer; }
 .drow.stacked select { width:100%; }
 .drow input[type=range] { width:92px; }
 .cv-editor { margin-top:var(--sp-3); background:var(--surface-raised); border:1px solid var(--line);
-  border-radius:var(--radius-lg); padding:var(--sp-3); }
+  border-radius:var(--radius-md); padding:var(--sp-3); }
 .cv-editor .cv-head { display:flex; align-items:center; justify-content:space-between;
   font-size:11px; margin-bottom:6px; }
 .cv-editor .cv-head b { color:var(--ink); font-weight:600; text-transform:none; letter-spacing:0; font-family:var(--font-ui); }
 .cv-editor .cv-reset { cursor:pointer; color:var(--accent-hover); font-size:11px; text-transform:none; letter-spacing:0; }
-.cv-editor canvas { display:block; width:100%; border:1px solid var(--line); border-radius:6px;
+.cv-editor canvas { display:block; width:100%; border:1px solid var(--line); border-radius:var(--radius-sm);
   background:var(--bg); cursor:ns-resize; }
 .cv-note { font-size:10.5px; color:var(--ink-muted); margin-top:6px; }
 /* Wave-slope readout (#slope-read) is a genuine safety state -- "waves may
@@ -660,19 +788,21 @@ label.radio-inline { cursor:pointer; }
 .param-search input:focus { border-color:var(--accent); outline:none; }
 .param-search input::placeholder { color:var(--ink-muted); }
 .param-search-results { position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:8;
-  background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius);
-  box-shadow:0 8px 24px rgba(0,0,0,.35); max-height:280px; overflow-y:auto; padding:4px; display:none; }
+  background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius-md);
+  box-shadow:var(--shadow-float); max-height:280px; overflow-y:auto; padding:4px; display:none; }
 .param-search-results.open { display:block; }
 .param-search-item { display:flex; align-items:center; justify-content:space-between; gap:8px;
-  padding:6px 8px; border-radius:6px; cursor:pointer; font-size:12px; color:var(--ink); }
-.param-search-item:hover, .param-search-item.active { background:var(--accent); color:var(--ink-on-accent); }
+  padding:6px 8px; border-radius:var(--radius-sm); cursor:pointer; font-size:12px; color:var(--ink); }
+/* --accent-fill, not --accent: solid highlight with white text on top --
+   same contrast reasoning as .btn-primary. */
+.param-search-item:hover, .param-search-item.active { background:var(--accent-fill); color:var(--ink-on-accent); }
 .param-search-item .psi-crumb { font-size:10px; color:var(--ink-muted); font-family:var(--font-mono);
   text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; }
 .param-search-item:hover .psi-crumb, .param-search-item.active .psi-crumb { color:var(--ink-on-accent); }
 
 /* highlight pulse when jumping to a control */
-@keyframes param-search-pulse { 0%,15% { background:rgba(47,107,255,.22); } 100% { background:transparent; } }
-.param-search-hit { animation:param-search-pulse 1.3s ease-out; border-radius:6px; }
+@keyframes param-search-pulse { 0%,15% { background:rgba(41,151,255,.22); } 100% { background:transparent; } }
+.param-search-hit { animation:param-search-pulse 1.3s ease-out; border-radius:var(--radius-sm); }
 
 /* ---- conditional/dependent option blocks -- indented rail signals "these
    rows only apply because of a choice above" (star shape, texture pattern
@@ -683,28 +813,30 @@ label.radio-inline { cursor:pointer; }
 
 /* ---- silhouette mode bar (Symmetrical / Unsymmetrical) ---- */
 .sil-mode-bar { display:flex; gap:2px; padding:3px; background:var(--bg);
-  border:1px solid var(--line); border-radius:6px; margin:6px 0; }
+  border:1px solid var(--line); border-radius:var(--radius-sm); margin:6px 0; }
 .sil-mode-btn { flex:1; background:none; border:none; border-radius:4px; color:var(--ink-muted);
   font-size:11px; font-weight:600; padding:5px 2px; cursor:pointer;
   transition:color .15s, background-color .15s; text-transform:uppercase; letter-spacing:.04em; }
 .sil-mode-btn:hover { color:var(--ink); }
-.sil-mode-btn.active { color:var(--ink-on-accent); background:var(--accent); }
+/* --accent-fill: solid segment fill with white text on top. */
+.sil-mode-btn.active { color:var(--ink-on-accent); background:var(--accent-fill); }
 
 /* ---- preset bar ---- */
 .preset-bar { display:flex; gap:4px; align-items:center; margin-bottom:10px; }
 .preset-bar select { flex:1 1 0; min-width:0; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:4px 24px 4px 4px; font-size:11.5px; }
+  border-radius:var(--radius-sm); padding:4px 24px 4px 4px; font-size:11.5px; }
 .preset-bar .btn { padding-left:8px; padding-right:8px; }
 .preset-bar .btn-icon { padding-left:6px; padding-right:6px; }
 
 /* ---- top-level mode bar (Design / G-code Viewer) ---- */
 .mode-bar { display:flex; gap:2px; padding:3px; background:var(--surface-raised);
   border:1px solid var(--line); border-radius:var(--radius); margin-bottom:var(--sp-4); }
-.mode-btn { flex:1; background:none; border:none; border-radius:6px; color:var(--ink-muted);
+.mode-btn { flex:1; background:none; border:none; border-radius:var(--radius-sm); color:var(--ink-muted);
   font-size:12.5px; font-weight:600; padding:7px 2px; cursor:pointer;
   transition:color .15s, background-color .15s; text-transform:uppercase; letter-spacing:.05em; }
 .mode-btn:hover { color:var(--ink); }
-.mode-btn.active { color:var(--ink-on-accent); background:var(--accent); }
+/* --accent-fill: solid segment fill with white text on top. */
+.mode-btn.active { color:var(--ink-on-accent); background:var(--accent-fill); }
 
 .mode-panel { display:none; }
 .mode-panel.active { display:block; }
@@ -717,11 +849,11 @@ label.radio-inline { cursor:pointer; }
    everything here wraps or ellipsizes rather than forcing horizontal scroll.
    ========================================================================= */
 .mb-bar { background:var(--surface-raised); border:1px solid var(--line);
-  border-radius:var(--radius-lg); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-3); }
+  border-radius:var(--radius-md); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-3); }
 .mb-row1 { display:flex; align-items:center; gap:6px; }
 .mb-icon { flex:none; font-size:15px; color:var(--ink-muted); line-height:1; }
 .mb-select { flex:1 1 auto; min-width:0; background-color:var(--input-bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:6px; font-size:12.5px; font-weight:600;
+  border:1px solid var(--line); border-radius:var(--radius-sm); font-size:12.5px; font-weight:600;
   padding-top:6px; padding-bottom:6px; padding-left:8px; }
 .mb-summary { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-muted);
   margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -740,7 +872,7 @@ label.radio-inline { cursor:pointer; }
 .mb-combo { position:relative; flex:1 1 auto; min-width:0; }
 .mb-combo-btn { display:flex; align-items:center; justify-content:space-between; gap:6px;
   width:100%; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; font-size:12.5px; font-weight:600; font-family:var(--font-ui);
+  border-radius:var(--radius-sm); font-size:12.5px; font-weight:600; font-family:var(--font-ui);
   padding:6px 8px; text-align:left; cursor:pointer; transition:border-color .15s; }
 .mb-combo-btn:hover { border-color:var(--ink-muted); }
 .mb-combo-btn:focus, .mb-combo-btn[aria-expanded="true"] { border-color:var(--accent); outline:none; }
@@ -762,22 +894,24 @@ label.radio-inline { cursor:pointer; }
 .mb-combo-btn:hover .mb-combo-chevron, .mb-combo-btn[aria-expanded="true"] .mb-combo-chevron { opacity:1; }
 .mb-combo-btn[aria-expanded="true"] .mb-combo-chevron { transform:rotate(180deg); }
 .mb-combo-list { position:absolute; left:0; right:0; z-index:9;
-  background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius);
-  box-shadow:0 8px 24px rgba(0,0,0,.35); overflow-y:auto; padding:4px; display:none; }
+  background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius-md);
+  box-shadow:var(--shadow-float); overflow-y:auto; padding:4px; display:none; }
 .mb-combo-list.open { display:block; }
 .mb-combo-group { padding:6px 8px 2px; font-size:10px; font-weight:600; color:var(--ink-muted);
   font-family:var(--font-mono); text-transform:uppercase; letter-spacing:.06em; }
 .mb-combo-group:first-child { padding-top:4px; }
 .mb-combo-option { display:flex; align-items:center; justify-content:space-between; gap:8px;
-  padding:6px 8px; border-radius:6px; cursor:pointer; font-size:12px; color:var(--ink); }
-.mb-combo-option:hover, .mb-combo-option.active { background:var(--accent); color:var(--ink-on-accent); }
+  padding:6px 8px; border-radius:var(--radius-sm); cursor:pointer; font-size:12px; color:var(--ink); }
+/* --accent-fill: solid highlight with white text on top, same as
+   .param-search-item above. */
+.mb-combo-option:hover, .mb-combo-option.active { background:var(--accent-fill); color:var(--ink-on-accent); }
 .mb-combo-option[aria-selected="true"] { font-weight:600; }
 .mb-combo-option[aria-selected="true"]::after { content:'\2713'; flex:none; font-size:13px; }
 
 /* Switch-printer notice -- warn (values clamped) or ok (headroom grew).
    Dismissable (close button) and self-clears after a few seconds; never a
    window.alert. */
-.mb-notice { margin-top:var(--sp-2); border-radius:6px; padding:6px 8px; font-size:11px;
+.mb-notice { margin-top:var(--sp-2); border-radius:var(--radius-sm); padding:6px 8px; font-size:11px;
   line-height:1.4; display:flex; align-items:flex-start; gap:6px; }
 .mb-notice-warn { background:rgba(255,180,84,.10); border:1px solid var(--warn); color:var(--warn); }
 .mb-notice-ok { background:rgba(63,220,160,.08); border:1px solid var(--ok); color:var(--ok); }
@@ -798,7 +932,7 @@ label.radio-inline { cursor:pointer; }
 .sr-modal-card { position:relative; width:min(440px, 92vw); max-height:88vh;
   display:flex; flex-direction:column; background:var(--surface);
   border:1px solid var(--line); border-radius:var(--radius-lg);
-  box-shadow:0 18px 48px rgba(0,0,0,.5); overflow:hidden; }
+  box-shadow:var(--shadow-float); overflow:hidden; }
 .sr-modal-header { padding:var(--sp-4) var(--sp-4) 0; }
 .sr-modal-header h2 { font-size:15px; margin:0; color:var(--ink); font-weight:600; }
 .sr-modal-body { padding:var(--sp-3) var(--sp-4); overflow-y:auto; }
@@ -824,7 +958,10 @@ label.radio-inline { cursor:pointer; }
 .step-item.done { color:var(--ink); }
 .step-item.done .step-num { border-color:var(--accent); color:var(--accent-hover); background:none; }
 .step-item.active { color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
-.step-item.active .step-num { border-color:var(--accent); background:var(--accent); color:var(--ink-on-accent); }
+/* --accent-fill: solid fill with white text on top, same contrast reasoning
+   as .btn-primary -- the underline above and .step-item.done's border-only
+   treatment stay on plain --accent since neither puts text on a fill. */
+.step-item.active .step-num { border-color:var(--accent-fill); background:var(--accent-fill); color:var(--ink-on-accent); }
 .step-item.active .step-label { color:var(--accent-hover); }
 
 .step-panel { display:none; }
@@ -846,7 +983,7 @@ label.radio-inline { cursor:pointer; }
 .step-nav .btn { flex:1; padding:7px 0; text-align:center; }
 
 /* ---- import drop zone ---- */
-.import-drop { border:1.5px dashed var(--line); border-radius:var(--radius-lg); padding:28px 14px; text-align:center;
+.import-drop { border:1.5px dashed var(--line); border-radius:var(--radius-md); padding:28px 14px; text-align:center;
   color:var(--ink-muted); font-size:12.5px; margin-top:8px; cursor:pointer; transition:.15s; }
 .import-drop:hover, .import-drop.drag-over { border-color:var(--accent); color:var(--ink); background:var(--surface-raised); }
 #stl-status { margin-top:var(--sp-2); }
@@ -855,10 +992,10 @@ label.radio-inline { cursor:pointer; }
   text-overflow:ellipsis; white-space:nowrap; max-width:170px; }
 
 /* ---- vase-compatibility verdict for an imported STL ---- */
-.mesh-check { margin-top:8px; padding:8px 10px; border-radius:6px; font-size:11px; line-height:1.4; }
+.mesh-check { margin-top:8px; padding:8px 10px; border-radius:var(--radius-sm); font-size:11px; line-height:1.4; }
 .mesh-check.warn { background:rgba(255,180,84,.10); border:1px solid var(--warn); }
 .mesh-check.bad { background:rgba(255,93,93,.10); border:1px solid var(--danger); }
-.mesh-check.info { background:rgba(47,107,255,.10); border:1px solid var(--accent); }
+.mesh-check.info { background:rgba(41,151,255,.10); border:1px solid var(--accent); }
 .mesh-check-head { display:flex; align-items:center; gap:6px; font-weight:600; }
 .mesh-check.warn .mesh-check-head { color:var(--warn); }
 .mesh-check.bad .mesh-check-head { color:var(--danger); }
@@ -895,7 +1032,7 @@ label.radio-inline { cursor:pointer; }
 .gen-status.err { color:var(--danger); }
 .gen-status.ok { color:var(--ok); }
 .gen-report { margin-top:8px; max-height:200px; overflow:auto; font-size:10.5px; line-height:1.35;
-  background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px;
+  background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-sm); padding:8px;
   white-space:pre; color:var(--ink); display:none; }
 
 /* Real progress bar for /api/generate_stream -- the one operation slow
@@ -903,18 +1040,22 @@ label.radio-inline { cursor:pointer; }
    Width is only ever driven up to 99% by "progress" lines; it is hidden
    (never snapped to 100%) the instant a "done"/"error" line lands, so it
    can never visibly claim completion before the work is actually over. */
-.gen-progress { margin-top:7px; height:6px; border-radius:999px; background:var(--busy-track);
+.gen-progress { margin-top:7px; height:6px; border-radius:var(--radius-pill); background:var(--busy-track);
   overflow:hidden; display:none; }
 .gen-progress-fill { height:100%; width:0%; background:var(--busy);
   transition:width .15s ease-out; }
 
-/* stale gcode: design changed since last generate — unmistakable warn state */
+/* stale gcode: design changed since last generate -- unmistakable warn state.
+   This outline IS the safety signal (see the reserved-token note at the top
+   of the file: --warn covers clamp/stale-state flags). It used to be
+   layered under an extra amber box-shadow glow on .btn-primary.stale
+   specifically -- that glow is gone now that decorative shadows are gone
+   from buttons generally, but the outline alone is unchanged in strength and
+   already applies to a stale .btn-primary too (it carries both classes), so
+   the signal stays exactly as visible as before, just with one fewer layer. */
 .btn.stale { outline:2px solid var(--warn); outline-offset:2px; }
-/* stale primary button: one unambiguous amber signal, not amber ring + blue glow */
-.btn-primary.stale { box-shadow:0 2px 8px rgba(255,180,84,.35); }
-.btn-primary.stale:hover:not(:disabled) { box-shadow:0 4px 14px rgba(255,180,84,.45); }
 .stale-badge { position:absolute; top:40px; left:50%; transform:translateX(-50%); z-index:6;
-  padding:5px 12px; border-radius:6px; background:rgba(255,180,84,.14); border:1px solid var(--warn);
+  padding:5px 12px; border-radius:var(--radius-sm); background:rgba(255,180,84,.14); border:1px solid var(--warn);
   color:var(--warn); font-size:11.5px; font-weight:600; pointer-events:none; display:none; }
 
 /* ---- spacing utilities (4px base scale) ---- */
@@ -925,7 +1066,7 @@ label.radio-inline { cursor:pointer; }
 .mt-6 { margin-top:var(--sp-6); }
 
 /* =========================================================================
-   Point Edit Modifiers — "purple modifiers" (Clay Studio Pro convention):
+   Point Edit Modifiers -- "purple modifiers" (Clay Studio Pro convention):
    operate on the already-sliced wall polyline, not the source geometry.
    Entry button lives at the top of the Texture step; --accent-purple is
    reserved for this subsystem only (see :root comment above).
@@ -942,17 +1083,18 @@ label.radio-inline { cursor:pointer; }
 .pe-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
 .pe-modal-card { position:relative; width:min(640px, 92vw); max-height:86vh; display:flex; flex-direction:column;
   background:var(--surface); border:1px solid var(--accent-purple); border-radius:var(--radius-lg);
-  /* Softened from rgba(0,0,0,.5): a pure-black shadow this heavy read harsher
-     once --bg lifted off near-black -- .4 keeps the modal grounded without
-     the seam looking like a hole cut in the page. */
-  box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
+  /* --shadow-float, the one shared depth value used across every floating
+     surface in the app now -- was its own one-off 0 20px 60px rgba(0,0,0,.4)
+     tuned separately from .pm-modal-card's identical rule and .sr-modal-card's
+     different one; consolidated per the redesign brief. */
+  box-shadow:var(--shadow-float); overflow:hidden; }
 .pe-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4);
   border-bottom:1px solid var(--line); flex:none; }
 .pe-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
 .pe-modal-body { display:flex; flex:1 1 auto; min-height:0; }
 .pe-rail { flex:0 0 172px; border-right:1px solid var(--line); padding:var(--sp-2); overflow-y:auto; }
 .pe-rail-item { display:block; width:100%; text-align:left; background:none; border:none; color:var(--ink-muted);
-  font-size:12px; font-weight:600; padding:8px 10px; border-radius:6px; cursor:pointer; margin-bottom:2px;
+  font-size:12px; font-weight:600; padding:8px 10px; border-radius:var(--radius-sm); cursor:pointer; margin-bottom:2px;
   transition:background .15s, color .15s; font-family:var(--font-ui); }
 .pe-rail-item:hover { color:var(--ink); background:var(--surface-raised); }
 .pe-rail-item.active { color:var(--accent-purple); background:rgba(167,139,250,.12); }
@@ -993,8 +1135,8 @@ label.radio-inline { cursor:pointer; }
 .pm-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
 .pm-modal-card { position:relative; width:min(760px, 94vw); max-height:88vh; display:flex; flex-direction:column;
   background:var(--surface); border:1px solid var(--accent); border-radius:var(--radius-lg);
-  /* Softened from rgba(0,0,0,.5) for the same reason as .pe-modal-card above. */
-  box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
+  /* --shadow-float, same reasoning as .pe-modal-card above. */
+  box-shadow:var(--shadow-float); overflow:hidden; }
 /* Horizontal padding is --sp-6 (24px), not --sp-4: this card is up to 760px
    wide and prose runs the full width, so 16px left the text visibly crowding
    the border. Header, body and footer share the inset so everything lines up
@@ -1025,16 +1167,19 @@ label.radio-inline { cursor:pointer; }
 
 .pm-review-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:var(--sp-3); }
 .pm-name-input { flex:1 1 160px; min-width:0; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:6px 8px; font-size:13px; }
+  border-radius:var(--radius-sm); padding:6px 8px; font-size:13px; }
 .pm-name-input:focus { border-color:var(--accent); outline:none; }
 .pm-badge { flex:0 0 auto; font-size:10.5px; font-family:var(--font-mono); text-transform:uppercase;
   letter-spacing:.06em; color:var(--ink-muted); background:var(--surface-raised); border:1px solid var(--line);
-  border-radius:999px; padding:3px 9px; }
+  border-radius:var(--radius-pill); padding:3px 9px; }
 
-.pm-report { margin-bottom:var(--sp-4); border:1px solid var(--line); border-radius:var(--radius-lg);
+.pm-report { margin-bottom:var(--sp-4); border:1px solid var(--line); border-radius:var(--radius-md);
   padding:var(--sp-3); background:var(--surface-raised); }
 .pm-report-ok { font-size:12px; color:var(--ok); }
-.pm-report-head { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+/* 600, not 700 -- matches every other uppercase section label in the app
+   (.group h2, .section-heading); 700 stays reserved for the two genuine
+   numeric-emphasis readouts (see the h1 comment above). */
+.pm-report-head { font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
   color:var(--ink-muted); margin:var(--sp-2) 0 4px; }
 .pm-report-head:first-child { margin-top:0; }
 .pm-report-head-error { color:var(--danger); }
@@ -1043,7 +1188,7 @@ label.radio-inline { cursor:pointer; }
    than in the heading: the heading is per-severity, the report is one thing. */
 .pm-report-copy { margin-top:var(--sp-3); background:none; border:1px solid var(--line);
   color:var(--ink-muted); font-family:var(--font-ui); font-size:11px; padding:4px 10px;
-  border-radius:999px; cursor:pointer; transition:color .15s, border-color .15s; }
+  border-radius:var(--radius-pill); cursor:pointer; transition:color .15s, border-color .15s; }
 .pm-report-copy:hover { color:var(--ink); border-color:var(--ink-muted); }
 .pm-report-copy-done { color:var(--ok); border-color:var(--ok); }
 .pm-issue { display:flex; flex-wrap:wrap; align-items:center; gap:8px; width:100%;
@@ -1056,10 +1201,10 @@ button.pm-issue-msg:hover { text-decoration:underline; }
 .pm-issue-error { border-left-color:var(--danger); }
 .pm-issue-warn { border-left-color:var(--warn); }
 .pm-quickfix { flex:0 0 auto; border:1px solid var(--accent); color:var(--accent-hover); background:none;
-  border-radius:6px; padding:2px 8px; font-size:10.5px; font-weight:600; cursor:pointer; font-family:var(--font-ui); }
-.pm-quickfix:hover { background:rgba(47,107,255,.12); }
+  border-radius:var(--radius-sm); padding:2px 8px; font-size:10.5px; font-weight:600; cursor:pointer; font-family:var(--font-ui); }
+.pm-quickfix:hover { background:rgba(41,151,255,.12); }
 
-.pm-group-head { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+.pm-group-head { font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
   color:var(--ink-muted); font-family:var(--font-mono); margin:var(--sp-3) 0 2px; }
 .pm-group-head:first-child { margin-top:0; }
 .pm-field-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 10px;
@@ -1071,22 +1216,22 @@ button.pm-issue-msg:hover { text-decoration:underline; }
    background-repeat/position to their initials -- which tiled the chevron SVG
    across the whole control as a sawtooth pattern behind the value. */
 .pm-field-input { background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:6px; padding:3px 5px; font-size:12px; width:92px; }
+  border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; width:92px; }
 .pm-field-input:focus { border-color:var(--accent); outline:none; }
 select.pm-field-input { width:116px; padding-right:24px; }
 .pm-tag { flex:0 0 auto; font-size:10px; font-family:var(--font-mono); text-transform:uppercase;
-  letter-spacing:.04em; padding:2px 6px; border-radius:999px; color:var(--ink-muted);
+  letter-spacing:.04em; padding:2px 6px; border-radius:var(--radius-pill); color:var(--ink-muted);
   background:var(--surface-raised); border:1px solid var(--line); cursor:default; }
 .pm-tag-default, .pm-tag-clamped { color:var(--warn); border-color:rgba(255,180,84,.4); }
 .pm-tag-warn { color:var(--warn); border-color:rgba(255,180,84,.4); }
 /* An override the user typed themselves: neither imported nor invented, so it
    reads in the neutral accent rather than the amber "we chose this" state. */
-.pm-tag-edited { color:var(--accent); border-color:rgba(47,107,255,.45); }
+.pm-tag-edited { color:var(--accent); border-color:rgba(41,151,255,.45); }
 
 .pm-gcode-block { margin-top:var(--sp-3); }
 .pm-gcode-label { font-size:11px; color:var(--ink-muted); margin-bottom:4px; }
 .pm-gcode-textarea { width:100%; box-sizing:border-box; resize:vertical; background-color:var(--input-bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:6px; padding:8px; font-family:var(--font-mono); font-size:11.5px;
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:8px; font-family:var(--font-mono); font-size:11.5px;
   line-height:1.5; }
 .pm-gcode-textarea:focus { border-color:var(--accent); outline:none; }
 
@@ -1098,7 +1243,7 @@ select.pm-field-input { width:116px; padding-right:24px; }
    and they should look at it before printing. */
 .pm-repaired { margin-top:var(--sp-3); }
 .pm-repaired-toggle { width:100%; text-align:left; background:var(--surface-raised); border:1px solid var(--line);
-  color:var(--ink); border-radius:6px; padding:6px 10px; font-size:11.5px; font-weight:600; cursor:pointer;
+  color:var(--ink); border-radius:var(--radius-sm); padding:6px 10px; font-size:11.5px; font-weight:600; cursor:pointer;
   font-family:var(--font-ui); }
 .pm-repaired-toggle:hover { border-color:var(--warn); }
 .pm-repaired-list { list-style:none; margin:6px 0 0; padding:0 0 0 10px; border-left:2px solid var(--warn);
@@ -1107,7 +1252,7 @@ select.pm-field-input { width:116px; padding-right:24px; }
 
 .pm-stripped { margin-top:var(--sp-3); }
 .pm-stripped-toggle { width:100%; text-align:left; background:var(--surface-raised); border:1px solid var(--line);
-  color:var(--ink); border-radius:6px; padding:6px 10px; font-size:11.5px; font-weight:600; cursor:pointer;
+  color:var(--ink); border-radius:var(--radius-sm); padding:6px 10px; font-size:11.5px; font-weight:600; cursor:pointer;
   font-family:var(--font-ui); }
 .pm-stripped-toggle:hover { border-color:var(--warn); }
 .pm-stripped-list { list-style:none; margin:6px 0 0; padding:0 0 0 10px; border-left:2px solid var(--warn);
@@ -1164,17 +1309,17 @@ select.pm-field-input { width:116px; padding-right:24px; }
    Boxed like the app's other warn idioms (.mesh-check.warn, .mb-notice-warn)
    so it reads as a flag to stop on, not another paragraph to skim past. */
 .pm-caution { margin-top:var(--sp-3); padding:var(--sp-2) var(--sp-3);
-  border-radius:6px; background:rgba(255,180,84,.10); border:1px solid var(--warn);
+  border-radius:var(--radius-sm); background:rgba(255,180,84,.10); border:1px solid var(--warn);
   color:var(--warn); font-size:12.5px; line-height:1.5; }
 
 /* =========================================================================
-   Collapsible sections — every h3.section-heading and .group h2 that owns
+   Collapsible sections -- every h3.section-heading and .group h2 that owns
    a #sec-body-* container becomes a click/keyboard toggle (state persisted
    in localStorage under 'trident_sections' by designer.js). Purely additive:
    the toggle affordance rides on the existing heading element.
    ========================================================================= */
 .sec-toggle { cursor:pointer; user-select:none; display:flex; align-items:center;
-  justify-content:space-between; gap:var(--sp-2); border-radius:6px; margin-left:-4px;
+  justify-content:space-between; gap:var(--sp-2); border-radius:var(--radius-sm); margin-left:-4px;
   margin-right:-4px; padding:2px 4px; transition:background-color .15s; }
 .sec-toggle:hover { background:var(--surface-raised); }
 /* Sized to the icon-only standard set by .mb-combo-chevron -- see the note
@@ -1193,11 +1338,11 @@ select.pm-field-input { width:116px; padding-right:24px; }
 .active-summary { flex:1 1 auto; display:flex; flex-wrap:wrap; gap:5px; min-height:0; }
 .active-summary:empty { display:none; }
 .chip { background:var(--surface-raised); border:1px solid var(--line); color:var(--ink-muted);
-  font-size:10.5px; font-family:var(--font-ui); border-radius:999px; padding:3px 9px; cursor:pointer;
+  font-size:10.5px; font-family:var(--font-ui); border-radius:var(--radius-pill); padding:3px 9px; cursor:pointer;
   transition:border-color .15s, color .15s, background-color .15s; white-space:nowrap; }
 .chip:hover { border-color:var(--accent); color:var(--ink); }
 .hint-toggle { flex:none; background:var(--surface-raised); border:1px solid var(--line);
-  color:var(--ink-muted); font-size:10.5px; font-weight:600; border-radius:6px; padding:5px 9px;
+  color:var(--ink-muted); font-size:10.5px; font-weight:600; border-radius:var(--radius-sm); padding:5px 9px;
   cursor:pointer; font-family:var(--font-ui); transition:border-color .15s, color .15s; }
 .hint-toggle:hover { border-color:var(--accent); color:var(--ink); }
 .hint-toggle[aria-pressed="false"] { color:var(--ink-muted); opacity:.55; }
@@ -1206,13 +1351,13 @@ select.pm-field-input { width:116px; padding-right:24px; }
 body.hints-hidden .hint { display:none; }
 
 /* ---- generate step: two distinct output-path cards (task 2) ---- */
-.output-card { background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius-lg);
+.output-card { background:var(--surface-raised); border:1px solid var(--line); border-radius:var(--radius-md);
   padding:var(--sp-3); margin-top:var(--sp-4); }
 .output-card .section-heading { margin-bottom:4px; }
 .output-divider { height:1px; background:var(--line); margin:var(--sp-4) 0 0; }
 
 /* =========================================================================
-   Responsive floor — below 900px this is a "best on desktop" notice, not a
+   Responsive floor -- below 900px this is a "best on desktop" notice, not a
    real mobile layout. The primary interactions (cage-handle drag, curve
    editor drag, arrow-key per-turn playback) are hover/fine-motor/keyboard
    dependent and are not reworked for touch.
@@ -1224,7 +1369,7 @@ body.hints-hidden .hint { display:none; }
   .panel { width:auto; flex:1 1 auto; border-left:none; border-top:1px solid var(--line); }
   .splitter { display:none; }
   .mobile-note { display:block; font-size:11px; color:var(--warn); background:rgba(255,180,84,.10);
-    border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:var(--sp-4); }
+    border:1px solid var(--line); border-radius:var(--radius-sm); padding:8px 10px; margin-bottom:var(--sp-4); }
   .telemetry-card { top:8px; right:8px; width:150px; max-width:calc(100% - 16px); }
   .draft-preview-label { top:8px; left:8px; }
 }
@@ -1242,7 +1387,7 @@ body.hints-hidden .hint { display:none; }
 .guide-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.62); }
 .guide-modal-card { position:relative; width:min(480px, 92vw); max-height:min(560px, 90vh);
   display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--line);
-  border-radius:var(--radius-lg); box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
+  border-radius:var(--radius-lg); box-shadow:var(--shadow-float); overflow:hidden; }
 .guide-modal-header { display:flex; align-items:center; justify-content:space-between;
   padding:var(--sp-3) var(--sp-4); border-bottom:1px solid var(--line); flex:none; }
 .guide-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
@@ -1272,9 +1417,9 @@ body.hints-hidden .hint { display:none; }
    ========================================================================= */
 .param-tip {
   position:fixed; z-index:60; max-width:300px;
-  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-md);
   padding:var(--sp-2) var(--sp-3);
-  box-shadow:0 8px 24px rgba(0,0,0,.45);
+  box-shadow:var(--shadow-float);
   pointer-events:none;
   opacity:0; visibility:hidden; transition:opacity .12s ease;
 }
@@ -1318,7 +1463,7 @@ body.hints-hidden .hint { display:none; }
 .guide-fig {
   position:relative; width:100%; aspect-ratio:16/10; margin:0 0 var(--sp-3);
   overflow:hidden; background:var(--surface-raised); border:1px solid var(--line);
-  border-radius:var(--radius-lg);
+  border-radius:var(--radius-md);
 }
 .guide-shot {
   position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;
