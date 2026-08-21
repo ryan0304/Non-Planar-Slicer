@@ -544,6 +544,77 @@
     check('cageScale agrees column 1 owns bed angle 90deg',
           near(w.cageScale(bump, Math.PI/2, 1), 1.4, 1e-9),
           'got ' + w.cageScale(bump, Math.PI/2, 1));
+
+    // ---- a cage drag must survive a live-preview refresh --------------------
+    // Holding the button down is the whole contract of a drag: while the
+    // pointer is pressed, the handle keeps following it. The debounced draft
+    // preview (designer.js schedulePreview, 100ms) broke that -- it calls
+    // showPreview(), which disposed the cage and, as a failsafe, cleared
+    // cageActive/__silDragActive. The pointer was still down and the handle
+    // was gone: the user had to release and re-press to carry on adjusting.
+    //
+    // Reported at the [0.5, 1.5] clamp, because that is where the pointer
+    // naturally comes to rest -- the handle stops following, the user
+    // hesitates, and any pause past the debounce was enough. Driven here
+    // through the real pointerdown listener (screen coords straight out of
+    // __cageDebug, which projects exactly as cagePickAt does) rather than by
+    // poking cageActive, so it fails if the pick or the teardown regresses.
+    // From __cageDebug, not from the DOM: #canvas-wrap holds three canvases
+    // (nav cube, sparkline, and the renderer's own, appended by script), and
+    // the cage listener is bound to the renderer's alone -- a press sent to
+    // either of the others does nothing and fails this for the wrong reason.
+    const cageCanvas = w.__cageDebug().canvas;
+    const grab = w.__cageDebug().handles.find(h => h.i === 0 && h.j === 0);
+    cageCanvas.dispatchEvent(new w.PointerEvent('pointerdown', {
+      clientX: grab.screen[0], clientY: grab.screen[1],
+      button: 0, buttons: 1, bubbles: true }));
+    check('pressing a cage handle starts a drag',
+          w.__cageDebug().dragActive === true, 'dragActive false after pointerdown');
+    // Exactly what the debounced refresh does, mid-press.
+    w.showPreview(new w.Float32Array([0,0,0, 10,0,0, 10,0,0, 10,10,0]));
+    check('a draft-preview refresh mid-press does not cancel the cage drag',
+          w.__cageDebug().dragActive === true,
+          'drag was cancelled; the handle would need re-pressing to adjust again');
+    // ---- the drag readout: how far this handle is from where it started ----
+    // A handle means a radius SCALE, so "1.10x" alone says nothing about how
+    // far anything moved -- the same multiplier is 1.2mm on a 12mm waist and
+    // 4.8mm at a 48mm bulge. The tag reports millimetres, signed, measured
+    // from the handle's original (scale 1.0) position, off the same cageBase
+    // the dot itself is drawn from so the two can never disagree.
+    // R = 20 here, so 1.5x is exactly +10.00 mm and 0.5x exactly -10.00 mm.
+    const tag = () => w.__cageDebug().tag;
+    // Not asserting WHICH handle: two rows seen near-edge-on can project close
+    // together, and which one the pick resolves is not what this is about.
+    check('pressing a handle shows its offset readout',
+          tag().visible === true && tag().idx >= 0, 'tag ' + JSON.stringify(tag()));
+    check('an untouched handle reads as 0.00 mm at 1.00x',
+          tag().text.indexOf('0.00 mm') === 0 && tag().text.indexOf('1.00x') > 0,
+          'got ' + JSON.stringify(tag().text));
+    // Drive the scale directly rather than through screen coords: this
+    // assertion is about the ARITHMETIC of the readout, and a synthetic drag
+    // to an exact multiplier is not something screen-space picking can promise.
+    w.__cageSetScaleForTest(0, 0, 1.5);
+    check('a handle pushed out to 1.5x on a 20mm radius reads +10.00 mm',
+          tag().text.indexOf('+10.00 mm') === 0, 'got ' + JSON.stringify(tag().text));
+    check('...and names the end of the range, so a clamped handle does not read as broken',
+          /1\.50x, max/.test(tag().text), 'got ' + JSON.stringify(tag().text));
+    w.__cageSetScaleForTest(0, 0, 0.5);
+    check('pulled in to 0.5x it reads -10.00 mm, sign and all',
+          tag().text.indexOf('-10.00 mm') === 0 && /0\.50x, min/.test(tag().text),
+          'got ' + JSON.stringify(tag().text));
+    w.__cageSetScaleForTest(0, 0, 1.0);
+
+    w.dispatchEvent(new w.PointerEvent('pointerup', { button: 0, bubbles: true }));
+    check('releasing away from the handle drops the readout',
+          tag().visible === false, 'tag still ' + JSON.stringify(tag().text));
+    check('releasing ends the cage drag and gives the orbit controls back',
+          w.__cageDebug().dragActive === false && w.__cageDebug().controlsEnabled === true,
+          'dragActive ' + w.__cageDebug().dragActive +
+          ', controlsEnabled ' + w.__cageDebug().controlsEnabled);
+    w.clearPreview();          // teardown: this one MUST take the cage with it
+    check('tearing the draft down does hide the cage',
+          w.__cageDebug().count === 0, 'got ' + w.__cageDebug().count + ' handles');
+
     w.hideShapeCage();
 
     // ---- unsupported-move count must agree with analyze.py -------------------
