@@ -1332,6 +1332,10 @@ function render(){
   // __bedMats above) because render() runs once during module init, before the
   // measure section further down has initialised its bindings.
   if(window.__measureSync) window.__measureSync();
+  // Same for the shape cage's drag readout -- a DOM node pinned to a handle,
+  // so it has to be re-projected whenever the camera moves. Read off `window`
+  // for the same TDZ reason as __measureSync above.
+  if(window.__cageSync) window.__cageSync();
   // Orientation cube tracks the main camera every frame this renders --
   // see the comment on navSyncCamera() further down for why this is a
   // window.__* hook rather than a direct call (TDZ: that section is defined
@@ -1417,7 +1421,11 @@ let previewBounds = null;
 // syncCanvasChromeForMode(), which would silently switch the measure tool off
 // on every single slider tweak instead of just once when the draft actually
 // ends.
-function disposePreviewObjects(){
+//
+// ``keepActiveCageDrag`` is passed by showPreview() (a REFRESH of the draft)
+// and never by clearPreview() (a teardown of it) -- see the hideShapeCage
+// call below for what it protects.
+function disposePreviewObjects(keepActiveCageDrag){
   if(previewObj){
     scene.remove(previewObj);
     previewObj.geometry.dispose();
@@ -1431,7 +1439,22 @@ function disposePreviewObjects(){
     previewBlobObj = null;
   }
   if(previewLabel) previewLabel.style.display = 'none';
-  if(window.hideShapeCage) window.hideShapeCage();
+  // NOT while a cage handle is being dragged. hideShapeCage() disposes every
+  // handle and clears cageActive/__silDragActive as a failsafe, so the
+  // debounced live preview (designer.js schedulePreview, 100ms) cancelled the
+  // drag mid-press: the pointer was still down, but the handle no longer
+  // existed, and the user had to release and grab the dot again to carry on.
+  //
+  // It surfaced at the [0.5, 1.5] clamp because that is where the pointer
+  // naturally rests -- the handle stops following, the user hesitates, and a
+  // pause longer than the debounce is all it takes. Any mid-drag pause did it.
+  //
+  // Keeping the group is safe, not merely convenient: the drag handler moves
+  // the handles itself on every pointermove, and refreshShapeCage() already
+  // declines to rebuild the cage while __silDragActive is set -- a guard that
+  // only works if this call has not cleared the flag a moment earlier.
+  // A teardown (clearPreview) passes no flag and still hides unconditionally.
+  if(window.hideShapeCage && !(keepActiveCageDrag && cageActive)) window.hideShapeCage();
   // Restore the generated (rainbow) path that showPreview hid, so viewing the
   // G-code again brings it back. Travels follow their own toggle.
   if(pathObj) pathObj.visible = true;
@@ -1446,7 +1469,7 @@ function disposePreviewObjects(){
 window.showPreview = function(positions){
   // positions: Float32Array [x0,y0,z0, x1,y1,z1, ...]
   if(!positions || positions.length < 6) return;
-  disposePreviewObjects();
+  disposePreviewObjects(true);   // a refresh must not cancel a cage drag
 
   // Measure tool's Design-mode source array, plus its bounds for
   // measureRaySpan's slab test -- computed once here rather than per pick.
@@ -1708,6 +1731,118 @@ function cageRestyle(){
   if(typeof window.onCageSelectionChange === 'function') window.onCageSelectionChange(cageSelection.size);
 }
 
+// ---- cage drag readout ------------------------------------------------------
+// A handle's whole meaning is a RADIUS SCALE, and a bare "1.10x" does not tell
+// anyone how far anything actually moved -- 1.10x is 1.2 mm on a 12 mm waist
+// and 4.8 mm at a 48 mm bulge. So the headline number is millimetres, signed,
+// measured from the handle's ORIGINAL (undeformed, scale 1.0) position:
+// positive is pushed out, negative is pulled in.
+//
+// It is the HANDLE's own radial displacement -- base_radius * (scale - 1),
+// off the same cageBase the handle is drawn from -- so the number and the dot
+// on screen can never disagree. On a circle that is also exactly how far the
+// wall moves. On a lobed outline (star, squircle) the wall at that angle is
+// shape(theta) times this, because designer.js builds cageBase from
+// radius * silhouette without the lobe factor and the handles are placed the
+// same way; reporting the wall figure instead would print a number the dot
+// under it visibly contradicts.
+//
+// Measured from 1.0 rather than from wherever this particular press started,
+// because that is the number that still means something after the mouse comes
+// up: nudge a dot three times and it reads +3.0 mm, not +1.0 three times over.
+// The per-press movement is still shown, on its own line, whenever the handle
+// did NOT start this drag at its original position -- that is the only case
+// where the two numbers differ and the distinction is worth the extra line.
+let cageTagEl = null;
+let cageTagIdx = -1;            // flat index the tag currently describes, or -1
+const cageTagProj = new THREE.Vector3();
+
+function cageOffsetMm(i, j, scale){
+  if(!cageBase || !cageBase[i]) return 0;
+  return cageBase[i][j] * (scale - 1.0);
+}
+
+function cageFmtMm(mm){
+  // Explicit '+' so a bulge and a pinch are told apart at a glance; -0.00 is
+  // an artefact of the sign of a rounded zero, never something to show.
+  if(Math.abs(mm) < 0.005) return '0.00 mm';
+  return (mm > 0 ? '+' : '') + mm.toFixed(2) + ' mm';
+}
+
+// Fills the tag for handle index `k`. `dragging` adds the facts that only
+// exist mid-press: how many handles are moving together, and how far this
+// press has moved them.
+//
+// Built as DOM nodes with textContent rather than an innerHTML string. Every
+// value here is a locally computed number, so there is nothing to inject
+// today -- but a tag that renders markup is one refactor away from being
+// handed a name or a label, and this costs nothing now.
+function cageFillTag(el, k, dragging){
+  const s = cageSpheres[k];
+  const scale = (cageScales && cageScales[s.i]) ? cageScales[s.i][s.j] : 1.0;
+  const meta = [scale.toFixed(2) + 'x'];
+  // Naming the end of the range is the point: without it, a handle that has
+  // stopped following the pointer looks broken rather than clamped.
+  if(scale >= 1.5 - 1e-9) meta.push('max');
+  else if(scale <= 0.5 + 1e-9) meta.push('min');
+  if(dragging && cageDragStart && cageDragStart.length > 1){
+    meta.push(cageDragStart.length + ' pts');
+  }
+
+  const span = (cls, text) => {
+    const n = document.createElement('span');
+    if(cls) n.className = cls;
+    n.textContent = text;
+    return n;
+  };
+  el.textContent = '';
+  el.appendChild(span('cage-tag-mm', cageFmtMm(cageOffsetMm(s.i, s.j, scale))));
+  el.appendChild(document.createTextNode(' '));
+  el.appendChild(span('cage-tag-meta', meta.join(', ')));
+  if(dragging && Math.abs(cageDragAnchorScale - 1.0) > 1e-6){
+    const moved = cageOffsetMm(s.i, s.j, scale)
+                - cageOffsetMm(s.i, s.j, cageDragAnchorScale);
+    el.appendChild(span('cage-tag-delta', cageFmtMm(moved) + ' this drag'));
+  }
+}
+
+function cageShowTag(k){
+  if(k < 0 || k >= cageSpheres.length){ cageHideTag(); return; }
+  if(!cageTagEl){
+    cageTagEl = document.createElement('div');
+    cageTagEl.className = 'cage-tag';
+    wrap.appendChild(cageTagEl);
+  }
+  cageTagIdx = k;
+  cageFillTag(cageTagEl, k, !!cageActive);
+  cageSyncTag();
+}
+
+function cageHideTag(){
+  cageTagIdx = -1;
+  if(cageTagEl) cageTagEl.style.display = 'none';
+}
+
+// Re-projects the tag onto the handle it describes. Called from render() via
+// window.__cageSync (same idiom as the measure tag) so it tracks orbit, zoom
+// and resize -- hovering still allows wheel zoom, so the tag has to follow.
+function cageSyncTag(){
+  if(!cageTagEl) return;
+  if(cageTagIdx < 0 || cageTagIdx >= cageSpheres.length){
+    cageTagEl.style.display = 'none';
+    return;
+  }
+  cageTagProj.copy(cageSpheres[cageTagIdx].mesh.position).project(camera);
+  if(cageTagProj.z < -1 || cageTagProj.z > 1){
+    cageTagEl.style.display = 'none';
+    return;
+  }
+  cageTagEl.style.display = '';
+  cageTagEl.style.left = ((cageTagProj.x+1)/2*wrap.clientWidth) + 'px';
+  cageTagEl.style.top  = ((1-cageTagProj.y)/2*wrap.clientHeight) + 'px';
+}
+window.__cageSync = cageSyncTag;
+
 // Hover-lock. Suppresses ONLY the left-button orbit, by nulling OrbitControls'
 // LEFT binding -- deliberately not `controls.enabled = false`, which would also
 // kill wheel zoom and right-button pan. With 40 handles at a 14px pick radius
@@ -1731,6 +1866,9 @@ function cageEndDrag(){
   window.__silDragActive = false;
   controls.enabled = true;
   cageSetHoverLock(cageHover >= 0);
+  // Releasing over the handle keeps its readout up (now without the
+  // mid-press extras); releasing anywhere else drops it.
+  if(cageHover >= 0) cageShowTag(cageHover); else cageHideTag();
   renderer.domElement.style.cursor =
     measureOn ? 'crosshair' : ((cageHover >= 0) ? 'pointer' : '');
 }
@@ -1832,6 +1970,7 @@ function cageBindListeners(){
     window.__silDragActive = true;
     controls.enabled = false;
     canvas.style.cursor = 'grabbing';
+    cageShowTag(hit);        // readout follows the grabbed handle from the press
     e.preventDefault();
   });
 
@@ -1845,6 +1984,10 @@ function cageBindListeners(){
     if(hit === cageHover) return;
     cageHover = hit;
     cageRestyle();
+    // Hovering reads the same number the drag shows, so a handle's current
+    // offset stays inspectable after the mouse comes up -- the red "edited"
+    // dot says THAT it moved, this says by how much.
+    if(cageHover >= 0) cageShowTag(cageHover); else cageHideTag();
     canvas.style.cursor = (cageHover >= 0) ? 'pointer' : '';
     cageSetHoverLock(cageHover >= 0);   // orbit is dead before the click lands
     render();
@@ -1859,6 +2002,7 @@ function cageBindListeners(){
     if(cageHover < 0) return;   // nothing to clear; don't burn a render
     cageHover = -1;
     cageRestyle();
+    cageHideTag();
     cageSetHoverLock(false);
     canvas.style.cursor = '';
     render();
@@ -1915,6 +2059,7 @@ function cageBindListeners(){
 
     cageRebuildLines();
     cageRestyle();
+    cageShowTag(i*cageCols + j);   // live mm readout for the grabbed handle
     render();
     if(cageDragCallback) cageDragCallback(changes);
   });
@@ -2105,11 +2250,22 @@ window.getCageSelection = function(){
 window.__cageDebug = function(){
   const rect = renderer.domElement.getBoundingClientRect();
   return {
+    // The element the cage's own pointerdown listener is bound to, and the
+    // one `screen` below is measured against. Handed out because a test
+    // cannot pick it out of the DOM: #canvas-wrap holds three canvases (the
+    // nav cube, the sparkline, and this one, appended by script), and a
+    // press sent to either of the others silently does nothing.
+    canvas: renderer.domElement,
     rows: cageRows, cols: cageCols,
     count: cageSpheres.length,
     hasGroup: !!cageGroup,
     inScene: cageGroup ? scene.children.indexOf(cageGroup) >= 0 : null,
     dragActive: !!cageActive,
+    tag: {
+      idx: cageTagIdx,
+      visible: !!(cageTagEl && cageTagEl.style.display !== 'none' && cageTagIdx >= 0),
+      text: cageTagEl ? cageTagEl.textContent : null
+    },
     hover: cageHover,
     selection: Array.from(cageSelection).sort(function(a,b){ return a-b; }),
     controlsEnabled: controls.enabled,
@@ -2137,6 +2293,25 @@ window.__cageDebug = function(){
   };
 };
 
+// Test-only: set one handle's scale exactly, doing everything the drag
+// handler does (scale, mesh position, cage lines, readout) so an assertion
+// about the READOUT'S ARITHMETIC can name an exact multiplier instead of
+// hoping a synthetic screen-space drag happens to land on one. Never called
+// by the app; same convention as designer.js's __test* hooks.
+window.__cageSetScaleForTest = function(i, j, scale){
+  if(!cageScales || !cageScales[i] || !cageSpheres.length) return null;
+  cageScales[i][j] = scale;
+  const m = cageSpheres[i*cageCols+j].mesh;
+  const th = m.userData.theta;
+  const r = cageBase[i][j] * scale;
+  m.position.set(r * Math.cos(th), m.position.y, -r * Math.sin(th));
+  cageRebuildLines();
+  cageRestyle();
+  cageShowTag(i*cageCols + j);
+  render();
+  return cageTagEl ? cageTagEl.textContent : null;
+};
+
 window.hideShapeCage = function(){
   if(cageGroup){
     cageSpheres.forEach(function(s){ s.mesh.material.dispose(); });
@@ -2157,6 +2332,7 @@ window.hideShapeCage = function(){
   cageActive = null;
   cageDragStart = null;
   cageHover = -1;
+  cageHideTag();          // its handle no longer exists
   // The SELECTION deliberately survives a hide. clearPreview() calls this
   // every time the draft preview is rebuilt -- which happens as soon as you
   // start dragging a handle -- so clearing here made a multi-point selection
@@ -2910,6 +3086,10 @@ function measureSetOn(on){
   document.getElementById('measure-card').style.display = on ? '' : 'none';
   renderer.domElement.style.cursor = on ? 'crosshair' : '';
   if(on){
+    // The measure tool owns the canvas's pointer from here (the cage's own
+    // hover and pointerdown handlers both bail out while it is on), so a cage
+    // readout left over from the last hover would sit there un-updatable.
+    cageHideTag();
     measureBindListeners();
     if(!msGrid) measureBuildGrid();
     // Place the card fresh below wherever the rail currently is, unless the
