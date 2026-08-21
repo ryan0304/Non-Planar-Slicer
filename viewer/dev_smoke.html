@@ -1376,6 +1376,69 @@
       }
     } catch(e){}
 
+    // ---- "Continue previous session" has to SHOW the previous session -------
+    // The prompt describes the stored design in chips ("Star, 64 x 60 mm, 5 Z
+    // waves") and then used to hand back an empty bed, because the draft
+    // preview is armed by a user touching a control and clicking Continue is
+    // not touching a control. The dialog asked "is this the design you meant?"
+    // and gave you nothing to look at.
+    //
+    // Runs LAST and in its own iframe: it needs a fresh page load with a
+    // stored design present, and reloading the main frame would pull the rug
+    // from under every assertion above.
+    const restoreProbe = await (async function(){
+      const out = [];
+      const KEY = 'design-state';
+      let saved = null;
+      try { saved = w.localStorage.getItem(KEY); } catch(e){}
+      // A design that differs from the shipped defaults is what makes the
+      // prompt appear at all. Star + a twist is plenty.
+      const stored = Object.assign({}, w.__designSnapshot(), {
+        shape: 'star', radius: 32, height: 60, z_waves: 5, xy_twist: 1
+      });
+      try { w.localStorage.setItem(KEY, JSON.stringify(stored)); } catch(e){}
+
+      const f2 = document.createElement('iframe');
+      f2.style.cssText = 'position:absolute;left:-9999px;width:1200px;height:800px;border:none';
+      const ready = new Promise(res => f2.addEventListener('load', res, { once:true }));
+      f2.src = 'index.html';
+      document.body.appendChild(f2);
+      await ready;
+      await new Promise(r => setTimeout(r, 1400));
+      const w2 = f2.contentWindow;
+
+      const modal = w2.document.getElementById('session-modal');
+      out.push(['the session-restore prompt appears when a stored design differs from a fresh one',
+                !!modal && modal.style.display !== 'none',
+                'modal display ' + (modal ? JSON.stringify(modal.style.display) : 'missing')]);
+      out.push(['nothing is drawn while the prompt is still up',
+                w2.__previewState().draftSegments === 0,
+                'got ' + w2.__previewState().draftSegments + ' draft segments']);
+
+      w2.document.getElementById('sr-continue').click();
+      await new Promise(r => setTimeout(r, 600));
+      const segs = w2.__previewState().draftSegments;
+      out.push(['Continue draws the restored design instead of leaving the bed empty',
+                segs > 0, 'got ' + segs + ' draft segments']);
+      out.push(['...and the drop-a-gcode overlay gets out of the way',
+                w2.document.getElementById('overlay').style.display === 'none',
+                'overlay display ' + JSON.stringify(w2.document.getElementById('overlay').style.display)]);
+      out.push(['the prompt closes',
+                w2.document.getElementById('session-modal').style.display === 'none',
+                'modal still up']);
+
+      f2.remove();
+      // Put the origin's storage back exactly as it was -- this suite already
+      // has one test that misbehaves on inherited localStorage, and leaving a
+      // seeded design behind would give it company.
+      try {
+        if(saved === null) w.localStorage.removeItem(KEY);
+        else w.localStorage.setItem(KEY, saved);
+      } catch(e){}
+      return out;
+    })();
+    restoreProbe.forEach(r => check(r[0], r[1], r[2]));
+
     return results;
   }
 

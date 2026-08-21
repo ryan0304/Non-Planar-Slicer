@@ -1092,6 +1092,11 @@ window.__previewState = () => ({
   drawnSegs: pathObj ? pathObj.geometry.instanceCount : null,
   nozzleVisible: nozzle.visible,
   nozzlePos: nozzle.visible ? nozzle.position.toArray().map(v=>+v.toFixed(1)) : null,
+  // Segment count of the blue DRAFT preview currently on the bed (0 = none).
+  // Distinct from drawnSegs above, which counts generated G-code. Exposed so a
+  // test can tell "the draft is on screen" from "the canvas is empty", which
+  // is the whole difference the session-restore prompt turns on.
+  draftSegments: previewPositions ? previewPositions.length / 6 : 0,
   riskyCount: lastData ? lastData.riskyCount : null,
   estTime: lastData ? lastData.estTime : null,
   telemetry: {speed:document.getElementById('tm-speed')?.textContent,
