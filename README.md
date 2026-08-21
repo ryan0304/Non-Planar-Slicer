@@ -291,7 +291,12 @@ JSON API (`GET /api/filaments`, `POST /api/generate`).
 browser's local storage, so it survives a reload or a closed tab. On load, if
 that stored design differs from a fresh one, the app asks rather than silently
 reinstating it — **Continue previous session** restores it, **Start new design**
-resets to defaults. Coming back days later and unknowingly inheriting a
+resets to defaults. **Continue draws the restored design straight away**, so the
+bed shows the vase the prompt just described instead of staying empty until you
+touch a control — the dialog asks whether this is the design you meant, and you
+can now see it while answering. (That is the instant client-side draft, not a
+generate: no G-code is produced until you ask for it.) Coming back days later
+and unknowingly inheriting a
 half-finished vase is a good way to generate G-code you didn't mean to, so the
 choice is explicit. Two things "Start new" deliberately does *not* touch: your
 imported printers (a `.cfg` you had to find and import is an asset, not session

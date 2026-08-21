@@ -5470,10 +5470,33 @@
     // Esc resolves to "continue" -- the choice that changes nothing. A stray
     // keypress must never be the thing that discards a design.
     function onKey(e){
-      if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); close(); }
+      if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); continueSession(); }
     }
 
-    document.getElementById('sr-continue').addEventListener('click', close);
+    // Continuing means "the design from last time is the one I want", so draw
+    // it. The draft preview is otherwise armed only by the user touching a
+    // control (see previewArmed), which left the bed empty behind a dialog
+    // that had just described a vase: the summary chips read "Star, 64 x 60
+    // mm, 5 Z waves, texture: ripple" and the canvas underneath was bare, so
+    // the one question the dialog exists to ask -- is this the design you
+    // meant? -- could only be answered by poking a control. Drawing it is what
+    // makes Continue actually continue.
+    //
+    // This is the DRAFT preview, not a generate: client-side geometry only, no
+    // server round trip and no G-code. Kicking off a real generation for a
+    // design nobody has looked at yet is the exact failure this whole prompt
+    // exists to prevent, and it would also hand the user a Download button for
+    // a file they never asked for.
+    //
+    // Esc routes here too (it resolves to Continue), so the quiet way out of
+    // the dialog shows the design as well.
+    function continueSession(){
+      previewArmed = true;
+      schedulePreview();
+      close();
+    }
+
+    document.getElementById('sr-continue').addEventListener('click', continueSession);
     document.getElementById('sr-new').addEventListener('click', function(){
       var keepPrinter = design.printer;
       for(var k in DEFAULT_DESIGN){
