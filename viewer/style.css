@@ -889,8 +889,16 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
    control (no text label beside it): >= 14px, --ink rather than --ink-muted,
    and a tap target of at least 22x22. .sec-chevron, .telemetry-toggle and
    .measure-close were all found sitting well under it and were brought up. */
+/* pointer-events:none: aria-hidden already marks this purely decorative, but
+   without this a click dead-on the glyph can miss its own layout box (the
+   painted triangle and the box the browser hit-tests are not the same
+   rectangle for a dingbat character -- font metrics/side-bearing vary by
+   fallback font) and silently do nothing, even though the enclosing
+   .mb-combo-btn one pixel over is fully clickable. Falling through to the
+   button removes the gap instead of trying to widen a box that can't be
+   measured to match the glyph. */
 .mb-combo-chevron { flex:none; font-size:14px; line-height:1; color:var(--ink);
-  opacity:.75; transition:transform .15s, opacity .15s; }
+  opacity:.75; transition:transform .15s, opacity .15s; pointer-events:none; }
 .mb-combo-btn:hover .mb-combo-chevron, .mb-combo-btn[aria-expanded="true"] .mb-combo-chevron { opacity:1; }
 .mb-combo-btn[aria-expanded="true"] .mb-combo-chevron { transform:rotate(180deg); }
 .mb-combo-list { position:absolute; left:0; right:0; z-index:9;
@@ -1328,10 +1336,17 @@ select.pm-field-input { width:116px; padding-right:24px; }
    while carrying the same two jobs (say "this opens", say "it is closed"). It
    has to be readable at rest, because the state it reports is only useful
    before you interact with it. */
+/* pointer-events:none, same reasoning as .mb-combo-chevron above: a click
+   dead-on the glyph can miss this span's own layout box and do nothing even
+   though the enclosing .sec-toggle heading is clickable everywhere else. */
 .sec-chevron { flex:none; font-size:14px; line-height:1; color:var(--ink); opacity:.75;
-  transition:transform .15s, opacity .15s; }
+  transition:transform .15s, opacity .15s; pointer-events:none; }
 .sec-toggle:hover .sec-chevron { opacity:1; }
 .sec-toggle.sec-closed .sec-chevron { transform:rotate(-90deg); }
+/* Every sec-body-* is a heading's owned content -- indent it so an open
+   section visibly reads as belonging under its heading, not as a second,
+   unrelated row starting flush with the heading's own left edge. */
+[id^="sec-body-"] { padding-left:var(--sp-3); }
 
 /* ---- design panel header: active-summary chips + hint-density toggle ---- */
 .design-panel-header { display:flex; align-items:flex-start; gap:var(--sp-2); margin-bottom:var(--sp-3); }
