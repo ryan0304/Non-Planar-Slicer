@@ -81,6 +81,12 @@
   }
 
   function starShape(radius, points, depth){
+    // Mirror serve.py's STAR_POINTS_MIN/MAX and STAR_DEPTH_MIN/MAX so a
+    // loaded design JSON that skips bindNumber's <input min/max> clamp
+    // (viewer/index.html #d-starpoints/#d-stardepth) still previews what
+    // the server will actually build, not the raw out-of-range value.
+    points = Math.max(3, Math.min(12, Math.round(points)));
+    depth = Math.max(0, Math.min(1, depth));
     return function(theta){
       return radius * (1.0 - depth * 0.5 * (1 - Math.cos(points * theta)));
     };

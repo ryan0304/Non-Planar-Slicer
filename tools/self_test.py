@@ -423,6 +423,120 @@ def t_guards(srv: Server) -> None:
     check(st == 400, "unknown shape rejected as 400", "status %s" % st)
 
 
+def t_star(srv: Server) -> None:
+    """star_points / star_depth must be clamped server-side, not just by the
+    UI's <input min/max>. A raw HTTP client (or a loaded design JSON that
+    skips bindNumber's clamp) can send anything; the server used to pass it
+    straight to the generator unclamped.
+
+    Generation is fully deterministic (no randomness, no timestamps in the
+    output), so two requests with the same effective parameters produce
+    byte-identical G-code -- that lets an out-of-range request be checked
+    against the clamped-in-range one it should equal, without parsing
+    geometry at all.
+    """
+    print("\n-- star points / depth clamp -----------------------------------")
+    base = {"shape": "star", "radius": 25, "height": 20, "layer_height": 0.3}
+
+    def gcode_of(**extra):
+        st, j = gen(srv, dict(base, **extra))
+        return st, (j.get("gcode") if st == 200 else j)
+
+    st_hi, g_hi = gcode_of(star_points=999)
+    st_max, g_max = gcode_of(star_points=12)
+    if check(st_hi == 200 and st_max == 200,
+             "over-max star_points accepted (clamped, not rejected)",
+             "status %s / %s" % (st_hi, st_max)):
+        check(g_hi == g_max, "star_points=999 clamps to the same output as 12")
+
+    st_lo, g_lo = gcode_of(star_points=0)
+    st_neg, g_neg = gcode_of(star_points=-7)
+    st_min, g_min = gcode_of(star_points=3)
+    if check(st_lo == 200 and st_neg == 200 and st_min == 200,
+             "star_points<=0 accepted (clamped, not rejected)",
+             "status %s / %s / %s" % (st_lo, st_neg, st_min)):
+        check(g_lo == g_min, "star_points=0 clamps to the same output as 3")
+        check(g_neg == g_min, "star_points=-7 clamps to the same output as 3")
+
+    st_dhi, g_dhi = gcode_of(star_depth=50)
+    st_dmax, g_dmax = gcode_of(star_depth=1.0)
+    if check(st_dhi == 200 and st_dmax == 200,
+             "over-max star_depth accepted (clamped, not rejected)",
+             "status %s / %s" % (st_dhi, st_dmax)):
+        check(g_dhi == g_dmax, "star_depth=50 clamps to the same output as 1.0")
+
+    st_dlo, g_dlo = gcode_of(star_depth=-1)
+    st_dmin, g_dmin = gcode_of(star_depth=0.0)
+    if check(st_dlo == 200 and st_dmin == 200,
+             "negative star_depth accepted (clamped, not rejected)",
+             "status %s / %s" % (st_dlo, st_dmin)):
+        check(g_dlo == g_dmin, "star_depth=-1 clamps to the same output as 0.0")
+
+    # The clamp must land on the ceiling, not silently collapse to the
+    # default -- prove star_points actually varies the output at all.
+    st_def, g_def = gcode_of(star_points=5)
+    if check(st_def == 200, "default star_points=5 generates", "status %s" % st_def):
+        check(g_hi != g_def,
+              "clamped star_points=999 output differs from the default (5)")
+
+    # Direct geometric confirmation: count lobes on the actual toolpath,
+    # mirroring how the amplitude-clamp test above inspects emitted Z steps.
+    def star_lobes(gcode):
+        pts = []
+        x = y = 0.0
+        for ln in gcode.splitlines():
+            if ln[:3] not in ("G1 ", "G0 "):
+                continue
+            d = {t[0]: t[1:] for t in ln.split()[1:] if t and t[0] in "XYE"}
+            try:
+                x = float(d.get("X", x)); y = float(d.get("Y", y))
+            except ValueError:
+                continue
+            if "E" in d:
+                pts.append((x, y))
+        if len(pts) < 240:
+            return None
+        window = pts[len(pts) // 2: len(pts) // 2 + 240]
+        cx = sum(p[0] for p in window) / len(window)
+        cy = sum(p[1] for p in window) / len(window)
+        radii = [math.hypot(px - cx, py - cy) for px, py in window]
+        mean_r = sum(radii) / len(radii)
+        crossings = 0
+        below = radii[0] < mean_r
+        for r in radii[1:]:
+            now_below = r < mean_r
+            if now_below != below and not now_below:
+                crossings += 1
+            below = now_below
+        return crossings
+
+    # 12 / 3 are serve.py's STAR_POINTS_MAX / STAR_POINTS_MIN; kept as literals
+    # here (this file talks to the server only over HTTP, never imports it).
+    lobes_hi = star_lobes(g_hi) if st_hi == 200 else None
+    lobes_lo = star_lobes(g_lo) if st_lo == 200 else None
+    if lobes_hi is not None:
+        check(abs(lobes_hi - 12) <= 1,
+              "a 999-point star really prints 12 lobes", "measured %s" % lobes_hi)
+    else:
+        check(False, "could not sample lobes for star_points=999")
+    if lobes_lo is not None:
+        check(abs(lobes_lo - 3) <= 1,
+              "a 0-point star really prints 3 lobes", "measured %s" % lobes_lo)
+    else:
+        check(False, "could not sample lobes for star_points=0")
+
+    # Both call sites that build a star cross-section (live generate and the
+    # STL export path) must apply the same clamp, or the exported solid could
+    # differ from the printed wall just because one path validated harder.
+    st_ehi, g_ehi = post(srv, "/api/export_stl", dict(base, star_points=999), raw=True)
+    st_emax, g_emax = post(srv, "/api/export_stl", dict(base, star_points=12), raw=True)
+    if check(st_ehi == 200 and st_emax == 200,
+             "export_stl accepts over-max star_points (clamped, not rejected)",
+             "status %s / %s" % (st_ehi, st_emax)):
+        check(g_ehi == g_emax,
+              "export_stl: star_points=999 clamps to the same STL as 12")
+
+
 def t_loop_fabric(srv: Server) -> None:
     """Loop fabric must lay rows the machine can actually build on.
 
@@ -580,7 +694,7 @@ def main() -> int:
     t0 = time.time()
     with Server(port) as srv:
         for fn in (t_profiles, t_parametric, t_surface, t_mesh,
-                   t_streaming, t_guards, t_loop_fabric, t_export):
+                   t_streaming, t_guards, t_star, t_loop_fabric, t_export):
             try:
                 fn(srv)
             except Exception as e:

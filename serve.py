@@ -322,6 +322,14 @@ def loop_row_ceiling(profile) -> float:
 
 # Server-side safety ceilings (mirror the UI clamps).
 RADIUS_SCALE_MIN, RADIUS_SCALE_MAX = 0.2, 1.5
+# Mirrors viewer/index.html's #d-starpoints / #d-stardepth min/max attributes.
+# The floor matters because cos() is even, so points < 3 doesn't just look
+# odd -- it's indistinguishable from a plain circle. The ceiling matters
+# because the spiral is sampled at a fixed points_per_turn (240, see
+# generate_design() below): above ~120 lobes the cross-section aliases into
+# XY jumps of a large fraction of depth*radius at full print speed.
+STAR_POINTS_MIN, STAR_POINTS_MAX = 3, 12
+STAR_DEPTH_MIN, STAR_DEPTH_MAX = 0.0, 1.0
 # Fallback ONLY for a profile object that lacks quality_slope_max entirely
 # (e.g. a bare object built outside PrinterProfile's dataclass default) --
 # see slope_ceiling() above. Every real PrinterProfile carries its own
@@ -425,6 +433,31 @@ def _make_smooth_interp(points, clamp_lo, clamp_hi):
         return pts[-1][1]
 
     return f
+
+
+def _parse_star(body):
+    """Read + clamp star_points/star_depth from a request body.
+
+    Mirrors viewer/index.html's #d-starpoints / #d-stardepth min/max so a
+    client that skips the browser (or a loaded design JSON that skips
+    bindNumber's clamp) can never hand the generator an out-of-range lobe
+    count or depth. Non-finite values (NaN/Infinity) never reach here --
+    _read_json_body rejects those for the whole request body before any
+    field-level parsing runs, so this only needs to handle range and type.
+
+    One helper shared by both call sites (generate_design and
+    _export_contours_parametric) rather than duplicating the clamp inline:
+    the two lines were already duplicated verbatim and still drifted into
+    being the only unclamped pair in either function.
+    """
+    try:
+        points = int(body.get("star_points", 5))
+        depth = float(body.get("star_depth", 0.35))
+    except (TypeError, ValueError):
+        raise ValueError("star_points/star_depth must be numbers")
+    points = max(STAR_POINTS_MIN, min(points, STAR_POINTS_MAX))
+    depth = max(STAR_DEPTH_MIN, min(depth, STAR_DEPTH_MAX))
+    return points, depth
 
 
 def _make_shape(name, radius, star_points=5, star_depth=0.35):
@@ -854,8 +887,7 @@ def generate_design(body):
     spacing_factor = max(0.8, min(float(body.get("first_layer_spacing_factor", 1.25)), 1.5))
     filament = body.get("filament", None)
     print_speed = float(body.get("print_speed", 40.0))
-    star_points = int(body.get("star_points", 5))
-    star_depth = float(body.get("star_depth", 0.35))
+    star_points, star_depth = _parse_star(body)
 
     # Symmetry-breaking: leaning spine + elliptical cross-section.
     spine_mm = max(0.0, min(float(body.get("spine_mm", 0.0)), 20.0))
@@ -1884,8 +1916,7 @@ def _export_contours_parametric(body):
     height = float(body.get("height", 60.0))
     layer_height = float(body.get("layer_height", 0.30))
     points_per_turn = int(body.get("points_per_turn", 240))
-    star_points = int(body.get("star_points", 5))
-    star_depth = float(body.get("star_depth", 0.35))
+    star_points, star_depth = _parse_star(body)
 
     radius_profile = body.get("radius_profile") or [[0, 1.0], [1, 1.0]]
     radius_profile_smooth = bool(body.get("radius_profile_smooth", False))

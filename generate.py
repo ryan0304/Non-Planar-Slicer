@@ -29,11 +29,11 @@ from trident_gcode.generators import (
 )
 
 
-def make_shape(name: str, radius: float):
+def make_shape(name: str, radius: float, star_points: int = 5, star_depth: float = 0.35):
     if name == "circle":
         return circle(radius)
     if name == "star":
-        return star(radius, points=5, depth=0.35)
+        return star(radius, points=star_points, depth=star_depth)
     if name == "square":
         return superellipse(radius, n=4.0)
     raise SystemExit(f"unknown shape: {name}")
@@ -132,6 +132,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--surface-shells", type=int, default=1, help="stacked conformal shells (thickness)")
     ap.add_argument("--surface-scale", type=float, default=1.0, help="scale for --surface stl")
     ap.add_argument("--shape", default="circle", choices=["circle", "star", "square"])
+    ap.add_argument("--star-points", type=int, default=5, help="lobes on the star, >=3 (--shape star only)")
+    ap.add_argument("--star-depth", type=float, default=0.35, help="lobe depth, 0..1 of radius (--shape star only)")
     ap.add_argument("--radius", type=float, default=35.0, help="base radius (mm)")
     ap.add_argument("--height", type=float, default=60.0, help="total height (mm)")
     ap.add_argument("--layer-height", type=float, default=0.30, help="spiral pitch (mm/turn)")
@@ -232,6 +234,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # Pass 2: full parse (with config defaults baked in).
     args = ap.parse_args(argv)
+
+    if args.shape == "star":
+        if args.star_points < 3:
+            print("ERROR: --star-points must be at least 3 (fewer lobes is just a circle)",
+                  file=sys.stderr)
+            return 1
+        if not (0.0 <= args.star_depth <= 1.0):
+            print("ERROR: --star-depth must be between 0 and 1 (fraction of radius)",
+                  file=sys.stderr)
+            return 1
 
     # ---- printer meta-commands (list / import) -------------------------------
     # Both exit before touching generation at all -- neither needs --out etc.
@@ -427,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
                 r_fade_in=args.pattern_fade_in,
                 r_fade_out=args.pattern_fade_out,
             )
-            shape = make_shape(args.shape, args.radius)
+            shape = make_shape(args.shape, args.radius, args.star_points, args.star_depth)
             report = build_continuous_spiral(
                 writer, spec, shape=shape, center=center,
                 first_layer_squish=args.first_layer_squish,
