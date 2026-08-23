@@ -635,9 +635,10 @@ def test_auto_repair_start_gcode():
     check(heads_b == ["M140", "M190", "M104", "M109", "PRINT_HUAXIAN", "G1", "M83"],
           "repair: with no G28 at all, heating lands directly after M140", str(heads_b))
 
-    # --- C. heating already present (any of the 4 forms) -> no repair at all ---
-    for existing in ("G28\nM104 S200\nM83", "G28\nM109 S200\nM83",
-                     "G28\nM140 S60\nM83", "G28\nM190 S60\nM83"):
+    # --- C. heating already present with BOTH set and wait -> no repair ---
+    # M109/M190 each already imply both "set" and "wait" for their axis, so
+    # these two are genuinely complete and stay a no-op.
+    for existing in ("G28\nM109 S200\nM83", "G28\nM190 S60\nM83"):
         clean_c, issues_c, _s = sanitize_gcode(existing, "start", repair=True)
         check(clean_c == existing,
               f"repair: no-op when heating already present ({existing.splitlines()[1]})",
@@ -645,6 +646,34 @@ def test_auto_repair_start_gcode():
         check(not any("automatically added" in i.message.lower() for i in issues_c),
               "repair: no repair issue is raised when heating is already present",
               str([i.message for i in issues_c]))
+
+    # --- C2. a bare SET with no WAIT (M104 alone / M140 alone) is INCOMPLETE
+    # heating -- M104/M140 return immediately, so the print could start
+    # moving/extruding before the target temperature is actually reached.
+    # The missing wait command is inserted right after the existing set.
+    clean_c2, issues_c2, _s = sanitize_gcode("G28\nM104 S200\nM83", "start", repair=True)
+    lines_c2 = clean_c2.splitlines()
+    check(lines_c2 == ["G28", "M104 S200", "M109 S{nozzle_temp:.0f}       ; [auto-added] "
+                        "wait for the nozzle to reach temp (was set but never waited on)", "M83"],
+          "repair: a bare M104 gets M109 inserted right after it", clean_c2)
+    check(any("never waits for it" in i.message and "M109" in i.message for i in issues_c2),
+          "repair: a repair issue explains the missing M109 wait", str([i.message for i in issues_c2]))
+
+    clean_c3, issues_c3, _s = sanitize_gcode("G28\nM140 S60\nM83", "start", repair=True)
+    lines_c3 = clean_c3.splitlines()
+    check(lines_c3 == ["G28", "M140 S60", "M190 S{bed_temp:.0f}          ; [auto-added] "
+                        "wait for the bed to finish heating (was set but never waited on)", "M83"],
+          "repair: a bare M140 gets M190 inserted right after it", clean_c3)
+    check(any("never waits for it" in i.message and "M190" in i.message for i in issues_c3),
+          "repair: a repair issue explains the missing M190 wait", str([i.message for i in issues_c3]))
+
+    # --- C3. one axis entirely absent while the other is present/partial is
+    # flagged, not auto-inserted (no single obviously-correct placement).
+    clean_c4, issues_c4, _s = sanitize_gcode("G28\nM104 S200\nM109 S200\nM83", "start", repair=True)
+    check("M140" not in clean_c4 and "M190" not in clean_c4,
+          "repair: a fully-absent bed axis is not auto-inserted", clean_c4)
+    check(any("never heats the bed" in i.message for i in issues_c4),
+          "repair: a fully-absent bed axis is flagged with a warning", str([i.message for i in issues_c4]))
 
     # --- D. a parameterized start-macro call counts as heating -> no repair ---
     clean_d, _issues_d, _s = sanitize_gcode(

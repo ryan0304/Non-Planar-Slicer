@@ -329,7 +329,13 @@ def _has_parameterized_start_macro_call(code: str) -> bool:
     return False
 
 
-_TEMP_CMD_RE = re.compile(r'^\s*(M109|M190|M104|M140)\b', re.IGNORECASE)
+# M104/M140 SET a target and return immediately; M109/M190 SET **and wait**
+# for it to be reached. A block with only the non-blocking form is not
+# actually done heating -- see _repair_missing_heating.
+_M104_RE = re.compile(r'^\s*M104\b', re.IGNORECASE)
+_M109_RE = re.compile(r'^\s*M109\b', re.IGNORECASE)
+_M140_RE = re.compile(r'^\s*M140\b', re.IGNORECASE)
+_M190_RE = re.compile(r'^\s*M190\b', re.IGNORECASE)
 _G28_LINE_RE = re.compile(r'^\s*G28\b', re.IGNORECASE)
 _M82_LINE_RE = re.compile(r'^\s*M82\b', re.IGNORECASE)
 _M83_LINE_RE = re.compile(r'^\s*M83\b', re.IGNORECASE)
@@ -337,9 +343,22 @@ _M83_LINE_RE = re.compile(r'^\s*M83\b', re.IGNORECASE)
 _AUTO_TAG = "[auto-added]"
 
 
+def _last_line_index(lines: list[str], cmd_re: re.Pattern) -> int | None:
+    """Index of the LAST line in ``lines`` whose command text (','-free of
+    inline ';' comments and '(...)' asides) matches ``cmd_re``, or None."""
+    idx = None
+    for i, ln in enumerate(lines):
+        code = ln.split(";", 1)[0]
+        code = re.sub(r'\([^)]*\)', " ", code)
+        if cmd_re.match(code):
+            idx = i
+    return idx
+
+
 def _repair_missing_heating(text: str) -> tuple[str, list[Issue]]:
     """Insert heating (and M83, if also missing) into a start G-code block
-    that has none of it at all.
+    that has none of it at all, or complete a block that SETS a temperature
+    (M104/M140) but never WAITS for it (no M109/M190).
 
     Real report that motivated this: a Klipper PRINT_START macro with no
     EXTRUDER/BED params got inlined verbatim by the importer (see
@@ -367,25 +386,49 @@ def _repair_missing_heating(text: str) -> tuple[str, list[Issue]]:
         G-code, and it lands after any macro call the block makes (which
         might itself set M82 or M83).
 
-    Only called when repair=True (import time only -- see sanitize_gcode)
-    AND only when NO heating is present in any recognised form: an explicit
-    M104/M109/M140/M190 command, or a start-macro call that itself carries
-    parameters (see _has_parameterized_start_macro_call). A comment that
-    merely MENTIONS one of those commands does not count -- ``text`` here is
-    expected to already have had '#' rewritten to ';' and placeholders
-    normalized/escaped (sanitize_gcode's ordering), so _command_text(text)
-    reflects only what the printer would actually execute.
+    Only called when repair=True (import time only -- see sanitize_gcode). A
+    start-macro call that itself carries parameters (see
+    _has_parameterized_start_macro_call) always suppresses repair entirely --
+    the macro is assumed to handle its own heating. Otherwise there are three
+    cases:
+
+      1. No heating in any form at all: insert the full M140/M190/M104/M109
+         block described below (and M83, if that's also missing).
+      2. A SET command is present with no matching WAIT (M104 with no M109,
+         or M140 with no M190): M104/M140 return immediately, so the block
+         only LOOKS like it heats -- the print can start moving/extruding
+         while the nozzle or bed is still cold. Insert just the missing wait
+         command right after the existing set command.
+      3. One axis is fully absent while the other is present or partial:
+         flagged with a warning rather than auto-inserted, since there is no
+         single obviously-correct place to add a brand-new M140/M190 pair
+         without risking a worse interaction with the rest of the block.
+
+    A comment that merely MENTIONS one of these commands does not count --
+    ``text`` here is expected to already have had '#' rewritten to ';' and
+    placeholders normalized/escaped (sanitize_gcode's ordering), so
+    _command_text(text) reflects only what the printer would actually
+    execute.
 
     Returns (possibly-modified text, extra Issues to report). Never touches
     ``text`` at all (returns it unchanged, with an empty issue list) when
-    heating is already present in either of the forms above.
+    heating is already fully present (M109 AND M190, or a parameterized
+    macro call).
     """
     code_lines = _command_text(text).splitlines()
 
-    has_temp = any(_TEMP_CMD_RE.match(ln) for ln in code_lines)
+    has_m104 = any(_M104_RE.match(ln) for ln in code_lines)
+    has_m109 = any(_M109_RE.match(ln) for ln in code_lines)
+    has_m140 = any(_M140_RE.match(ln) for ln in code_lines)
+    has_m190 = any(_M190_RE.match(ln) for ln in code_lines)
+    has_temp = has_m104 or has_m109 or has_m140 or has_m190
     has_macro_params = _has_parameterized_start_macro_call("\n".join(code_lines))
-    if has_temp or has_macro_params:
+    if has_macro_params:
         return text, []
+
+    if has_temp:
+        return _repair_incomplete_heating(
+            text, has_m104=has_m104, has_m109=has_m109, has_m140=has_m140, has_m190=has_m190)
 
     lines = text.splitlines()
 
@@ -430,6 +473,61 @@ def _repair_missing_heating(text: str) -> tuple[str, list[Issue]]:
             "per move). Line is marked " + _AUTO_TAG + " -- review it before printing.",
             "warn"))
 
+    return "\n".join(lines), issues
+
+
+def _repair_incomplete_heating(text: str, *, has_m104: bool, has_m109: bool,
+                                has_m140: bool, has_m190: bool) -> tuple[str, list[Issue]]:
+    """Handle case 2 and case 3 of _repair_missing_heating's docstring: some
+    heating is present, but it is not both SET and WAITED-for on both axes.
+
+    Only called when at least one of M104/M109/M140/M190 is present (a fully
+    empty block goes through _repair_missing_heating's own full-block path
+    instead, so its M140/M190/M104/M109 ordering is untouched by this
+    function).
+    """
+    lines = text.splitlines()
+    issues: list[Issue] = []
+
+    if has_m140 and not has_m190:
+        idx = _last_line_index(lines, _M140_RE)
+        lines.insert(idx + 1, "M190 S{bed_temp:.0f}          ; " + _AUTO_TAG +
+                     " wait for the bed to finish heating (was set but never waited on)")
+        issues.append(Issue(
+            "start_gcode",
+            "start G-code sets the bed temperature (M140) but never waits for it (no "
+            "M190) -- M140 does not block, so the print could start on a cold bed. "
+            "Automatically added M190 right after the existing M140. Line is marked " +
+            _AUTO_TAG + " -- review it before printing.",
+            "warn"))
+    elif not has_m140 and not has_m190:
+        issues.append(Issue(
+            "start_gcode",
+            "start G-code never heats the bed (no M140/M190), though it does set up "
+            "other heating -- the print may start on a cold bed. Add M140/M190 by hand.",
+            "warn"))
+
+    if has_m104 and not has_m109:
+        idx = _last_line_index(lines, _M104_RE)
+        lines.insert(idx + 1, "M109 S{nozzle_temp:.0f}       ; " + _AUTO_TAG +
+                     " wait for the nozzle to reach temp (was set but never waited on)")
+        issues.append(Issue(
+            "start_gcode",
+            "start G-code sets the nozzle temperature (M104) but never waits for it "
+            "(no M109) -- M104 does not block, so the print could start extruding "
+            "cold. Automatically added M109 right after the existing M104. Line is "
+            "marked " + _AUTO_TAG + " -- review it before printing.",
+            "warn"))
+    elif not has_m104 and not has_m109:
+        issues.append(Issue(
+            "start_gcode",
+            "start G-code never heats the nozzle (no M104/M109), though it does set "
+            "up other heating -- the print may start extruding cold. Add M104/M109 by "
+            "hand.",
+            "warn"))
+
+    if not issues:
+        return text, []
     return "\n".join(lines), issues
 
 
@@ -550,14 +648,36 @@ def sanitize_gcode(text: str, kind: str, *, allow_raw_gcode: bool = False, repai
                 "start G-code never homes the printer; the first move would "
                 "crash into the bed. Add G28.",
                 "error"))
-        has_temp = bool(re.search(r'^\s*(M109|M190|M104|M140)\b', code,
-                                   re.IGNORECASE | re.MULTILINE))
+        has_m104_p = bool(re.search(r'^\s*M104\b', code, re.IGNORECASE | re.MULTILINE))
+        has_m109_p = bool(re.search(r'^\s*M109\b', code, re.IGNORECASE | re.MULTILINE))
+        has_m140_p = bool(re.search(r'^\s*M140\b', code, re.IGNORECASE | re.MULTILINE))
+        has_m190_p = bool(re.search(r'^\s*M190\b', code, re.IGNORECASE | re.MULTILINE))
+        has_temp = has_m104_p or has_m109_p or has_m140_p or has_m190_p
         if not has_temp and not has_macro:
             issues.append(Issue(
                 "start_gcode",
                 "start G-code never sets a temperature; the printer may try "
                 "to extrude cold.",
                 "warn"))
+        elif not has_macro:
+            # M104/M140 SET a target and return immediately; only M109/M190
+            # actually WAIT for it. A set-without-wait means the print can
+            # start moving/extruding before the target temperature is
+            # reached, even though "some" heating command is present.
+            if has_m104_p and not has_m109_p:
+                issues.append(Issue(
+                    "start_gcode",
+                    "start G-code sets the nozzle temperature (M104) but never waits "
+                    "for it (no M109) - the printer may start extruding before the "
+                    "nozzle reaches temperature.",
+                    "warn"))
+            if has_m140_p and not has_m190_p:
+                issues.append(Issue(
+                    "start_gcode",
+                    "start G-code sets the bed temperature (M140) but never waits for "
+                    "it (no M190) - the print may start on a bed that has not reached "
+                    "temperature.",
+                    "warn"))
         # The generator emits RELATIVE extrusion (an E delta per move), so an
         # explicit M82 is worse than saying nothing: absolute mode reads every
         # small delta as an absolute target and the extruder grinds/over-
