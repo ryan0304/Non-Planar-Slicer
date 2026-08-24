@@ -3382,6 +3382,14 @@ let measureRepositionCard = function(){};
     } catch(e){}
   }
 
+  // The double-click reset below has no visible affordance, so this is its
+  // only discoverability: a title only appears once there is something to
+  // reset, on the rail itself rather than #tool-measure so it doesn't
+  // compete with that button's own "(M)" shortcut hint.
+  function updateResetHint(){
+    rail.title = hasCustomPos ? 'Double-click to reset to the edge' : '';
+  }
+
   function endDrag(){
     armed = false;
     if(!dragging) return;
@@ -3398,6 +3406,7 @@ let measureRepositionCard = function(){};
     setTimeout(function(){ suppressClick = false; }, 0);
     rail.classList.remove('rail-dragging');
     savePos();
+    updateResetHint();
     measureRepositionCard();   // the card follows, unless it has its own custom spot
   }
 
@@ -3455,12 +3464,34 @@ let measureRepositionCard = function(){};
     measureRepositionCard();
   });
 
+  // Double-click resets the rail back to its CSS-anchored default (right
+  // edge). There is deliberately no visible reset control here (see the
+  // "no grip strip" note above) -- once a drag has stuck the rail somewhere
+  // awkward, a plain click can't fix it (that's the button's primary
+  // action), so the un-stick gesture has to be something a plain click
+  // never produces. Clearing the SAVED key matters as much as clearing the
+  // inline style: without it, a page loaded before this reset -- another
+  // tab, still sitting on the old dragged position in memory -- can resave
+  // that stale position on its own next resize and undo the reset from
+  // outside this page entirely.
+  rail.addEventListener('dblclick', function(){
+    if(!hasCustomPos) return;
+    hasCustomPos = false;
+    rail.style.left = '';
+    rail.style.top = '';
+    rail.style.right = '';
+    try { localStorage.removeItem(RAIL_POS_KEY); } catch(e){}
+    updateResetHint();
+    measureRepositionCard();
+  });
+
   let storedPos = null;
   try { storedPos = JSON.parse(localStorage.getItem(RAIL_POS_KEY) || 'null'); } catch(e){}
   if(storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)){
     hasCustomPos = true;
     applyPos(storedPos.left, storedPos.top);
   }
+  updateResetHint();
 })();
 
 // ---- measure card: drag / lock / reset -------------------------------------
