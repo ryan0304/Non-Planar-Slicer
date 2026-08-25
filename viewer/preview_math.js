@@ -703,8 +703,9 @@
   }
 
   // Builds the whole fabric as world-space line segments. `radiusAt(theta, z)`
-  // mirrors loop_fabric.py's _radius(): shape * envelope * cage, sampled at the
-  // height fraction of the point being emitted -- NOT at a fixed t.
+  // mirrors loop_fabric.py's _radius(): twisted-shape-angle * envelope * cage,
+  // sampled at the height fraction of the point being emitted -- NOT at a
+  // fixed t.
   function buildLoopFabricPreview(design, lf, radiusAt, height, cuffLh, squish, nozzle){
     var segs = [];
     // strand_h = clamp(nozzle_diameter, 0.3, 0.6) -- the bead is decoupled from
@@ -948,11 +949,15 @@
       var lf = resolveLoopFabric(design, radius);
       if(lf){
         // loop_fabric.py's _radius(): shape * envelope * cage at the height
-        // fraction of the point being emitted. No ovality, spine or twist --
-        // build_loop_fabric() is not given them.
+        // fraction of the point being emitted. xy_twist rotates the SHAPE
+        // angle only (matching paths.py's spiral_path()) -- the envelope
+        // stays a function of height alone and the cage stays anchored to
+        // the bed. No ovality or spine -- build_loop_fabric() is not given
+        // them.
         var radiusAt = function(theta, z){
           var t = Math.min(1.0, Math.max(0.0, z / Math.max(height, 1e-6)));
-          var rr = shapeFn(theta) * radFn(t);
+          var shapeAngle = theta - xyTwist * TWO_PI * t;
+          var rr = shapeFn(shapeAngle) * radFn(t);
           if(design.cage && design.cage.length >= 2){
             rr *= cageScale(design.cage, theta, t);
           }

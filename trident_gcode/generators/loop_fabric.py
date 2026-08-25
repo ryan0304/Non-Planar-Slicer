@@ -49,6 +49,7 @@ def build_loop_fabric(
     height: float,
     spec: LoopSpec,
     radius_envelope: Callable[[float], float] | None = None,
+    xy_twist_turns: float = 0.0,
     cage: list | None = None,
     center: tuple[float, float] | None = None,
     first_layer_squish: float = 0.75,
@@ -64,6 +65,11 @@ def build_loop_fabric(
     ramp against (it's stitches, not a wall), so unlike the parametric wall
     there is no min->max overhang ramp here -- just a flat commanded speed.
     None (default) falls back to ``writer.fan_speed``, byte-identical output.
+
+    ``xy_twist_turns`` rotates the cross-section with height (full turns over
+    the whole height), exactly as spiral_path() does for the parametric wall:
+    only the SHAPE angle twists -- the silhouette envelope is a function of
+    height alone and the cage stays anchored to the bed.
     """
     profile = writer.profile
     cx, cy = center if center is not None else profile.bed_center
@@ -130,7 +136,8 @@ def build_loop_fabric(
 
     def _radius(theta: float, z: float) -> float:
         t = min(1.0, max(0.0, z / max(height, 1e-6)))
-        r = shape(theta)
+        # twist the SHAPE angle only (paths.py:219)
+        r = shape(theta - xy_twist_turns * 2.0 * math.pi * t)
         if radius_envelope is not None:
             r *= radius_envelope(t)
         if cage is not None:
@@ -157,9 +164,18 @@ def build_loop_fabric(
 
     # ---- safety ----------------------------------------------------------------
     max_r = 0.0
+    # A twisted cross-section sweeps across a BED-anchored cage, so the widest
+    # footprint can land at a height the three-sample scan never looks at (the
+    # untwisted case cannot: shape() alone is rotationally periodic and the
+    # envelope depends on height only). Sample densely only in that case, so an
+    # untwisted design runs identical code and can never newly refuse.
+    if xy_twist_turns != 0.0 and cage is not None:
+        z_levels = tuple(height * k / 8.0 for k in range(9))
+    else:
+        z_levels = (0.0, height * 0.5, height)
     for k in range(points_per_turn):
         th = 2.0 * math.pi * k / points_per_turn
-        for zz in (0.0, height * 0.5, height):
+        for zz in z_levels:
             max_r = max(max_r, _radius(th, zz))
     fit_r = max_r + spec.out_mm
     if (cx - fit_r < profile.print_min_x or cx + fit_r > profile.print_max_x

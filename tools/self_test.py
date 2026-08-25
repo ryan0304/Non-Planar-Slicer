@@ -662,6 +662,136 @@ def t_loop_fabric(srv: Server) -> None:
           "loop %s vs row %s"
           % (rep["loop_mm_effective"], rep["row_mm_effective"]))
 
+    # 5. xy_twist must actually rotate the PARAMETRIC loop-fabric wall -- the
+    #    exact bug this fix addresses: a twist parameter that parses and does
+    #    nothing. "A parameter that parses and does nothing is the failure
+    #    mode worth testing" (see t_mesh above) -- but top_bottom_angles there
+    #    is not reusable as-is: the fabric's first/last extruding points are
+    #    cuff and rim ring points whose angle comes from the ring
+    #    parametrisation, not the shape.
+    #
+    #    Naively picking "the point of maximum radius" per Z band is NOT
+    #    robust here: a 5-point star sampled on a 48-stitch / 240-point grid
+    #    hits exact ties between symmetric lobes (cos() is even, so two
+    #    stitches equidistant in angle from a lobe peak score identically),
+    #    so argmax silently picks whichever tied candidate comes first in
+    #    emission order -- noise, not signal. Instead measure the PHASE of
+    #    the shape's dominant angular harmonic (5, matching the default star
+    #    point count): sum r(theta)*exp(i*5*theta) over a Z band and take the
+    #    angle of the resulting complex number, divided by 5. This is the
+    #    standard way to read off a periodic pattern's rotation and is
+    #    immune to per-stitch ties since it is an aggregate over every point
+    #    in the band, not a single argmax. Verified against a debug run: it
+    #    reproduces exactly 0.00 deg for xy_twist=0 (bit-for-bit symmetric,
+    #    no noise) and a stable, sign-correct reading for xy_twist=0.25.
+    #
+    #    The phase is only defined mod (360/5)=72 deg (a 5-fold pattern looks
+    #    the same after 1/5 turn), so 0.25 turns (90 deg of raw rotation)
+    #    reads back as 90 mod 72 = 18 deg -- not 90. Tolerance stays loose
+    #    (~15 deg): stitches wander in radius by design (loop_out, the loop
+    #    bell), so this is a coarse "did it rotate at all, in the right
+    #    direction, by roughly the right amount" check, not a precision one.
+    def _extrusion_points(gcode):
+        pts = []
+        x = y = z = 0.0
+        for ln in gcode.splitlines():
+            if ln[:3] not in ("G1 ", "G0 "):
+                continue
+            d = {t[0]: t[1:] for t in ln.split()[1:] if t and t[0] in "XYZE"}
+            try:
+                x = float(d.get("X", x)); y = float(d.get("Y", y)); z = float(d.get("Z", z))
+            except ValueError:
+                continue
+            if "E" in d:
+                pts.append((x, y, z))
+        return pts
+
+    _STAR_POINTS = 5    # default star_points (serve.py's _parse_star), matches lf_base below
+    _PITCH_DEG = 360.0 / _STAR_POINTS
+
+    def _harmonic_phase_deg(points_group, cx, cy):
+        sr = si = 0.0
+        for (px, py, _pz) in points_group:
+            r = math.hypot(px - cx, py - cy)
+            th = math.atan2(py - cy, px - cx)
+            sr += r * math.cos(_STAR_POINTS * th)
+            si += r * math.sin(_STAR_POINTS * th)
+        if sr == 0.0 and si == 0.0:
+            return None
+        return math.degrees(math.atan2(si, sr) / _STAR_POINTS)
+
+    def _bottom_top_swing_deg(gcode):
+        """Phase (deg, mod _PITCH_DEG, wrapped to (-_PITCH_DEG/2, _PITCH_DEG/2])
+        of the star's dominant harmonic at the top of the extruded Z range
+        minus the bottom. Bands are 2% of the Z span -- narrow, so each end
+        sits close to its true height fraction (t~0 / t~1) rather than being
+        smeared across a chunk of accumulated twist."""
+        pts = _extrusion_points(gcode)
+        if len(pts) < 20:
+            return None
+        zs = [p[2] for p in pts]
+        zlo, zhi = min(zs), max(zs)
+        band = 0.02 * max(zhi - zlo, 1e-6)
+        bottom = [p for p in pts if p[2] <= zlo + band]
+        top = [p for p in pts if p[2] >= zhi - band]
+        if not bottom or not top:
+            return None
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        ab = _harmonic_phase_deg(bottom, cx, cy)
+        at = _harmonic_phase_deg(top, cx, cy)
+        if ab is None or at is None:
+            return None
+        return ((at - ab + _PITCH_DEG / 2) % _PITCH_DEG) - _PITCH_DEG / 2
+
+    lf_base = {"shape": "star", "radius": 32, "height": 60, "layer_height": 0.3,
+               "loop_spacing_mm": 4.0, "loop_align": "stagger", "loop_cuff": 3}
+    st_t, j_t = gen(srv, dict(lf_base, xy_twist=0.25))
+    st_0, j_0 = gen(srv, dict(lf_base, xy_twist=0))
+    lf_swing_t = None
+    if st_t == 200 and st_0 == 200:
+        lf_swing_t = _bottom_top_swing_deg(j_t["gcode"])
+        lf_swing_0 = _bottom_top_swing_deg(j_0["gcode"])
+        expected = ((0.25 * 360.0 + _PITCH_DEG / 2) % _PITCH_DEG) - _PITCH_DEG / 2
+        if lf_swing_t is not None and lf_swing_0 is not None:
+            check(abs(lf_swing_t - expected) < 15.0,
+                  "parametric loop-fabric xy_twist=0.25 rotates the fabric "
+                  "(expected ~%.0f deg mod %.0f)" % (expected, _PITCH_DEG),
+                  "measured %.1f deg (untwisted baseline %.1f deg)"
+                  % (lf_swing_t, lf_swing_0))
+            check(abs(lf_swing_0) < 15.0,
+                  "parametric loop-fabric xy_twist=0 stays straight (~0 deg)",
+                  "measured %.1f deg" % lf_swing_0)
+        else:
+            check(False, "loop-fabric twist measurable",
+                  "could not sample harmonic phase (swing_t=%s swing_0=%s)"
+                  % (lf_swing_t, lf_swing_0))
+    else:
+        check(False, "loop-fabric xy_twist requests succeeded",
+              "%s / %s" % (st_t, st_0))
+
+    # Sign check: same body WITHOUT loop_spacing_mm routes to the normal wall
+    # (build_continuous_spiral, already correct); twist must advance the SAME
+    # way as loop fabric, or the sign in loop_fabric.py's _radius is flipped.
+    if lf_swing_t is not None:
+        wall_base = dict(lf_base)
+        del wall_base["loop_spacing_mm"]
+        st_wt, j_wt = gen(srv, dict(wall_base, xy_twist=0.25))
+        st_w0, j_w0 = gen(srv, dict(wall_base, xy_twist=0))
+        if st_wt == 200 and st_w0 == 200:
+            wall_swing_t = _bottom_top_swing_deg(j_wt["gcode"])
+            wall_swing_0 = _bottom_top_swing_deg(j_w0["gcode"])
+            if wall_swing_t is not None and wall_swing_0 is not None:
+                check((lf_swing_t > 0) == (wall_swing_t > 0),
+                      "loop-fabric twist direction matches the normal wall",
+                      "loop fabric %.1f deg vs wall %.1f deg"
+                      % (lf_swing_t, wall_swing_t))
+            else:
+                check(False, "wall twist measurable", "could not sample harmonic phase")
+        else:
+            check(False, "wall xy_twist requests succeeded",
+                  "%s / %s" % (st_wt, st_w0))
+
 
 def t_export(srv: Server) -> None:
     print("\n-- STL export ------------------------------------------------")

@@ -85,6 +85,42 @@ def run_profile_spiral_case(tmpdir: Path) -> tuple[bool, str]:
     return True, "OK"
 
 
+def run_loop_fabric_case(tmpdir: Path, ref_name: str, xy_twist_turns: float) -> tuple[bool, str]:
+    """build_loop_fabric has no CLI flag either, so construct it directly --
+    same pattern as run_profile_spiral_case(). Two references exist:
+    ref_loop_fabric.gcode (xy_twist_turns=0.0, generated from PRE-change code
+    to prove the twist formula is a bit-exact no-op at zero) and
+    ref_loop_fabric_twist.gcode (xy_twist_turns=1.5, locking the twist formula
+    and its sign). See regression_ref/MANIFEST.md."""
+    from trident_gcode.profile import PrinterProfile
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.blobs import LoopSpec
+    from trident_gcode.paths import star
+    from trident_gcode.generators.loop_fabric import build_loop_fabric
+
+    ref = REF_DIR / ref_name
+    if not ref.exists():
+        return False, f"reference file missing: {ref}"
+
+    profile = PrinterProfile()
+    writer = GcodeWriter(
+        profile=profile, line_width=0.45, layer_height=0.3,
+        bed_temp=60.0, nozzle_temp=210.0, material="PLA",
+        print_speed=40.0, first_layer_speed=20.0,
+    )
+    spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8,
+                    stitch_mode="dip")
+    build_loop_fabric(writer, shape=star(30.0, 5, 0.3), height=30.0,
+                      spec=spec, xy_twist_turns=xy_twist_turns)
+    out = tmpdir / ref_name
+    writer.save(str(out))
+    generated = out.read_bytes()
+    expected = ref.read_bytes()
+    if generated != expected:
+        return False, f"byte mismatch: generated {len(generated)}b vs reference {len(expected)}b"
+    return True, "OK"
+
+
 def main() -> int:
     sys.path.insert(0, str(ROOT))
     all_ok = True
@@ -98,6 +134,14 @@ def main() -> int:
         ok, msg = run_profile_spiral_case(tmpdir)
         print(f"{'PASS' if ok else 'FAIL'}  {'ref_profile_spiral.gcode':28s} {msg if not ok else ''}")
         all_ok &= ok
+
+        for ref_name, xy_twist_turns in (
+            ("ref_loop_fabric.gcode", 0.0),
+            ("ref_loop_fabric_twist.gcode", 1.5),
+        ):
+            ok, msg = run_loop_fabric_case(tmpdir, ref_name, xy_twist_turns)
+            print(f"{'PASS' if ok else 'FAIL'}  {ref_name:28s} {msg if not ok else ''}")
+            all_ok &= ok
 
     print("ALL PASS" if all_ok else "REGRESSION DETECTED")
     return 0 if all_ok else 1

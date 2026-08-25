@@ -1093,6 +1093,7 @@ def generate_design(body):
         report = build_loop_fabric(
             writer, shape=shape, height=height, spec=loop_spec,
             radius_envelope=radius_fn,
+            xy_twist_turns=xy_twist,
             cage=cage,
             first_layer_squish=squish,
             cuff_lh=layer_height,
