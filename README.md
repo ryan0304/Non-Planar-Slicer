@@ -10,10 +10,14 @@ along an XY path instead of being locked to flat layers.
 
 > ### Read before you print
 >
-> **This output has only ever been verified on one machine: the author's Voron
-> Trident.** Everything here is built to refuse unsafe motion, and those guards
-> are real — but "it passed the validator" is not "it was tested on your
-> printer". Nobody has run this on yours.
+> **This output has been print-verified on exactly one machine: the author's
+> Voron Trident.** As of 2026-08, real testing is also underway on Bambu Lab
+> A1, P1S, and P2S — but "testing is underway" is not "verified": until one of
+> those machines has a confirmed, successful print behind it, treat it exactly
+> like every other un-printed profile in this project. Everything here is
+> built to refuse unsafe motion, and those guards are real — but "it passed
+> the validator" is not "it was tested on your printer". Nobody has run this
+> on yours.
 >
 > Non-planar printing moves the nozzle close to parts of the bed a normal slicer
 > never approaches, so the failure mode is a nozzle or probe striking the plate,
@@ -748,9 +752,12 @@ validated before they ever reach the generator.
 
 What the safety model does **not** cover is worth stating as plainly as what
 it does. It enforces the limits it is given; it cannot tell you those limits
-describe your machine. It has been print-tested on exactly one printer. Treat
-published specs, conservative defaults and derived clearances as informed
-guesses until you have run the machine yourself.
+describe your machine. It has been print-verified on exactly one printer (the
+Trident); Bambu Lab A1/P1S/P2S are actively being tested as of 2026-08 but are
+not yet confirmed (see [Read before you print](#read-before-you-print) and
+[Multi-printer profiles](#multi-printer-profiles)). Treat published specs,
+conservative defaults and derived clearances as informed guesses until you
+have run the machine yourself.
 
 ## Running it for other people
 
