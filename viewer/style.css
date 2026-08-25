@@ -826,8 +826,8 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 
 /* ---- conditional/dependent option blocks -- indented rail signals "these
    rows only apply because of a choice above" (star shape, texture pattern
-   selected, blob/loop style chosen, STL mesh loaded). ---- */
-#star-rows, #pattern-rows, #blob-rows, #loop-rows, #mesh-info {
+   selected, loop style chosen, STL mesh loaded). ---- */
+#star-rows, #pattern-rows, #loop-rows, #mesh-info {
   border-left:2px solid var(--line); padding-left:var(--sp-3); margin-left:2px;
 }
 

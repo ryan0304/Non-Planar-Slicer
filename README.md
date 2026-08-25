@@ -396,16 +396,11 @@ axis) for organic, non-radially-symmetric forms. All three are app-only today
 pipeline as everything else. Cage deformation does not apply to the loop
 fabric pattern (see below) since it isn't a radius-displacement texture.
 
-## Blob and loop-fabric textures (app only)
+## Loop-fabric texture (app only)
 
-Two more wall textures, alongside the seven radius-displacement patterns
-(`trident_gcode/blobs.py`, `trident_gcode/generators/loop_fabric.py`):
+One more wall texture, alongside the seven radius-displacement patterns
+(`trident_gcode/generators/loop_fabric.py`):
 
-- **Blobs** -- discrete raised bumps placed at intervals around and up the
-  wall, with named presets (`dots`, `pearls`, `columns`, `spikes`, `organic`)
-  controlling spacing, jitter, and per-height volume envelope. Good for
-  textured/tactile surfaces that read as deliberate bumps rather than a
-  continuous wave.
 - **Loop fabric** -- a knitted/chainmail-style wall built from small looped
   excursions rather than a plain spiral pass, with presets (`tiedspikes`,
   `chainmail`, `fineknit`, `opennet`, `ribs`, `zigzag`, `scallops`). This
@@ -424,8 +419,8 @@ Two more wall textures, alongside the seven radius-displacement patterns
   Loops setting on an **uploaded mesh** is a different feature — hanging loop
   sites on an ordinary solid wall — and that one does print a base.
 
-Both are configured and previewed in the app (`serve.py` + the designer's
-Texture step); like the cage, they don't yet have `generate.py` CLI flags.
+Configured and previewed in the app (`serve.py` + the designer's Texture
+step); like the cage, it doesn't yet have a `generate.py` CLI flag.
 
 ## Multi-printer profiles
 
@@ -924,7 +919,7 @@ trident_gcode/
   printer_import.py             parse a Klipper/Orca/Cura/Prusa printer config (no validation -- raw only)
   printer_validate.py           the safety core: limits, clamps, G-code sanitation
   printer_store.py              custom printer profiles on disk (custom_printers/)
-  blobs.py                      blob-texture and loop-fabric site placement
+  blobs.py                      loop-fabric hanging-site placement
   fullcontrol_export.py         export any toolpath as a FullControl script
   generators/
     continuous_spiral.py        parametric spiral -> bed-placed G-code
@@ -953,8 +948,8 @@ regression_ref/                 reference G-code checked by tools/check_regressi
 - [x] Wire Orca filament fields (fan, retraction, pressure advance) into emission
 - [x] Config/profile system (`--config` / `--save-config`)
 - [x] Calibration suite (`calibrate.py`) — live-Z disk, flow ladder, Z-amp ladder
-- [x] Asymmetric shaping (3D control cage, spine offset, ovality), blob and loop-fabric
-      textures, multi-printer profiles, mesh upload, undo/redo — app-only so far
+- [x] Asymmetric shaping (3D control cage, spine offset, ovality), loop-fabric
+      texture, multi-printer profiles, mesh upload, undo/redo — app-only so far
 - [x] Variable line width along the path
 - [x] Custom printer import (Klipper cfg / Orca / Prusa) with a validating parser
 - [ ] Feasibility study + prototype for true dynamic tri-Z bed tilt

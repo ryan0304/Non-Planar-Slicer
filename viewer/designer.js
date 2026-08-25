@@ -209,20 +209,6 @@
     sil_mode: "sym",
     cage: null,
     nozzle: "",
-    blob_enable: false,
-    blob_style: "dots",
-    blob_per_turn: 6,
-    blob_spacing_mm: 0,
-    blob_turn_stride: 2,
-    blob_stagger: true,
-    blob_align: "stagger",
-    blob_jitter: 0.5,
-    blob_volume: 3.0,
-    blob_vol_start: 1.0,
-    blob_vol_end: 1.0,
-    blob_dwell: 400,
-    blob_fade_in: 0.15,
-    blob_fade_out: 0.05,
     loop_style: "chainmail",
     loop_per_turn: 0,
     loop_spacing_mm: 4.0,
@@ -283,23 +269,6 @@
   // tell "user changed this" apart from "this just happens to have a value".
   var DEFAULT_DESIGN = JSON.parse(JSON.stringify(design));
 
-  // Legacy migration: designs saved before blob_align existed only carry
-  // blob_stagger. Derive the equivalent alignment so old saves keep behaving
-  // the same way instead of silently reverting to the "stagger" default.
-  function deriveLegacyBlobAlign(loaded){
-    if(loaded && typeof loaded === 'object' &&
-       loaded.hasOwnProperty('blob_stagger') && !loaded.hasOwnProperty('blob_align')){
-      design.blob_align = loaded.blob_stagger ? 'stagger' : 'column';
-    }
-  }
-
-  // Legacy migration: designs saved before blobs/loops became pattern-dropdown
-  // choices carry blob_enable as a separate flag. Fold that into `pattern` so
-  // old saves keep rendering blobs instead of silently losing the texture.
-  function migrateBlobPattern(){
-    if(design.blob_enable && (!design.pattern || design.pattern === '')) design.pattern = 'blobs';
-  }
-
   // Load persisted state, if any (merge over defaults so new fields survive).
   //
   // `cachedDesign` records what was found so the session-restore prompt at the
@@ -325,8 +294,6 @@
     var saved = JSON.parse(localStorage.getItem('design-state') || 'null');
     if(saved && typeof saved === 'object'){
       for(var k in saved){ if(saved.hasOwnProperty(k)) design[k] = saved[k]; }
-      deriveLegacyBlobAlign(saved);
-      migrateBlobPattern();
       // Migrate legacy sil3d boolean (pre mode-bar UI) to the new sil_mode field.
       // Only fires for old saves that predate sil_mode -- once it's saved with
       // a sil_mode value, this branch never re-triggers.
@@ -3329,9 +3296,8 @@
     el.addEventListener('change', function(){ applyValue(true); });
   }
   // `coalesceKey` (optional) lets a caller that adds a SECOND listener to the
-  // same change event (bindBlobSelect / bindLoopSelect, which also flip the
-  // style dropdown to "Custom") fold both writes into one undo entry instead
-  // of leaving two.
+  // same change event (bindLoopSelect, which also flips the style dropdown
+  // to "Custom") fold both writes into one undo entry instead of leaving two.
   function bindSelect(id, field, coalesceKey){
     var el = document.getElementById(id);
     if(!el) return;
@@ -3413,116 +3379,7 @@
     });
   })();
 
-  // Blob texture controls.
-
-  // Named presets bundled into the "Blob style" dropdown. Selecting one
-  // writes every listed field into `design` in one shot; the per-turn count
-  // is left alone for spacing-driven styles (spacing_mm overrides it anyway).
-  var BLOB_STYLES = {
-    dots:    { blob_per_turn:6,  blob_spacing_mm:0,   blob_turn_stride:2, blob_align:'stagger',
-               blob_volume:3.0,  blob_dwell:400, blob_vol_start:1.0, blob_vol_end:1.0 },
-    pearls:  { blob_spacing_mm:3.0, blob_turn_stride:1, blob_align:'stagger',
-               blob_volume:1.2,  blob_dwell:150, blob_vol_start:1.0, blob_vol_end:1.0 },
-    columns: { blob_per_turn:10, blob_spacing_mm:0,   blob_turn_stride:2, blob_align:'column',
-               blob_volume:2.5,  blob_dwell:350, blob_vol_start:1.0, blob_vol_end:1.0 },
-    spikes:  { blob_per_turn:5,  blob_spacing_mm:0,   blob_turn_stride:3, blob_align:'stagger',
-               blob_volume:8.0,  blob_dwell:800, blob_vol_start:1.0, blob_vol_end:1.0 },
-    organic: { blob_per_turn:9,  blob_spacing_mm:0,   blob_turn_stride:2, blob_align:'jitter',
-               blob_jitter:0.8,  blob_volume:2.0, blob_dwell:300, blob_vol_start:0.6, blob_vol_end:1.4 }
-  };
-
-  function refreshBlobJitterRow(){
-    var row = document.getElementById('row-blob-jitter');
-    if(row) row.style.display = design.blob_align === 'jitter' ? '' : 'none';
-  }
-
-  // Pushes the current design.blob_* fields into their DOM controls (used on
-  // style-bundle apply and whenever the whole design is reloaded).
-  function updateBlobControlsFromDesign(){
-    var styleSel = document.getElementById('d-blob-style');
-    if(styleSel) styleSel.value = design.blob_style || 'dots';
-    function setVal(id, v){ var el = document.getElementById(id); if(el) el.value = v; }
-    setVal('d-blob-per-turn', design.blob_per_turn);
-    setVal('d-blob-spacing', design.blob_spacing_mm);
-    setVal('d-blob-stride', design.blob_turn_stride);
-    var alignSel = document.getElementById('d-blob-align');
-    if(alignSel) alignSel.value = design.blob_align;
-    setVal('d-blob-jitter', design.blob_jitter);
-    setVal('d-blob-volume', design.blob_volume);
-    setVal('d-blob-volstart', design.blob_vol_start);
-    setVal('d-blob-volend', design.blob_vol_end);
-    setVal('d-blob-dwell', design.blob_dwell);
-    setVal('d-blob-fadein', design.blob_fade_in);
-    setVal('d-blob-fadeout', design.blob_fade_out);
-    refreshBlobJitterRow();
-  }
-
-  function applyBlobStyle(styleName){
-    design.blob_style = styleName;
-    var bundle = BLOB_STYLES[styleName];
-    if(bundle){
-      for(var k in bundle){ if(bundle.hasOwnProperty(k)) design[k] = bundle[k]; }
-    }
-    updateBlobControlsFromDesign();
-    persistDesign();
-    schedulePreview();
-  }
-
-  // Any manual edit to an individual blob control detaches it from the
-  // selected style bundle (switches the dropdown to "Custom").
-  // `coalesceKey` is the key the control's OWN handler just persisted under,
-  // so the style->Custom switch joins that same undo entry rather than adding
-  // one of its own (see persistDesign's coalescing note).
-  function markBlobCustom(coalesceKey){
-    if(design.blob_style !== 'custom'){
-      design.blob_style = 'custom';
-      var styleSel = document.getElementById('d-blob-style');
-      if(styleSel) styleSel.value = 'custom';
-      persistDesign(coalesceKey || null);
-    }
-  }
-  function bindBlobNumber(id, field, isInt){
-    bindNumber(id, field, isInt);
-    var el = document.getElementById(id);
-    if(el) el.addEventListener('input', function(){ markBlobCustom('num:' + id); });
-  }
-  function bindBlobSelect(id, field){
-    var key = 'sel:' + id;
-    bindSelect(id, field, key);
-    var el = document.getElementById(id);
-    if(el) el.addEventListener('change', function(){
-      markBlobCustom(key);
-      endHistRun();   // a select commits immediately; nothing more to fold in
-    });
-  }
-
-  (function(){
-    var styleSel = document.getElementById('d-blob-style');
-    if(!styleSel) return;
-    styleSel.value = design.blob_style || 'dots';
-    styleSel.addEventListener('change', function(){
-      applyBlobStyle(styleSel.value);
-    });
-  })();
-
-  bindBlobNumber('d-blob-per-turn', 'blob_per_turn', true);
-  bindBlobNumber('d-blob-spacing', 'blob_spacing_mm');
-  bindBlobNumber('d-blob-stride', 'blob_turn_stride', true);
-  bindBlobSelect('d-blob-align', 'blob_align');
-  (function(){
-    var alignSel = document.getElementById('d-blob-align');
-    if(alignSel) alignSel.addEventListener('change', refreshBlobJitterRow);
-  })();
-  bindBlobNumber('d-blob-jitter', 'blob_jitter');
-  bindBlobNumber('d-blob-volume', 'blob_volume');
-  bindBlobNumber('d-blob-volstart', 'blob_vol_start');
-  bindBlobNumber('d-blob-volend', 'blob_vol_end');
-  bindBlobNumber('d-blob-dwell', 'blob_dwell', true);
-  bindBlobNumber('d-blob-fadein', 'blob_fade_in');
-  bindBlobNumber('d-blob-fadeout', 'blob_fade_out');
-  refreshBlobJitterRow();
-
-  // Loop texture controls (mirrors the blob style-bundle mechanism above).
+  // Loop texture controls.
 
   var LOOP_STYLES = {
     tiedspikes:{ loop_spacing_mm:4.0, loop_per_turn:0, loop_align:'stagger',
@@ -3707,8 +3564,10 @@
   }
 
   // Any manual edit to an individual loop control detaches it from the
-  // selected style bundle (switches the dropdown to "Custom").
-  // See markBlobCustom() for why this takes the caller's coalescing key.
+  // selected style bundle (switches the dropdown to "Custom"). Takes the
+  // caller's coalescing key so the style->Custom switch joins that same undo
+  // entry rather than adding one of its own (see persistDesign's coalescing
+  // note).
   function markLoopCustom(coalesceKey){
     if(design.loop_style !== 'custom'){
       design.loop_style = 'custom';
@@ -4300,15 +4159,13 @@
     });
   });
 
-  // Show pattern controls only when a texture is selected: blobs and loops
-  // each have their own row group, wave patterns share #pattern-rows.
+  // Show pattern controls only when a texture is selected: loops have their
+  // own row group, wave patterns share #pattern-rows.
   function refreshPatternRows(){
     var val = document.getElementById('d-pattern').value;
     var waveRows = document.getElementById('pattern-rows');
-    var blobRows = document.getElementById('blob-rows');
     var loopRows = document.getElementById('loop-rows');
-    if(waveRows) waveRows.style.display = (val && val !== 'blobs' && val !== 'loops') ? 'block' : 'none';
-    if(blobRows) blobRows.style.display = (val === 'blobs') ? 'block' : 'none';
+    if(waveRows) waveRows.style.display = (val && val !== 'loops') ? 'block' : 'none';
     if(loopRows) loopRows.style.display = (val === 'loops') ? 'block' : 'none';
   }
   document.getElementById('d-pattern').addEventListener('change', function(){
@@ -4328,7 +4185,7 @@
 
     // conditional block -> the <select> id that controls its visibility
     var BLOCK_CTRL = { 'star-rows':'d-shape', 'pattern-rows':'d-pattern',
-                       'blob-rows':'d-pattern', 'loop-rows':'d-pattern' };
+                       'loop-rows':'d-pattern' };
     var STEP_LABEL = { model:'Model', texture:'Texture', print:'Print', generate:'Generate' };
 
     // build index once over every reachable row in the sidebar
@@ -4712,8 +4569,7 @@
     if(nozzleEl) nozzleEl.value = design.nozzle || '';
     var smoothEl = document.getElementById('sil-smooth');
     if(smoothEl) smoothEl.checked = !!design.radius_profile_smooth;
-    // Blob + loop controls
-    updateBlobControlsFromDesign();
+    // Loop controls
     updateLoopControlsFromDesign();
     // Overhang flow
     var ohSlider = document.getElementById('d-overhang-k');
@@ -4817,8 +4673,6 @@
         var badPath = findNonFiniteNumber(loaded, '');
         if(badPath) throw new Error('non-finite value at ' + badPath + ' (NaN/Infinity are not valid design values)');
         for(var k in loaded){ if(design.hasOwnProperty(k)) design[k] = loaded[k]; }
-        deriveLegacyBlobAlign(loaded);
-        migrateBlobPattern();
         applyDesignToUI();
       } catch(err){
         alert('Could not load design: ' + err.message);
@@ -5108,23 +4962,11 @@
         strength: design.point_radial_push_strength != null ? design.point_radial_push_strength : 1.0
       };
     }
-    // Route texture params by the pattern dropdown: blobs and loops are
-    // site-based textures (server pattern stays null), wave patterns send
-    // the pattern_* fields (and only those get pattern_alternate).
+    // Route texture params by the pattern dropdown: loops are a site-based
+    // texture (server pattern stays null), wave patterns send the pattern_*
+    // fields (and only those get pattern_alternate).
     var patternVal = design.pattern || '';
-    if(patternVal === 'blobs'){
-      body.blob_per_turn = design.blob_per_turn;
-      body.blob_spacing_mm = design.blob_spacing_mm;
-      body.blob_turn_stride = design.blob_turn_stride;
-      body.blob_align = design.blob_align;
-      body.blob_jitter = design.blob_jitter;
-      body.blob_volume = design.blob_volume;
-      body.blob_vol_start = design.blob_vol_start;
-      body.blob_vol_end = design.blob_vol_end;
-      body.blob_dwell = design.blob_dwell;
-      body.blob_fade_in = design.blob_fade_in;
-      body.blob_fade_out = design.blob_fade_out;
-    } else if(patternVal === 'loops'){
+    if(patternVal === 'loops'){
       if(design.loop_per_turn > 0) body.loop_per_turn = Math.round(design.loop_per_turn);
       if(design.loop_spacing_mm > 0) body.loop_spacing_mm = design.loop_spacing_mm;
       body.loop_turn_stride = Math.round(design.loop_turn_stride);

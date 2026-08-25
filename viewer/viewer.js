@@ -1413,7 +1413,7 @@ window.__colorStats = function(){
 // Shows an instant preview from generatePreview() while the user tweaks sliders.
 // Visually distinct from the real G-code path: single accent colour, thinner.
 let previewObj = null;
-let previewBlobObj = null;
+let previewSiteObj = null;
 let previewLabel = null;
 // The measure tool's Design-mode source: the same flat [x0,y0,z0,x1,y1,z1,...]
 // world-space segment array showPreview() draws, plus its bounding box (kept
@@ -1441,11 +1441,11 @@ function disposePreviewObjects(keepActiveCageDrag){
     previewObj.material.dispose();
     previewObj = null;
   }
-  if(previewBlobObj){
-    scene.remove(previewBlobObj);
-    previewBlobObj.geometry.dispose();
-    previewBlobObj.material.dispose();
-    previewBlobObj = null;
+  if(previewSiteObj){
+    scene.remove(previewSiteObj);
+    previewSiteObj.geometry.dispose();
+    previewSiteObj.material.dispose();
+    previewSiteObj = null;
   }
   if(previewLabel) previewLabel.style.display = 'none';
   // NOT while a cage handle is being dragged. hideShapeCage() disposes every
@@ -1518,11 +1518,11 @@ window.showPreview = function(positions){
   previewObj.computeLineDistances();
   scene.add(previewObj);
 
-  // Blob dots (raised-texture site markers), if the design has them.
-  const blobSites = window.__blobPreviewSites;
-  if(blobSites && blobSites.length >= 3){
+  // Site dots (loop-fabric hanging-loop markers), if the design has them.
+  const siteDots = window.__sitePreviewSites;
+  if(siteDots && siteDots.length >= 3){
     const bg = new THREE.BufferGeometry();
-    bg.setAttribute('position', new THREE.Float32BufferAttribute(blobSites, 3));
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(siteDots, 3));
     const bmat = new THREE.PointsMaterial({
       size: 1.6,
       sizeAttenuation: true,
@@ -1530,8 +1530,8 @@ window.showPreview = function(positions){
       transparent: true,
       opacity: 0.9
     });
-    previewBlobObj = new THREE.Points(bg, bmat);
-    scene.add(previewBlobObj);
+    previewSiteObj = new THREE.Points(bg, bmat);
+    scene.add(previewSiteObj);
   }
 
   // "Draft preview" label -- top-right, clear of the telemetry card (which

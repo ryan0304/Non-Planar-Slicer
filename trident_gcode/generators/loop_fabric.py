@@ -391,6 +391,5 @@ def build_loop_fabric(
         "filament_mm": round(writer.total_filament_mm, 1),
         "max_z_rate_mm_s": round(writer.max_z_rate, 2),
         "layer_height_clamp_events": writer.layer_height_clamp_events,
-        "blob_count": 0,
         "bounds": writer.bounds,
     }

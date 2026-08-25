@@ -987,7 +987,7 @@
     // ---- loop fabric: the draft draws the fabric, not a vase with dots ------
     // A parametric loops design goes to build_loop_fabric(), which REPLACES
     // the wall with a cuff + planar stitch rows + a closing rim. The draft
-    // used to show the ordinary spiral wall with blob-style dots marking the
+    // used to show the ordinary spiral wall with round dots marking the
     // stitch sites, so every loop style previewed as the same smooth vase and
     // none of them looked like what would print. Each assertion below is
     // anchored on a number taken from loop_fabric.py's own layout, so the two
@@ -1007,9 +1007,9 @@
     const fabricSegs = w.generatePreview(fabricDesign, fabricSpec);
     const fabricInfo = w.__loopFabricPreview;
 
-    check('a loops design produces a fabric report, not blob dots',
-          !!fabricInfo && w.__blobPreviewSites === null,
-          'info ' + JSON.stringify(fabricInfo) + ', sites ' + w.__blobPreviewSites);
+    check('a loops design produces a fabric report, not site dots',
+          !!fabricInfo && w.__sitePreviewSites === null,
+          'info ' + JSON.stringify(fabricInfo) + ', sites ' + w.__sitePreviewSites);
     // spacing 4.0 on radius 30: round(2*pi*30/4) = 47, under the 48 cap.
     check('stitch count comes from the spacing, like _parse_loop_spec',
           fabricInfo.stitches === 47, 'got ' + fabricInfo.stitches);

@@ -1,6 +1,6 @@
-"""Blob texture placement for non-planar spiral prints.
+"""Loop-site placement for non-planar spiral prints.
 
-Computes which path indices should receive a blob deposit, based on
+Computes which path indices should receive a hanging loop, based on
 configurable spacing, alignment, and fade-in/out parameters.  Pure function
 -- no G-code emission, easy to test and mirror in JS.
 """
@@ -9,28 +9,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-# Alignment modes for blob rows.
+# Alignment modes for loop rows.
 ALIGN_STAGGER = "stagger"   # alternate rows offset by half a pitch (diamond packing)
 ALIGN_COLUMN = "column"     # rows aligned vertically (bead columns)
 ALIGN_JITTER = "jitter"     # deterministic pseudo-random scatter (organic)
 
 ALIGN_MODES = (ALIGN_STAGGER, ALIGN_COLUMN, ALIGN_JITTER)
-
-
-@dataclass
-class BlobSpec:
-    """Parameters controlling blob placement and size."""
-    blobs_per_turn: int = 8       # how many blobs around each turn
-    turn_stride: int = 3          # place blobs every N turns (vertical spacing)
-    stagger: bool = True          # legacy flag; ignored when align is set explicitly
-    align: str = ALIGN_STAGGER    # stagger | column | jitter
-    jitter: float = 0.5           # scatter strength, fraction of blob pitch (align=jitter)
-    volume_mm3: float = 1.5       # material volume per blob
-    volume_scale_start: float = 1.0  # volume multiplier at the base (height envelope)
-    volume_scale_end: float = 1.0    # volume multiplier at the top
-    dwell_after_ms: int = 200     # cooling pause after each blob
-    fade_in: float = 0.15         # height fraction to fade in (no blobs near base)
-    fade_out: float = 0.05        # height fraction to fade out at top
 
 
 def _hash01(row: int, b: int) -> float:
@@ -40,13 +24,6 @@ def _hash01(row: int, b: int) -> float:
     """
     x = math.sin(row * 127.1 + b * 311.7) * 43758.5453
     return x - math.floor(x)
-
-
-def blob_volume_at(height_frac: float, spec: BlobSpec) -> float:
-    """Blob volume (mm^3) at a given height fraction, applying the envelope."""
-    t = min(1.0, max(0.0, height_frac))
-    scale = spec.volume_scale_start + t * (spec.volume_scale_end - spec.volume_scale_start)
-    return max(0.0, spec.volume_mm3 * scale)
 
 
 @dataclass
@@ -87,10 +64,9 @@ class LoopSpec:
     # Scatter strength when align=jitter, as a fraction of stitch pitch. This
     # said "(unused in fabric mode)" and listed only stagger|column above,
     # which was simply wrong: compute_loop_sites() below hands both fields to
-    # the same compute_sites() the blobs use, so jitter has always worked
-    # here. The comment was believed over the code, and the UI controls for it
-    # were never built -- a working feature was unreachable for that reason
-    # alone.
+    # compute_sites(), so jitter has always worked here. The comment was
+    # believed over the code, and the UI controls for it were never built --
+    # a working feature was unreachable for that reason alone.
     jitter: float = 0.5
     row_mm: float = 2.5           # vertical rise per fabric row (spiral pitch)
     up_mm: float = 3.5            # loop height: how far each stitch dips down
@@ -120,10 +96,7 @@ def compute_sites(
     fade_in: float,
     fade_out: float,
 ) -> set[int]:
-    """Generic site placement on the spiral: which path indices get a feature.
-
-    Shared by blob deposits and hanging loops (same lattice/stagger math).
-    """
+    """Generic site placement on the spiral: which path indices get a feature."""
     if per_turn <= 0 or points_per_turn <= 0 or total_points <= 0:
         return set()
     if align not in ALIGN_MODES:
@@ -158,21 +131,6 @@ def compute_sites(
             sites.add(idx)
 
     return sites
-
-
-def compute_blob_sites(
-    total_points: int,
-    points_per_turn: int,
-    blob_spec: BlobSpec,
-) -> set[int]:
-    """Return the set of path indices where blobs should be placed."""
-    align = blob_spec.align if blob_spec.align in ALIGN_MODES else (
-        ALIGN_STAGGER if blob_spec.stagger else ALIGN_COLUMN)
-    return compute_sites(
-        total_points, points_per_turn,
-        blob_spec.blobs_per_turn, blob_spec.turn_stride,
-        align, blob_spec.jitter, blob_spec.fade_in, blob_spec.fade_out,
-    )
 
 
 def compute_loop_sites(

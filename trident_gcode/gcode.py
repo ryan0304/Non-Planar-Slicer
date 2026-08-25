@@ -69,7 +69,6 @@ class GcodeWriter:
     _width_clamp_events: int = 0
     _temp_clamp_events: int = 0
     _last_fan_frac: float | None = None
-    _blob_count: int = 0
     _moves: list = field(default_factory=list)   # (x,y,z,extruding,speed_mm_s) per move
     _bounds: list[float] = field(
         default_factory=lambda: [1e9, 1e9, 1e9, -1e9, -1e9, -1e9]
@@ -228,40 +227,6 @@ class GcodeWriter:
         """Emit G4 dwell. No position change."""
         self._emit(f"G4 P{ms}")
 
-    def extrude_in_place(self, e_mm: float, speed_mm_s: float | None = None) -> None:
-        """Extrude filament at the current XYZ without moving.
-
-        Used to deposit a blob of material. Speed is capped by
-        ``max_volumetric_speed`` if set.
-        """
-        if speed_mm_s is None:
-            speed_mm_s = 5.0  # slow ooze default
-        if self.max_volumetric_speed > 0.0:
-            max_e_speed = self.max_volumetric_speed / self.profile.filament_area
-            speed_mm_s = min(speed_mm_s, max_e_speed)
-        f = speed_mm_s * 60.0
-        self._emit(f"G1 E{e_mm:.5f} F{f:.0f}")
-        self._total_e += e_mm
-        self._moves.append((self._x, self._y, self._z, True, speed_mm_s))
-
-    def blob(self, e_mm: float, dwell_before_ms: int = 0,
-             dwell_after_ms: int = 200, retract_after: bool = True) -> None:
-        """Deposit a blob of material at the current position.
-
-        Composed sequence: optional pre-dwell, extrude-in-place, optional
-        post-dwell (cooling), optional retract/unretract to break the string.
-        """
-        if dwell_before_ms > 0:
-            self.dwell(dwell_before_ms)
-        self.extrude_in_place(e_mm)
-        if dwell_after_ms > 0:
-            self.dwell(dwell_after_ms)
-        if retract_after:
-            self.retract(0.3, self.retraction_speed)
-            self.unretract(0.3)
-        self._blob_count += 1
-        self._emit(f"; blob e={e_mm:.3f}")
-
     def comment(self, text: str) -> None:
         self._emit(f"; {text}")
 
@@ -349,11 +314,6 @@ class GcodeWriter:
     @property
     def total_filament_mm(self) -> float:
         return self._total_e
-
-    @property
-    def blob_count(self) -> int:
-        """Number of blob primitives emitted."""
-        return self._blob_count
 
     @property
     def max_z_rate(self) -> float:

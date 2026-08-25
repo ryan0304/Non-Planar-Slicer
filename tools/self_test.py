@@ -168,10 +168,6 @@ def t_parametric(srv: Server) -> None:
                       "loop_row": 0.6, "loop_up": 0.8})
     check(st == 200, "generate loop fabric", str(j)[:160])
 
-    st, j = gen(srv, {"shape": "circle", "radius": 30, "height": 40,
-                      "layer_height": 0.3, "blob_every": 8, "blob_mm": 0.6})
-    check(st == 200, "generate with blobs", str(j)[:120])
-
     # A wall design must actually report a solid base when one is asked for.
     st, j = gen(srv, {"shape": "circle", "radius": 30, "height": 40,
                       "layer_height": 0.3, "base_layers": 2, "brim": 2})

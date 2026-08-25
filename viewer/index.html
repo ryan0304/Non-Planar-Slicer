@@ -323,7 +323,6 @@
         <div class="drow"><span>Texture pattern</span>
           <select id="d-pattern" class="wide-select">
             <option value="">none</option>
-            <option value="blobs">&#9679; blobs (raised dots)</option>
             <option value="loops">&#8767; loops (hanging strands)</option>
             <option value="vwave">v-wave (ridges)</option>
             <option value="hwave">h-wave (rings)</option>
@@ -347,37 +346,6 @@
         </div>
 
         <hr>
-        <div id="blob-rows" style="display:none">
-          <div class="drow"><span>Blob style</span>
-            <select id="d-blob-style">
-              <option value="dots">Dots (sparse diamond)</option>
-              <option value="pearls">Pearls (dense rows)</option>
-              <option value="columns">Bead columns</option>
-              <option value="spikes">Spikes (bold drips)</option>
-              <option value="organic">Organic scatter</option>
-              <option value="custom">Custom</option>
-            </select></div>
-          <div class="drow"><span>Blobs per turn</span><input type="number" id="d-blob-per-turn" min="1" max="36" step="1"></div>
-          <div class="drow"><span>Spacing (mm)</span><input type="number" id="d-blob-spacing" min="0" max="20" step="0.5"></div>
-          <div class="hint tight-top">0 = use per-turn count</div>
-          <div class="drow"><span>Turn stride</span><input type="number" id="d-blob-stride" min="1" max="10" step="1"></div>
-          <div class="drow"><span>Alignment</span>
-            <select id="d-blob-align">
-              <option value="stagger">Stagger (diamond)</option>
-              <option value="column">Column</option>
-              <option value="jitter">Jitter</option>
-            </select></div>
-          <div class="drow" id="row-blob-jitter"><span>Jitter</span><input type="number" id="d-blob-jitter" min="0" max="1" step="0.1"></div>
-          <div class="drow"><span>Volume (mm&sup3;)</span><input type="number" id="d-blob-volume" min="0.5" max="15" step="0.5"></div>
-          <div class="drow"><span>Size at base &times;</span><input type="number" id="d-blob-volstart" min="0.1" max="3" step="0.1"></div>
-          <div class="drow"><span>Size at top &times;</span><input type="number" id="d-blob-volend" min="0.1" max="3" step="0.1"></div>
-          <div class="drow"><span>Dwell (ms)</span><input type="number" id="d-blob-dwell" min="50" max="2000" step="50"></div>
-          <div class="drow"><span>Fade in</span><input type="number" id="d-blob-fadein" min="0" max="0.5" step="0.05"></div>
-          <div class="drow"><span>Fade out</span><input type="number" id="d-blob-fadeout" min="0" max="0.5" step="0.05"></div>
-          <div class="hint" style="margin-top:2px">Raised dots: nozzle dwells and extrudes extra
-            material at regular intervals. Higher volume = bigger blobs.</div>
-        </div>
-
         <div id="loop-rows" style="display:none">
           <div class="drow"><span>Loop style</span>
             <select id="d-loop-style">
@@ -946,10 +914,10 @@
 
       <div class="guide-slide" data-slide="4">
         <h3>Textures</h3>
-        <div class="guide-fig" data-frames="guide/04-textures" data-count="4" aria-hidden="true"></div>
+        <div class="guide-fig" data-frames="guide/04-textures" data-count="3" aria-hidden="true"></div>
         <ul>
           <li>Seven radial wave patterns (v-wave, h-wave, ripple, diamond, bubbles, pleats,
-            hammered), plus blobs, plus loop fabric.</li>
+            hammered), plus loop fabric.</li>
           <li>Loop fabric REPLACES the wall &#8212; it knits the whole surface into stitched
             rows instead of a solid wall.</li>
           <li>It anchors itself on its own solid cuff, so it prints no base, brim or skirt

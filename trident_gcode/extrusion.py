@@ -31,15 +31,6 @@ def extrusion_for_segment(
     return volume / profile.filament_area
 
 
-def blob_e_for_volume(volume_mm3: float, profile: PrinterProfile) -> float:
-    """Convert a desired blob volume (mm^3) to E-axis filament length (mm).
-
-    Used by the blob placement algorithm to turn a volume target into the
-    ``e_mm`` parameter that ``GcodeWriter.extrude_in_place()`` expects.
-    """
-    return volume_mm3 / profile.filament_area
-
-
 def clamp_feedrate_for_z(
     dx: float,
     dy: float,

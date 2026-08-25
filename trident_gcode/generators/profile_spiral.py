@@ -15,9 +15,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from ..blobs import (BlobSpec, LoopSpec, blob_volume_at, compute_blob_sites,
-                     compute_loop_sites)
-from ..extrusion import blob_e_for_volume
+from ..blobs import LoopSpec, compute_loop_sites
 from ..gcode import GcodeWriter
 from ..paths import (_R_PATTERNS, _fade_envelope, _MAX_AMP_STEP, R_PATTERN_NAMES,
                     cage_scale)
@@ -111,7 +109,6 @@ def build_profile_spiral(
     first_layer_flow: float = 1.0,
     base_layers: int = 0,
     brim_loops: int = 0,
-    blob_spec: BlobSpec | None = None,
     loop_spec: LoopSpec | None = None,
     overhang_flow_k: float = 0.0,
     fan_overhang_min: float | None = None,
@@ -307,13 +304,6 @@ def build_profile_spiral(
 
     total_steps = n_contours * n
 
-    # Blob placement: compute which indices get a blob deposit.
-    blob_sites: set[int] = set()
-    if blob_spec is not None and blob_spec.blobs_per_turn > 0:
-        blob_sites = compute_blob_sites(total_steps, n, blob_spec)
-        # Remove any sites in the first turn (first-layer zone).
-        blob_sites -= set(range(n + 1))
-
     loop_sites: set[int] = set()
     loop_skip = 2
     if loop_spec is not None and loop_spec.loops_per_turn > 0:
@@ -490,11 +480,6 @@ def build_profile_spiral(
                               layer_height_override=gap, flow_override=flow * oh_flow,
                               line_width_override=(writer.line_width * cb_w
                                                     if cb_w is not None else None))
-            if step_idx in blob_sites:
-                vol = blob_volume_at(step_idx / max(total_steps - 1, 1), blob_spec)
-                e_mm = blob_e_for_volume(vol, writer.profile)
-                writer.blob(e_mm, dwell_before_ms=0,
-                            dwell_after_ms=blob_spec.dwell_after_ms)
             if step_idx in loop_sites and step_idx + loop_skip < total_steps - 1:
                 nrm = math.hypot(px, py)
                 lux, luy = (px / nrm, py / nrm) if nrm > 1e-9 else (1.0, 0.0)
@@ -526,7 +511,6 @@ def build_profile_spiral(
         "max_z_rate_mm_s": round(writer.max_z_rate, 2),
         "layer_height_clamp_events": writer.layer_height_clamp_events,
         "width_clamp_events": writer.width_clamp_events,
-        "blob_count": writer.blob_count,
         "loop_count": len(loop_sites),
         "bounds": writer.bounds,
     }

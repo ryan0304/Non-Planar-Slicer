@@ -16,7 +16,7 @@ changing:
 | `01-fastest-start/` | 6 | Pointer travels to **Generate & preview**, clicks it, the button goes disabled and reads `Starting...`, and the real safety report lands: `safe [OK] - 2.77 m, design_circle_60mm.gcode` with the full stats block below it. |
 | `02-four-steps/` | 5 | The four step tabs clicked in order; the panel below really swaps between Shape, Z waves, nozzle/speed/filament, and PRINT IT. |
 | `03-shaping/` | 5 | A control point on **Wave amplitude over height** is dragged upward. The readout reads `amp 0.60 mm @ H 24.0 mm`, then `0.83`, then `0.95` as the curve reshapes, and `peak wave slope` moves 0.13 -> 0.15 of 0.25. |
-| `04-textures/` | 4 | Texture pattern changed `none` -> `blobs (raised dots)` -> `loops (hanging strands)`; each pattern's own controls appear underneath. |
+| `04-textures/` | 3 | Texture pattern changed `none` -> `loops (hanging strands)`; the pattern's own controls appear underneath. |
 | `05-after-generating/` | 4 | The playback timeline scrubbed across a generated 229-layer print (`L60`, `L115`, `L172`, `L229`). The viewer truncates the model at the scrubbed layer, so the print grows from a single disc to the finished wall and the red nozzle marker climbs with it. |
 
 `00-read-first.png` is a single still. That slide is scene-setting and has no

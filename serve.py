@@ -44,7 +44,7 @@ from trident_gcode import PRINTER_PROFILES, TRIDENT, GcodeWriter, PrinterProfile
 from trident_gcode import printer_store
 from trident_gcode.printer_import import parse as parse_printer_config, PrinterImportError
 from trident_gcode.printer_validate import validate_raw, validate_profile_dict
-from trident_gcode.blobs import BlobSpec, LoopSpec
+from trident_gcode.blobs import LoopSpec
 from trident_gcode.paths import SpiralSpec, circle, star, superellipse
 from trident_gcode.generators import build_continuous_spiral, build_profile_spiral, build_surface_spiral
 from trident_gcode.generators.surface_spiral import _archimedean
@@ -62,13 +62,13 @@ from trident_gcode.stl_export import contours_to_mesh, write_binary_stl
 
 DEFAULT_PRINTER_KEY = "trident"
 
-# Texture modes that place discrete SITES along the bead (blobs) or replace the
-# wall emission entirely (loop fabric), rather than displacing the radius. They
-# are not members of _R_PATTERNS, and they have no surface representation, so an
-# STL export falls back to the smooth wall instead of rejecting the design.
-# The UI already omits `pattern` for these; this keeps direct API callers (and
-# saved designs that carry the name through) from hitting a spurious 400.
-_SITE_TEXTURE_PATTERNS = frozenset({"blobs", "loops"})
+# Texture mode that replaces the wall emission entirely (loop fabric), rather
+# than displacing the radius. Not a member of _R_PATTERNS, and it has no
+# surface representation, so an STL export falls back to the smooth wall
+# instead of rejecting the design. The UI already omits `pattern` for this;
+# this keeps direct API callers (and saved designs that carry the name
+# through) from hitting a spurious 400.
+_SITE_TEXTURE_PATTERNS = frozenset({"loops"})
 
 # A single export request must not be able to exhaust memory. The G-code path is
 # bounded by the printer (profile.z_max rejects an over-tall design), but an STL
@@ -741,54 +741,11 @@ def _parse_bed_temp(body, profile):
     return max(0.0, min(temp, ceiling))
 
 
-def _parse_blob_spec(body, radius: float | None = None) -> BlobSpec | None:
-    """Extract blob parameters from the request body.
-
-    Returns None when blobs are disabled (no per-turn count or spacing given).
-    ``blob_spacing_mm`` (with a known radius) overrides ``blob_per_turn``:
-    the count is derived from the circumference so bead pitch stays constant
-    across sizes.  Server-side clamps keep values in safe ranges.
-    """
-    blobs_per_turn = int(body.get("blob_per_turn", 0))
-    spacing_mm = float(body.get("blob_spacing_mm", 0) or 0)
-    if spacing_mm > 0 and radius:
-        circumference = 2.0 * math.pi * radius
-        blobs_per_turn = int(round(circumference / max(spacing_mm, 1.0)))
-    if blobs_per_turn <= 0:
-        return None
-    blobs_per_turn = max(1, min(blobs_per_turn, 72))
-    turn_stride = max(1, int(body.get("blob_turn_stride", 3)))
-    stagger = bool(body.get("blob_stagger", True))
-    align = str(body.get("blob_align", "") or ("stagger" if stagger else "column"))
-    if align not in ("stagger", "column", "jitter"):
-        align = "stagger"
-    jitter = max(0.0, min(float(body.get("blob_jitter", 0.5)), 1.0))
-    volume = max(0.1, min(float(body.get("blob_volume", 1.5)), 15.0))
-    vol_start = max(0.1, min(float(body.get("blob_vol_start", 1.0)), 3.0))
-    vol_end = max(0.1, min(float(body.get("blob_vol_end", 1.0)), 3.0))
-    dwell = max(0, min(int(body.get("blob_dwell", 200)), 2000))
-    fade_in = max(0.0, min(float(body.get("blob_fade_in", 0.15)), 0.5))
-    fade_out = max(0.0, min(float(body.get("blob_fade_out", 0.05)), 0.5))
-    return BlobSpec(
-        blobs_per_turn=blobs_per_turn,
-        turn_stride=turn_stride,
-        stagger=stagger,
-        align=align,
-        jitter=jitter,
-        volume_mm3=volume,
-        volume_scale_start=vol_start,
-        volume_scale_end=vol_end,
-        dwell_after_ms=dwell,
-        fade_in=fade_in,
-        fade_out=fade_out,
-    )
-
-
 def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | None:
     """Extract hanging-loop parameters from the request body.
 
     Returns None when loops are disabled.  ``loop_spacing_mm`` (with a known
-    radius) overrides ``loop_per_turn`` via the circumference, like blobs.
+    radius) overrides ``loop_per_turn`` via the circumference.
 
     row_mm and up_mm are Z excursions (the stitch dip / row height), so their
     ceilings are derived from the selected machine's amp_ceiling() rather than
@@ -1034,7 +991,6 @@ def generate_design(body):
     )
     shape = _make_shape(shape_name, radius, star_points, star_depth)
 
-    blob_spec = _parse_blob_spec(body, radius=radius)
     loop_spec = _parse_loop_spec(body, profile, radius=radius)
     overhang_flow_k = max(0.0, min(float(body.get("overhang_flow_k", 0.0)), 1.0))
     fan_overhang_min, fan_overhang_max = _parse_overhang_fan(body)
@@ -1108,7 +1064,6 @@ def generate_design(body):
             brim_loops=brim,
             base_style=base_style,
             skirt_loops=skirt_loops,
-            blob_spec=blob_spec,
             overhang_flow_k=overhang_flow_k,
             fan_overhang_min=fan_overhang_min,
             fan_overhang_max=fan_overhang_max,
@@ -1175,7 +1130,6 @@ def generate_design(body):
         "probe_hits": analysis.probe_hits,
         "unsupported_moves": analysis.unsupported_moves,
         "top_z_mm": report.get("top_z_mm"),
-        "blob_count": report.get("blob_count", 0),
         "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
         "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
     }
@@ -1674,7 +1628,6 @@ def generate_mesh_texture_design(body):
     # may have widened each ring's points to 3-tuple (x, y, z).
     mesh_radius = (max(math.hypot(pt[0], pt[1]) for c in contours for pt in c)
                    if contours else None)
-    blob_spec = _parse_blob_spec(body, radius=mesh_radius)
     loop_spec = _parse_loop_spec(body, profile, radius=mesh_radius)
     overhang_flow_k = max(0.0, min(float(body.get("overhang_flow_k", 0.0)), 1.0))
     fan_overhang_min, fan_overhang_max = _parse_overhang_fan(body)
@@ -1705,7 +1658,6 @@ def generate_mesh_texture_design(body):
         first_layer_spacing_factor=spacing_factor,
         base_layers=base_layers,
         brim_loops=brim,
-        blob_spec=blob_spec,
         loop_spec=loop_spec,
         overhang_flow_k=overhang_flow_k,
         fan_overhang_min=fan_overhang_min,
@@ -1799,7 +1751,6 @@ def generate_mesh_texture_design(body):
         "probe_hits": analysis.probe_hits,
         "unsupported_moves": analysis.unsupported_moves,
         "top_z_mm": report.get("top_z_mm"),
-        "blob_count": report.get("blob_count", 0),
         "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
         "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
     }

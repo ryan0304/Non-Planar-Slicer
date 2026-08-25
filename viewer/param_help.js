@@ -161,56 +161,6 @@ window.PARAM_HELP = {
     param: "pattern_alternate", def: "off"
   },
 
-  // ---- Step 2: Blob texture -----------------------------------------------
-  "d-blob-style": {
-    desc: "Picks a bundle of blob settings (spacing, size, dwell) matching a look. Choosing a style fills in the fields below; editing any of them switches this to Custom.",
-    param: "blob_style (UI only -- selects a bundle of the fields below, not itself sent to the API)", def: "dots"
-  },
-  "d-blob-per-turn": {
-    desc: "How many blob deposits are placed around each turn. Only used when Spacing (mm) below is 0.",
-    param: "blob_per_turn", def: "6"
-  },
-  "d-blob-spacing": {
-    desc: "Target distance between blobs along a turn, in millimeters. 0 = ignore this and use Blobs per turn instead.",
-    param: "blob_spacing_mm", def: "0 mm (use per-turn count)"
-  },
-  "d-blob-stride": {
-    desc: "Vertical spacing between blob rows, in turns -- places a row of blobs every N turns.",
-    param: "blob_turn_stride", def: "2"
-  },
-  "d-blob-align": {
-    desc: "How blob rows line up vertically: Stagger offsets alternating rows for a diamond pattern, Column stacks them directly above each other, Jitter scatters them pseudo-randomly.",
-    param: "blob_align", def: "stagger"
-  },
-  "d-blob-jitter": {
-    desc: "Scatter strength for Jitter alignment, as a fraction of the blob spacing. Only takes effect when Alignment is Jitter.",
-    param: "blob_jitter", def: "0.5"
-  },
-  "d-blob-volume": {
-    desc: "Material volume deposited per blob, in cubic millimeters. Larger values dwell longer and print a bigger bump.",
-    param: "blob_volume", def: "3.0 mm3"
-  },
-  "d-blob-volstart": {
-    desc: "Multiplier on blob Volume at the bottom of the print, letting blobs grow or shrink across the height together with Size at top.",
-    param: "blob_vol_start", def: "1.0"
-  },
-  "d-blob-volend": {
-    desc: "Multiplier on blob Volume at the top of the print.",
-    param: "blob_vol_end", def: "1.0"
-  },
-  "d-blob-dwell": {
-    desc: "How long the nozzle pauses after depositing each blob, in milliseconds, letting it cool and set before moving on.",
-    param: "blob_dwell", def: "400 ms"
-  },
-  "d-blob-fadein": {
-    desc: "Fraction of the height, from the bottom, with no blobs at all -- ramps blobs in gradually above that.",
-    param: "blob_fade_in", def: "0.15"
-  },
-  "d-blob-fadeout": {
-    desc: "Fraction of the height, from the top, where blobs fade back out to nothing.",
-    param: "blob_fade_out", def: "0.05"
-  },
-
   // ---- Step 2: Loop (knitted) fabric texture -------------------------------
   "d-loop-style": {
     desc: "Picks a bundle of loop-fabric settings matching a knit look. Choosing a style fills in the fields below; editing any of them switches this to Custom.",

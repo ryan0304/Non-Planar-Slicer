@@ -4,7 +4,7 @@
 - Never add a decorative shadow to buttons, chips, cards, or the timeline.
 - Never use a hover lift or shadow bloom; the only press state is `scale(0.95)`.
 - Never collapse `--ok`/`--warn`/`--danger` or `--accent-purple`/`--measure`/`--cage` into one accent color.
-- Never retune data-encoding colors (viridis legend, toolpath/blob colors, printer materials) to match the theme.
+- Never retune data-encoding colors (viridis legend, toolpath colors, printer materials) to match the theme.
 - Never treat the Z-height legend gradient as decorative -- it's data.
 - Never soften a `--warn` signal into a bare outline.
 - Never adopt a light canvas, 80px section padding, or full-bleed tile layout in the control panel.

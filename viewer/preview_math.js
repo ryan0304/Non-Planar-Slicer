@@ -415,10 +415,10 @@
     }
   }
 
-  // ---- blob site placement (mirrors trident_gcode/blobs.py exactly) ---------
-  // Deterministic pseudo-random in [0,1) from a (row, blob) pair -- same
+  // ---- loop site placement (mirrors trident_gcode/blobs.py's compute_sites exactly)
+  // Deterministic pseudo-random in [0,1) from a (row, site) pair -- same
   // formula as Python's _hash01(), used for align="jitter".
-  function blobHash01(row, b){
+  function siteHash01(row, b){
     var x = Math.sin(row * 127.1 + b * 311.7) * 43758.5453;
     return x - Math.floor(x);
   }
@@ -426,28 +426,17 @@
   // pathInfo: { positions: Float32Array [x0,y0,z0,...] (one entry per raw
   // sample index i, same world-space mapping generatePreview() used to build
   // the segment list), totalPoints: positions.length/3, pointsPerTurn, radius }
-  // Returns a Float32Array of [x,y,z, ...] blob site world positions, or an
-  // empty Float32Array when nothing qualifies. Mirrors compute_blob_sites().
+  // Returns a Float32Array of [x,y,z, ...] site world positions, or an
+  // empty Float32Array when nothing qualifies. Mirrors compute_loop_sites().
   // Resolves the generic site-placement params (per-turn count, spacing,
-  // stride, alignment, jitter, fades) for whichever site-based texture is
-  // active. Blobs and loops share the exact same placement math -- only the
-  // field names and per-turn cap differ -- so both route through here.
+  // stride, alignment, jitter, fades) for the loops texture.
   function resolveSitePlacement(design){
     if(!design) return null;
-    if(design.pattern === 'blobs'){
-      return {
-        perTurn: design.blob_per_turn, spacingMm: design.blob_spacing_mm,
-        turnStride: design.blob_turn_stride, align: design.blob_align,
-        legacyStagger: design.blob_stagger, jitter: design.blob_jitter,
-        fadeIn: design.blob_fade_in, fadeOut: design.blob_fade_out,
-        maxPerTurn: 72
-      };
-    }
     if(design.pattern === 'loops'){
       return {
         perTurn: design.loop_per_turn, spacingMm: design.loop_spacing_mm,
         turnStride: design.loop_turn_stride, align: design.loop_align,
-        legacyStagger: null, jitter: design.loop_jitter,
+        jitter: design.loop_jitter,
         fadeIn: design.loop_fade_in, fadeOut: design.loop_fade_out,
         maxPerTurn: 48
       };
@@ -455,7 +444,7 @@
     return null;
   }
 
-  function computeBlobPreview(design, pathInfo){
+  function computeSitePreview(design, pathInfo){
     var siteParams = resolveSitePlacement(design);
     if(!siteParams || !pathInfo) return null;
     var positions = pathInfo.positions;
@@ -463,28 +452,28 @@
     var pointsPerTurn = pathInfo.pointsPerTurn | 0;
     if(!positions || totalPoints <= 0 || pointsPerTurn <= 0) return new Float32Array(0);
 
-    // blobs_per_turn: spacing_mm (when > 0) overrides the explicit per-turn count.
-    var blobsPerTurn;
+    // sites_per_turn: spacing_mm (when > 0) overrides the explicit per-turn count.
+    var sitesPerTurn;
     var spacingMm = siteParams.spacingMm || 0;
     if(spacingMm > 0 && pathInfo.radius){
       var circumference = TWO_PI * pathInfo.radius;
-      blobsPerTurn = Math.round(circumference / Math.max(spacingMm, 1.0));
+      sitesPerTurn = Math.round(circumference / Math.max(spacingMm, 1.0));
     } else {
-      blobsPerTurn = Math.round(siteParams.perTurn || 0);
+      sitesPerTurn = Math.round(siteParams.perTurn || 0);
     }
-    if(blobsPerTurn <= 0) return new Float32Array(0);
-    blobsPerTurn = Math.max(1, Math.min(blobsPerTurn, siteParams.maxPerTurn));
+    if(sitesPerTurn <= 0) return new Float32Array(0);
+    sitesPerTurn = Math.max(1, Math.min(sitesPerTurn, siteParams.maxPerTurn));
 
     var turnStride = Math.max(1, Math.round(siteParams.turnStride || 1));
     var align = siteParams.align;
     if(align !== 'stagger' && align !== 'column' && align !== 'jitter'){
-      align = siteParams.legacyStagger ? 'stagger' : 'column';
+      align = 'stagger';
     }
     var jitter = Math.max(0.0, Math.min(siteParams.jitter != null ? siteParams.jitter : 0.5, 1.0));
     var fadeIn = Math.max(0.0, Math.min(siteParams.fadeIn || 0, 0.5));
     var fadeOut = Math.max(0.0, Math.min(siteParams.fadeOut || 0, 0.5));
 
-    var pitch = 1.0 / blobsPerTurn;
+    var pitch = 1.0 / sitesPerTurn;
     var totalTurns = Math.floor(totalPoints / pointsPerTurn);
     var seen = {};
     var siteIdx = [];
@@ -492,12 +481,12 @@
     for(var t = 0; t < totalTurns; t++){
       if(t % turnStride !== 0) continue;
       var row = Math.floor(t / turnStride);
-      for(var b = 0; b < blobsPerTurn; b++){
+      for(var b = 0; b < sitesPerTurn; b++){
         var angleFrac = b * pitch;
         if(align === 'stagger' && (row % 2 === 1)){
           angleFrac += 0.5 * pitch;
         } else if(align === 'jitter'){
-          var h = blobHash01(row, b);
+          var h = siteHash01(row, b);
           angleFrac += (h - 0.5) * jitter * pitch;
           angleFrac = angleFrac - Math.floor(angleFrac);  // Python's %= 1.0
         }
@@ -600,7 +589,7 @@
   // parametric wall with something sprinkled on it -- it REPLACES the wall
   // (serve.py: "loop fabric replaces the wall entirely"), so it cannot be
   // previewed as a spiral plus decoration. It was, though: the draft drew the
-  // ordinary vase helix and marked blob-style dots at the stitch sites, which
+  // ordinary vase helix and marked round dots at the stitch sites, which
   // meant every loop style previewed as the same smooth vase, and none of them
   // resembled the knitted rows the G-code actually contains.
   //
@@ -937,7 +926,7 @@
     // ---- loop fabric: a different generator, so a different preview --------
     // serve.py routes a parametric loops design to build_loop_fabric(), which
     // REPLACES the wall. Everything below this point (base disks, the helix,
-    // z-waves, patterns, point edits, blob dots) belongs to
+    // z-waves, patterns, point edits, site dots) belongs to
     // build_continuous_spiral() and describes a print this design will not
     // produce, so return the fabric and stop. `loop_fabric` comes from
     // designer.js's effectiveBaseSpec() -- the same single source of truth
@@ -963,7 +952,7 @@
           }
           return rr;
         };
-        window.__blobPreviewSites = null;   // stitches are drawn, not dotted
+        window.__sitePreviewSites = null;   // stitches are drawn, not dotted
         var fabric = buildLoopFabricPreview(design, lf, radiusAt, height,
                                             layerHeight, firstLayerSquish,
                                             design.nozzle);
@@ -1053,16 +1042,16 @@
     for(var bi = 0; bi < baseFloatCount; bi++) out[bi] = baseSegs[bi];
     var amps = new Float32Array(totalSteps + 1);  // rate-limited amplitudes
 
-    // Raw per-sample world positions, kept only when blob placement needs to
-    // look up a specific sample index (see computeBlobPreview() below), or a
+    // Raw per-sample world positions, kept only when site placement needs to
+    // look up a specific sample index (see computeSitePreview() below), or a
     // Point Edit Modifier needs neighbor lookups across turns (Point Smooth).
     // Reaching here with pattern 'loops' means loop SITES on a normal wall
     // (mesh mode -- build_profile_spiral + compute_loop_sites), not loop
     // fabric: the fabric branch above already returned. Sites really are dots
-    // on a spiral, so the blob-dot rendering is the right one for them.
-    var wantBlobs = design.pattern === 'blobs' || design.pattern === 'loops';
+    // on a spiral, so the site-dot rendering is the right one for them.
+    var wantSites = design.pattern === 'loops';
     var wantPointEdit = pointEditActive(design);
-    var allPos = (wantBlobs || wantPointEdit) ? new Float32Array((totalSteps + 1) * 3) : null;
+    var allPos = (wantSites || wantPointEdit) ? new Float32Array((totalSteps + 1) * 3) : null;
 
     var prevX = 0, prevY = 0, prevZ = 0;
     var outIdx = baseFloatCount;   // wall segments start after the base disks'
@@ -1185,17 +1174,17 @@
       }
     }
 
-    // Blob dot sites, in the same world-space mapping as `out` above, for
+    // Loop-site dots, in the same world-space mapping as `out` above, for
     // viewer.js to render as points on the draft preview.
-    if(wantBlobs){
-      window.__blobPreviewSites = computeBlobPreview(design, {
+    if(wantSites){
+      window.__sitePreviewSites = computeSitePreview(design, {
         positions: allPos,
         totalPoints: totalSteps + 1,
         pointsPerTurn: pointsPerTurn,
         radius: radius
       });
     } else {
-      window.__blobPreviewSites = null;
+      window.__sitePreviewSites = null;
     }
 
     return out;
@@ -1203,7 +1192,7 @@
 
   // Expose to global scope for designer.js and viewer.js.
   window.generatePreview = generatePreview;
-  window.computeBlobPreview = computeBlobPreview;
+  window.computeSitePreview = computeSitePreview;
   window.R_PATTERNS = R_PATTERNS;
   window.makeInterp = makeInterp;
   window.makeSmoothInterp = makeSmoothInterp;

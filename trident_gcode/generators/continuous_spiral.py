@@ -4,9 +4,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from ..blobs import (BlobSpec, LoopSpec, blob_volume_at, compute_blob_sites,
-                     compute_loop_sites)
-from ..extrusion import blob_e_for_volume
+from ..blobs import LoopSpec, compute_loop_sites
 from ..gcode import GcodeWriter
 from ..paths import (SpiralSpec, PathPoint, spiral_path, bounding_radius, circle,
                     cage_scale)
@@ -240,7 +238,6 @@ def build_continuous_spiral(
     skirt_loops: int = 0,
     flow_callback: Callable[[float], float] | None = None,
     width_callback: Callable[[float], float] | None = None,
-    blob_spec: BlobSpec | None = None,
     loop_spec: LoopSpec | None = None,
     overhang_flow_k: float = 0.0,
     fan_overhang_min: float | None = None,
@@ -422,13 +419,6 @@ def build_continuous_spiral(
 
     total_pts = len(pts)
 
-    # Blob placement: compute which indices get a blob deposit.
-    blob_sites: set[int] = set()
-    if blob_spec is not None and blob_spec.blobs_per_turn > 0:
-        blob_sites = compute_blob_sites(total_pts, ppt, blob_spec)
-        # Remove any sites in the first turn (first-layer zone).
-        blob_sites -= set(range(ppt + 1))
-
     # Loop placement: which indices get a hanging-loop excursion.
     loop_sites: set[int] = set()
     loop_skip = 2
@@ -470,11 +460,6 @@ def build_continuous_spiral(
                               flow_override=cb_flow * oh_flow,
                               line_width_override=(writer.line_width * cb_w
                                                     if cb_w is not None else None))
-            if i in blob_sites:
-                vol = blob_volume_at(i / max(total_pts - 1, 1), blob_spec)
-                e_mm = blob_e_for_volume(vol, writer.profile)
-                writer.blob(e_mm, dwell_before_ms=0,
-                            dwell_after_ms=blob_spec.dwell_after_ms)
             if i in loop_sites and i + loop_skip < total_pts - 1:
                 j = i + loop_skip
                 pj = pts[j]
@@ -557,11 +542,6 @@ def build_continuous_spiral(
                               flow_override=flow_over * cb_flow * oh_flow,
                               line_width_override=(writer.line_width * cb_w
                                                     if cb_w is not None else None))
-            if i in blob_sites:
-                vol = blob_volume_at(i / max(total_pts - 1, 1), blob_spec)
-                e_mm = blob_e_for_volume(vol, writer.profile)
-                writer.blob(e_mm, dwell_before_ms=0,
-                            dwell_after_ms=blob_spec.dwell_after_ms)
             if i in loop_sites and i + loop_skip < total_pts - 1:
                 j = i + loop_skip
                 pj = pts[j]
@@ -597,7 +577,6 @@ def build_continuous_spiral(
         "max_z_rate_mm_s": round(writer.max_z_rate, 2),
         "layer_height_clamp_events": writer.layer_height_clamp_events,
         "width_clamp_events": writer.width_clamp_events,
-        "blob_count": writer.blob_count,
         "loop_count": len(loop_sites),
         "bounds": writer.bounds,
     }
