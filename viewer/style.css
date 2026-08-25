@@ -142,15 +142,15 @@
      different depth/opacity pairs scattered across modals, cards and tags. */
   --shadow-float: 0 8px 24px rgba(0,0,0,.4);
 
-  /* legacy variable names -- kept as aliases so designer.js/viewer.js, which
-     read a handful of these via getComputedStyle(), keep resolving without
-     needing their own edits (out of scope per the redesign brief). --input-bg
-     used to be one of these aliases (= var(--bg)); it is now a real token in
-     its own right (see above), declared once, not re-aliased here. */
-  --txt: var(--ink);
+  /* legacy variable names -- kept as aliases because designer.js's curve-editor
+     canvas reads them via getComputedStyle (see css() at designer.js:2446, which
+     resolves --panel, --accent, --muted and --warn). Only the two names that
+     helper actually reads are kept; --txt and --input-border were aliases no CSS
+     rule and no JS ever resolved. --input-bg used to be one of these aliases
+     (= var(--bg)); it is now a real token in its own right (see above),
+     declared once, not re-aliased here. */
   --muted: var(--ink-muted);
   --panel: var(--surface);
-  --input-border: var(--line);
 }
 
 * { box-sizing:border-box; }
@@ -220,11 +220,11 @@ input[type=range]::-moz-range-track {
 input[type=range]::-webkit-slider-thumb {
   appearance:none; -webkit-appearance:none; margin-top:-6px; box-sizing:border-box;
   width:16px; height:16px; border-radius:50%; background:var(--accent);
-  border:2px solid var(--ink-on-accent); box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer;
+  border:2px solid var(--ink-on-accent); cursor:pointer;
 }
 input[type=range]::-moz-range-thumb {
   width:16px; height:16px; border-radius:50%; background:var(--accent); box-sizing:border-box;
-  border:2px solid var(--ink-on-accent); box-shadow:0 1px 3px rgba(0,0,0,.4); cursor:pointer;
+  border:2px solid var(--ink-on-accent); cursor:pointer;
 }
 input[type=range]:disabled { opacity:.4; cursor:default; }
 
@@ -359,6 +359,10 @@ h1 { font-size:16px; font-weight:600; margin:0 0 var(--sp-1); letter-spacing:-0.
   .brand-mark.is-busy-indeterminate .mark-highlight {
     animation:none; stroke-dasharray:none; stroke-dashoffset:0; opacity:.55;
   }
+  /* The other half of the same busy system (see the busy-state block below).
+     Stepped and slowed rather than stopped: a frozen spinner claims the work
+     has stalled, which is the opposite of what it is there to say. */
+  .busy-spin { animation-duration:2.4s; animation-timing-function:steps(8, end); }
 }
 .drop { border:1.5px dashed var(--line); border-radius:var(--radius-md); padding:var(--sp-4); text-align:center;
   color:var(--ink-muted); font-size:13px; cursor:pointer; transition:.15s; }
@@ -374,7 +378,7 @@ h1 { font-size:16px; font-weight:600; margin:0 0 var(--sp-1); letter-spacing:-0.
 label.row { display:flex; align-items:center; justify-content:space-between; font-size:12.5px;
   padding:5px 0; cursor:pointer; }
 label.radio-inline { cursor:pointer; }
-.legend { height:10px; border-radius:5px; margin-top:6px;
+.legend { height:10px; border-radius:var(--radius-pill); margin-top:6px;
   background:linear-gradient(90deg,#2b3a8f,#1f9e89,#cfe11f,#fca50a,#e0402f); }
 .legend-labels { display:flex; justify-content:space-between; font-size:11px; margin-top:3px; }
 .hint { font-size:11px; color:var(--ink-muted); margin-top:var(--sp-3); line-height:1.5; }
@@ -384,6 +388,18 @@ label.radio-inline { cursor:pointer; }
 .sel-count { font-size:11px; color:var(--ink-muted); margin-top:var(--sp-2); line-height:1.5; }
 .sel-count.has-sel { color:var(--ink); font-weight:600; }
 .hint.tight-top { margin-top:-2px; margin-bottom:2px; }
+
+/* Live machine-limit readouts: the selected printer's probe keep-out /
+   z-amp ceiling (#amp-limit-hint) and the loop-height cap (#loop-zcap).
+   Deliberately NOT a .hint, for the same reason as .sel-count above -- the
+   hint-density toggle hides .hint, and a machine clearance ceiling is the
+   limit the user is deciding AGAINST, not explanation that can be switched
+   off. Full --ink and mono tabular numerals so it reads as a measured
+   figure rather than another line of caption. NOT --warn: nothing is wrong
+   yet, and the reserved trio means a safety STATE, not a stated limit. */
+.limit-note { font-size:11px; color:var(--ink); font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; margin-top:var(--sp-3); line-height:1.5; }
+.limit-note:empty { display:none; }
 
 /* Section sub-heading (was inline-styled <h3> repeated throughout the panel). */
 .section-heading { font-size:11px; font-weight:600; margin:0 0 var(--sp-2); }
@@ -496,7 +512,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 /* Draft-preview badge -- top-left corner, so it never collides with the
    telemetry card (which owns top-right at any collapsed/expanded height). */
 .draft-preview-label { position:absolute; top:16px; left:16px; z-index:5;
-  padding:2px 8px; border-radius:4px; background:rgba(41,151,255,.18);
+  padding:2px 8px; border-radius:var(--radius-pill); background:rgba(41,151,255,.18);
   backdrop-filter:blur(20px) saturate(180%);
   color:var(--accent-hover); font-size:11px; font-family:var(--font-ui); pointer-events:none; }
 
@@ -508,12 +524,16 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .telemetry-title { font-size:9.5px; margin:0; }
 .telemetry-toggle { background:none; border:none; color:var(--ink); cursor:pointer;
   font-size:14px; min-width:22px; min-height:22px; padding:2px 5px; line-height:1;
-  border-radius:4px; font-family:var(--font-ui); opacity:.75;
+  border-radius:var(--radius-sm); font-family:var(--font-ui); opacity:.75;
   transition:color .15s, background-color .15s, transform .15s, opacity .15s; }
-.telemetry-toggle:hover { opacity:1; }
-.telemetry-toggle:hover { color:var(--ink); background:var(--surface-raised); }
+.telemetry-toggle:hover { opacity:1; color:var(--ink); background:var(--surface-raised); }
 .telemetry-toggle:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
 .telemetry-card.collapsed .telemetry-toggle { transform:rotate(-90deg); }
+/* The collapsed rotation is (0,3,0) and outranks the shared
+   `.telemetry-toggle:active` press-scale at (0,2,0), so without this the
+   press feedback silently disappears in the collapsed state only. Both
+   transforms have to be composed in one declaration; they cannot cascade. */
+.telemetry-card.collapsed .telemetry-toggle:active { transform:rotate(-90deg) scale(0.95); }
 .telemetry-card.collapsed .readout-telemetry { display:none; }
 
 /* Live telemetry rows: label left, value right (--font-mono via .tm). */
@@ -616,10 +636,9 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
   color:var(--measure); font-weight:600; }
 .measure-close { background:none; border:none; color:var(--ink); cursor:pointer;
   font-size:14px; min-width:22px; min-height:22px; padding:2px 5px; line-height:1;
-  border-radius:4px; font-family:var(--font-ui); opacity:.75;
+  border-radius:var(--radius-sm); font-family:var(--font-ui); opacity:.75;
   transition:color .15s, background-color .15s, opacity .15s; }
-.measure-close:hover { opacity:1; }
-.measure-close:hover { color:var(--ink); background:var(--surface-raised); }
+.measure-close:hover { opacity:1; color:var(--ink); background:var(--surface-raised); }
 
 /* =========================================================================
    Orientation cube -- floating gizmo, bottom-left of the canvas. It is a
@@ -678,7 +697,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 /* Floating value tag pinned to the measured span in the viewport. Positioned
    from render() by projecting the span midpoint, so it tracks the orbit. */
 .measure-tag { position:absolute; z-index:6; pointer-events:none;
-  transform:translate(-50%,-50%); padding:2px 7px; border-radius:5px;
+  transform:translate(-50%,-50%); padding:2px 7px; border-radius:var(--radius-sm);
   background:rgba(30,33,36,.92); border:1px solid var(--measure);
   color:var(--measure); font-family:var(--font-mono); font-size:11.5px; font-weight:600;
   white-space:nowrap; }
@@ -687,7 +706,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
    (undeformed) position. Sits above the dot rather than centred on it, so the
    dot, the cursor and the ring stay visible while it is being dragged. */
 .cage-tag { position:absolute; z-index:6; pointer-events:none;
-  transform:translate(-50%,-100%); margin-top:-14px; padding:3px 8px; border-radius:5px;
+  transform:translate(-50%,-100%); margin-top:-14px; padding:3px 8px; border-radius:var(--radius-sm);
   background:rgba(30,33,36,.94); border:1px solid var(--cage);
   color:var(--cage); font-family:var(--font-mono); font-size:11.5px; font-weight:600;
   white-space:nowrap; text-align:center; line-height:1.45; }
@@ -708,7 +727,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .drow input[type=number] { background-color:var(--input-bg); color:var(--ink);
   border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; width:92px; }
 .drow select { background-color:var(--input-bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; width:92px; }
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; }
 .drow select { width:116px; padding-right:24px; }
 .drow input:focus, .drow select:focus { border-color:var(--accent); outline:none; }
 /* Typed value is past the SELECTED PRINTER's ceiling for this field, so the
@@ -746,7 +765,8 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .cv-editor .cv-head { display:flex; align-items:center; justify-content:space-between;
   font-size:11px; margin-bottom:6px; }
 .cv-editor .cv-head b { color:var(--ink); font-weight:600; text-transform:none; letter-spacing:0; font-family:var(--font-ui); }
-.cv-editor .cv-reset { cursor:pointer; color:var(--accent-hover); font-size:11px; text-transform:none; letter-spacing:0; }
+.cv-editor .cv-reset { cursor:pointer; color:var(--accent-hover); font-size:11px; text-transform:none;
+  letter-spacing:0; font-family:var(--font-ui); background:none; border:none; padding:0; }
 .cv-editor canvas { display:block; width:100%; border:1px solid var(--line); border-radius:var(--radius-sm);
   background:var(--bg); cursor:ns-resize; }
 .cv-note { font-size:10.5px; color:var(--ink-muted); margin-top:6px; }
@@ -781,7 +801,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
    text can't reference a CSS custom property. Left padding on the input
    keeps typed text clear of the icon. */
 .param-search input { width:100%; background-color:var(--input-bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:var(--radius); padding:7px 10px 7px 30px;
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:7px 10px 7px 30px;
   font-size:12.5px; font-family:var(--font-ui);
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 16 16'><circle cx='7' cy='7' r='5' fill='none' stroke='%239aa0a6' stroke-width='1.6'/><line x1='11' y1='11' x2='15' y2='15' stroke='%239aa0a6' stroke-width='1.6' stroke-linecap='round'/></svg>");
   background-repeat:no-repeat; background-position:10px center; background-size:13px 13px; }
@@ -814,7 +834,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 /* ---- silhouette mode bar (Symmetrical / Unsymmetrical) ---- */
 .sil-mode-bar { display:flex; gap:2px; padding:3px; background:var(--bg);
   border:1px solid var(--line); border-radius:var(--radius-sm); margin:6px 0; }
-.sil-mode-btn { flex:1; background:none; border:none; border-radius:4px; color:var(--ink-muted);
+.sil-mode-btn { flex:1; background:none; border:none; border-radius:var(--radius-sm); color:var(--ink-muted);
   font-size:11px; font-weight:600; padding:5px 2px; cursor:pointer;
   transition:color .15s, background-color .15s; text-transform:uppercase; letter-spacing:.04em; }
 .sil-mode-btn:hover { color:var(--ink); }
@@ -830,7 +850,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 
 /* ---- top-level mode bar (Design / G-code Viewer) ---- */
 .mode-bar { display:flex; gap:2px; padding:3px; background:var(--surface-raised);
-  border:1px solid var(--line); border-radius:var(--radius); margin-bottom:var(--sp-4); }
+  border:1px solid var(--line); border-radius:var(--radius-sm); margin-bottom:var(--sp-4); }
 .mode-btn { flex:1; background:none; border:none; border-radius:var(--radius-sm); color:var(--ink-muted);
   font-size:12.5px; font-weight:600; padding:7px 2px; cursor:pointer;
   transition:color .15s, background-color .15s; text-transform:uppercase; letter-spacing:.05em; }
@@ -852,9 +872,6 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
   border-radius:var(--radius-md); padding:var(--sp-2) var(--sp-3); margin-bottom:var(--sp-3); }
 .mb-row1 { display:flex; align-items:center; gap:6px; }
 .mb-icon { flex:none; font-size:15px; color:var(--ink-muted); line-height:1; }
-.mb-select { flex:1 1 auto; min-width:0; background-color:var(--input-bg); color:var(--ink);
-  border:1px solid var(--line); border-radius:var(--radius-sm); font-size:12.5px; font-weight:600;
-  padding-top:6px; padding-bottom:6px; padding-left:8px; }
 .mb-summary { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-muted);
   margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mb-bar .pm-meta { margin-top:var(--sp-2); padding-top:var(--sp-2); }
@@ -1082,7 +1099,11 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .pe-entry-btn { border-color:var(--accent-purple); color:var(--accent-purple); margin-bottom:0; }
 .pe-entry-btn:hover:not(:disabled) { border-color:var(--accent-purple-hover); color:var(--accent-purple-hover);
   background:rgba(167,139,250,.10); }
-.pe-entry-btn.pe-out-of-scope { opacity:.6; }
+/* .85, not .6: at .6 the label composites to 3.36:1 and this button stays
+   clickable (designer.js only adds the class, never `disabled`). .85
+   measures 4.89:1. The explicit #pe-scope-note directly below already says
+   WHY it is out of scope, so the dimming only has to be a nudge. */
+.pe-entry-btn.pe-out-of-scope { opacity:.85; }
 .pe-dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:transparent;
   margin-right:6px; transition:background .15s, box-shadow .15s; vertical-align:middle; }
 .pe-dot.active { background:var(--accent-purple); box-shadow:0 0 0 3px rgba(167,139,250,.22); }
@@ -1118,7 +1139,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
   border-top:1px solid var(--line); flex:none; }
 .pe-grid { display:grid; gap:3px; margin-top:var(--sp-2); }
 .pe-grid input { width:100%; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
-  border-radius:4px; padding:4px 2px; font-size:10.5px; text-align:center; font-family:var(--font-ui); }
+  border-radius:var(--radius-sm); padding:4px 2px; font-size:10.5px; text-align:center; font-family:var(--font-ui); }
 .pe-grid input:focus { border-color:var(--accent-purple); outline:none; }
 
 /* =========================================================================
@@ -1276,7 +1297,11 @@ select.pm-field-input { width:116px; padding-right:24px; }
 .pmc-hardware { fill:var(--surface-raised); stroke:var(--ink-muted); stroke-width:1; }
 .pmc-tip { fill:var(--accent); }
 .pmc-dim { stroke:var(--accent); stroke-width:1; fill:none; }
-.pmc-label { font-family:var(--font-ui); font-size:8px; }
+/* 10px, not 8: the diagram renders 1:1 at its 220px max-width, so this is a
+   literal 8 CSS px -- the smallest type in the app by a point, on the one
+   word that explains the clearance field below it. 10px fits easily (the
+   label starts at x=158 of 220). */
+.pmc-label { font-family:var(--font-ui); font-size:10px; }
 .pmc-label-accent { fill:var(--accent-hover); font-weight:600; }
 .pmc-caption { margin-bottom:var(--sp-2); }
 
@@ -1360,7 +1385,10 @@ select.pm-field-input { width:116px; padding-right:24px; }
   color:var(--ink-muted); font-size:10.5px; font-weight:600; border-radius:var(--radius-sm); padding:5px 9px;
   cursor:pointer; font-family:var(--font-ui); transition:border-color .15s, color .15s; }
 .hint-toggle:hover { border-color:var(--accent); color:var(--ink); }
-.hint-toggle[aria-pressed="false"] { color:var(--ink-muted); opacity:.55; }
+/* .8, not .55: at .55 this composites to 3.00:1 against the panel, and this
+   is an operable control (not disabled, so not exempt). .8 measures 4.64:1
+   and still reads clearly dimmer than the pressed state. */
+.hint-toggle[aria-pressed="false"] { color:var(--ink-muted); opacity:.8; }
 
 /* Hint-density toggle: when off, every .hint block in either panel is hidden. */
 body.hints-hidden .hint { display:none; }
@@ -1383,7 +1411,12 @@ body.hints-hidden .hint { display:none; }
   .canvas-wrap { flex:1 1 40vh; min-height:240px; }
   .panel { width:auto; flex:1 1 auto; border-left:none; border-top:1px solid var(--line); }
   .splitter { display:none; }
-  .mobile-note { display:block; font-size:11px; color:var(--warn); background:rgba(255,180,84,.10);
+  /* Neutral notice chrome, NOT --warn: "this app wants a mouse" is a device
+     capability, not a machine-safety state, and the reserved trio has to keep
+     meaning probe limits / melt ceiling / risk flags / clamp events. Same
+     surface+hairline treatment as .output-card, at full --ink so it still
+     stands out from the .sub line above it. */
+  .mobile-note { display:block; font-size:11px; color:var(--ink); background:var(--surface-raised);
     border:1px solid var(--line); border-radius:var(--radius-sm); padding:8px 10px; margin-bottom:var(--sp-4); }
   .telemetry-card { top:8px; right:8px; width:150px; max-width:calc(100% - 16px); }
   .draft-preview-label { top:8px; left:8px; }
@@ -1413,7 +1446,7 @@ body.hints-hidden .hint { display:none; }
 .guide-slide li:last-child { margin-bottom:0; }
 .guide-slide b { color:var(--ink); }
 .guide-slide code { font-family:var(--font-mono); font-size:11.5px; background:var(--surface-raised);
-  border-radius:4px; padding:1px 4px; }
+  border-radius:var(--radius-sm); padding:1px 4px; }
 .guide-modal-footer { display:flex; align-items:center; justify-content:space-between; gap:8px;
   padding:var(--sp-3) var(--sp-4); border-top:1px solid var(--line); flex:none; }
 /* Dots are purely decorative progress -- aria-hidden on the wrapper in

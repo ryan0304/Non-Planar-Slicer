@@ -731,15 +731,16 @@ function showGcodeTitle(name){
   if(!gcodeTitleEl){
     gcodeTitleEl = document.createElement('div');
     gcodeTitleEl.id = 'gcode-title';
-    // Surface/ink stand-ins tracking the palette (--surface rgb(30,33,36) and
-    // --ink #e8eaed) -- this label is a plain DOM element positioned over the
-    // canvas, not a CSS-var-aware node, so the values are inlined here.
+    // Tokens resolve normally here: this is an ordinary element inside
+    // #canvas-wrap, so var() inherits from :root like anywhere else. (The
+    // literal-hex rule in style.css applies to data-URI SVG XML, which cannot
+    // read custom properties -- not to a plain div.)
     gcodeTitleEl.style.cssText =
       'position:absolute;top:8px;left:50%;transform:translateX(-50%);' +
-      'padding:3px 12px;border-radius:6px;background:rgba(30,33,36,0.86);' +
-      'color:#e8eaed;font-size:12px;font-weight:600;pointer-events:none;' +
-      'z-index:5;font-family:sans-serif;max-width:60%;overflow:hidden;' +
-      'text-overflow:ellipsis;white-space:nowrap;border:1px solid rgba(255,255,255,0.08)';
+      'padding:3px 12px;border-radius:var(--radius-sm);background:rgba(30,33,36,0.86);' +
+      'color:var(--ink);font-size:12px;font-weight:600;pointer-events:none;' +
+      'z-index:5;font-family:var(--font-ui);max-width:60%;overflow:hidden;' +
+      'text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--line)';
     wrap.appendChild(gcodeTitleEl);
   }
   gcodeTitleEl.textContent = name;
@@ -945,10 +946,10 @@ let cuts=[0];   // extrude-segment indices at each spiral-turn boundary (+ the e
 // stage; loadYield() below hands control back to the browser between stages
 // so that label actually paints before the next heavy pass blocks the thread.
 // Built as a plain DOM node with inline styles (same pattern as
-// showGcodeTitle's #gcode-title) rather than a stylesheet class -- viewer.js
-// does not own style.css. Colours are hand-picked to track --surface/--ink
-// without using the CSS custom properties themselves (and deliberately avoid
-// --ok/--warn/--danger/--accent-purple, which are reserved to other subsystems).
+// showGcodeTitle's #gcode-title) rather than a stylesheet class. Tokens are
+// read through var() -- they inherit from :root here like anywhere else -- and
+// deliberately avoid --ok/--warn/--danger/--accent-purple, which are reserved
+// to other subsystems.
 let loadOverlayEl = null, loadOverlayStageEl = null, loadOverlayFileEl = null;
 function showLoadOverlay(name){
   if(!loadOverlayEl){
@@ -957,7 +958,7 @@ function showLoadOverlay(name){
     loadOverlayEl.style.cssText =
       'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;' +
       'justify-content:center;gap:6px;background:rgba(23,25,27,0.82);' +
-      'color:#e8eaed;font-family:sans-serif;z-index:8;pointer-events:none;text-align:center;';
+      'color:var(--ink);font-family:var(--font-ui);z-index:8;pointer-events:none;text-align:center;';
     loadOverlayStageEl = document.createElement('div');
     loadOverlayStageEl.id = 'load-overlay-stage';
     loadOverlayStageEl.style.cssText = 'font-size:14px;font-weight:600;';
@@ -1289,6 +1290,9 @@ window.addEventListener('keydown',e=>{
 // ---- file input -----------------------------------------------------------
 const fileInput=document.getElementById('file');
 document.getElementById('drop').addEventListener('click',()=>fileInput.click());
+document.getElementById('drop').addEventListener('keydown',e=>{
+  if(e.key==='Enter'||e.key===' '){ e.preventDefault(); fileInput.click(); }
+});
 fileInput.addEventListener('change',e=>{const f=e.target.files[0]; if(f) f.text().then(t=>load(f.name,t));});
 ['dragenter','dragover'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();document.getElementById('drop').classList.add('hot');}));
 ['dragleave','drop'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();document.getElementById('drop').classList.remove('hot');}));
@@ -1308,7 +1312,7 @@ document.getElementById('t-width').addEventListener('input',e=>{
   if(lineMat && !document.getElementById('t-truewidth').checked){ lineMat.linewidth=lineWidthPx; render(); }
 });
 document.getElementById('t-truewidth').addEventListener('change',e=>{
-  document.getElementById('row-width').style.opacity = e.target.checked ? .45 : 1;
+  document.getElementById('t-width').disabled = e.target.checked;
   if(lastData){ buildGeometry(lastData); setProgress(progress); }
 });
 document.getElementById('fit-view').addEventListener('click',fitView);
@@ -3503,9 +3507,10 @@ let measureRepositionCard = function(){};
 // left/top of its own, same as before; Reset drops that custom spot and
 // snaps back to following the rail, rather than back to a fixed corner.
 //
-// This file owns every DOM/CSS change for this feature (index.html and
-// style.css are being edited elsewhere right now), so the lock/reset buttons
-// and their styling are injected here rather than hand-added to the markup.
+// The lock/reset buttons and their styling are injected from here rather than
+// hand-added to index.html/style.css, because the whole measure-card drag
+// feature is self-contained in this IIFE -- markup, listeners and chrome move
+// together. New rules here must still use the shared tokens (see below).
 // Colour stays on --measure/MEASURE_COL, same token the rest of this tool
 // uses -- see the reserved-token comment at the top of style.css.
 const MEASURE_POS_KEY = 'measure-card-pos';
@@ -3529,8 +3534,9 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
     '.measure-drag-btn{display:inline-flex;align-items:center;justify-content:center;' +
       'background:none;border:none;color:var(--ink);cursor:pointer;' +
       'font-size:12px;min-width:22px;min-height:22px;padding:2px 5px;line-height:1;' +
-      'border-radius:4px;font-family:var(--font-ui);opacity:.75;' +
-      'transition:color .15s,background-color .15s,opacity .15s;}' +
+      'border-radius:var(--radius-sm);font-family:var(--font-ui);opacity:.75;' +
+      'transition:color .15s,background-color .15s,opacity .15s,transform .1s ease;}' +
+    '.measure-drag-btn:active{transform:scale(0.95);}' +
     '.measure-drag-btn:hover{opacity:1;color:var(--ink);background:var(--surface-raised);}' +
     '.measure-drag-btn[aria-pressed="true"]{opacity:1;color:var(--measure);' +
       'background:var(--measure-dim);}';

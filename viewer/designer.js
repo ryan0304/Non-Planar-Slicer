@@ -603,6 +603,7 @@
       btns.forEach(function(btn){
         var active = btn.dataset.mode === name;
         btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
       for(var k in panels){
         if(panels[k]) panels[k].classList.toggle('active', k === name);
@@ -667,6 +668,8 @@
         var i = STEPS.indexOf(btn.dataset.step);
         btn.classList.toggle('active', btn.dataset.step === name);
         btn.classList.toggle('done', i < idx);
+        if(btn.dataset.step === name) btn.setAttribute('aria-current', 'step');
+        else btn.removeAttribute('aria-current');
       });
       STEPS.forEach(function(s){
         var p = panels[s];
@@ -2501,7 +2504,7 @@
 
     function draw(){
       ctx.clearRect(0,0,W,H);
-      var accent = css('--accent') || '#5a8aff';
+      var accent = css('--accent') || '#2997ff';
       var muted = css('--muted') || '#9aa0a6';
       var warn = css('--warn') || '#ffb454';
 
@@ -2744,6 +2747,16 @@
       },
       reset: function(){
         pts = defaultsToPts(defaults, defaultTs);
+        // `defaults` is a fixed array captured at construction time, in the
+        // ORIGINAL bootstrap scale (0..AMP_MAX=0.95 for the amp editor) --
+        // it does not know about a printer switch that has since lowered
+        // `hi`. Without this, resetting the amp curve on any printer whose
+        // z_amp_max is below the default peak (0.8mm) put points ABOVE the
+        // wall: same bug setRange() already guards against for a printer
+        // switch, just reachable through a different button.
+        for(var i = 0; i < pts.length; i++){
+          pts[i].v = Math.min(hi, Math.max(lo, pts[i].v));
+        }
         hoverIdx = -1; lastTouchedPt = null;
         draw(); onChange();
       },
@@ -3053,7 +3066,9 @@
   // renaming it would orphan every design already on disk.
   function activateSilMode(name){
     document.querySelectorAll('.sil-mode-btn').forEach(function(btn){
-      btn.classList.toggle('active', btn.getAttribute('data-silmode') === name);
+      var on = btn.getAttribute('data-silmode') === name;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
     var symPanel = document.getElementById('sil-sym-panel');
     var asymPanel = document.getElementById('sil-asym-panel');
@@ -4348,6 +4363,8 @@
         var it = document.createElement('div');
         it.className = 'param-search-item' + (i===0?' active':'');
         it.setAttribute('role','option');
+        it.id = 'psi-' + i;
+        it.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
         var crumb = m.mode==='viewer' ? 'Viewer' : (STEP_LABEL[m.step]||'Design');
         it.innerHTML = '<span>'+esc(m.label)+'</span><span class="psi-crumb">'+crumb+'</span>';
         it.addEventListener('mousedown', function(e){ e.preventDefault(); choose(m); });
@@ -4355,10 +4372,15 @@
         resultsEl.appendChild(it);
       });
       resultsEl.classList.toggle('open', out.length>0);
+      input.setAttribute('aria-expanded', out.length>0 ? 'true' : 'false');
+      input.setAttribute('aria-activedescendant', out.length>0 ? 'psi-0' : '');
     }
     function setActive(i){ var ch = resultsEl.children;
-      if(ch[activeIdx]) ch[activeIdx].classList.remove('active');
-      activeIdx = i; if(ch[i]) ch[i].classList.add('active'); }
+      if(ch[activeIdx]){ ch[activeIdx].classList.remove('active');
+        ch[activeIdx].setAttribute('aria-selected','false'); }
+      activeIdx = i;
+      if(ch[i]){ ch[i].classList.add('active'); ch[i].setAttribute('aria-selected','true');
+        input.setAttribute('aria-activedescendant', ch[i].id); } }
 
     // Shared by the outside-click handler and Escape: empties the query and
     // drops the stale match list, not just the dropdown's open state. Does
@@ -4368,6 +4390,8 @@
       input.value = '';
       matches = []; activeIdx = -1;
       resultsEl.classList.remove('open');
+      input.setAttribute('aria-expanded','false');
+      input.removeAttribute('aria-activedescendant');
     }
 
     function choose(m){
@@ -4819,6 +4843,11 @@
   var stlUploadSeq = 0;
 
   stlDrop.addEventListener('click', function(){ stlFile.click(); });
+  // A div with role="button" gets no automatic Enter/Space activation --
+  // mirrors the #pm-drop handler above so both drop zones behave the same.
+  stlDrop.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); stlFile.click(); }
+  });
   stlFile.addEventListener('change', function(e){
     if(e.target.files.length > 0) uploadSTL(e.target.files[0]);
   });

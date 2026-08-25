@@ -8,7 +8,7 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cpath d='M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000' fill='none' stroke='%239aa0a6' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
@@ -32,7 +32,7 @@
       <div class="card-title">Drop a <b>.gcode</b> file here</div>
       <div class="sub" style="margin:0">or use the picker on the right</div>
     </div></div>
-    <div id="stale-badge" class="stale-badge">G-code is outdated &#8212; design changed
+    <div id="stale-badge" class="stale-badge" role="status">G-code is outdated &#8212; design changed
       since last generate</div>
     <!-- ================================================================ -->
     <!-- Orientation cube. Its own canvas + renderer (see viewer.js) so its -->
@@ -92,7 +92,7 @@
         <button class="measure-mode" type="button" role="radio"
           aria-checked="false" data-mmode="ring">Diameter</button>
       </div>
-      <div id="measure-read" class="measure-read"></div>
+      <div id="measure-read" class="measure-read" role="status" aria-live="polite"></div>
       <div class="measure-foot">
         <span id="measure-hint" class="measure-hint">&#8211;</span>
         <button id="measure-clear" class="btn btn-sm" type="button">Clear</button>
@@ -104,7 +104,8 @@
       <canvas id="spark" class="spark"></canvas>
       <div id="timeline" class="timeline">
         <button id="play" title="Play / pause">&#9654;</button>
-        <input id="scrub" type="range" min="0" max="1000" value="1000">
+        <input id="scrub" type="range" min="0" max="1000" value="1000"
+               aria-label="Playback position" title="Drag to scrub through the print">
         <select id="speed" title="Playback speed">
           <option value="1">1&times; (real time)</option>
           <option value="2">2&times;</option>
@@ -138,14 +139,16 @@
       drag and per-turn arrow-key playback are pointer/keyboard interactions.</div>
 
     <div id="param-search" class="param-search">
-      <input id="param-search-input" type="text" placeholder="Search controls…"
-             autocomplete="off" spellcheck="false" aria-label="Search parameters">
+      <input id="param-search-input" type="text" placeholder="Search controls&#8230;"
+             autocomplete="off" spellcheck="false" aria-label="Search parameters"
+             role="combobox" aria-expanded="false" aria-haspopup="listbox"
+             aria-controls="param-search-results" aria-autocomplete="list">
       <div id="param-search-results" class="param-search-results" role="listbox"></div>
     </div>
 
     <div id="mode-bar" class="mode-bar">
-      <button class="mode-btn" data-mode="design">Design</button>
-      <button class="mode-btn" data-mode="viewer">G-code Viewer</button>
+      <button class="mode-btn" data-mode="design" aria-pressed="false">Design</button>
+      <button class="mode-btn" data-mode="viewer" aria-pressed="false">G-code Viewer</button>
     </div>
 
     <div id="mode-design" class="mode-panel">
@@ -265,7 +268,7 @@
         <hr>
         <h3 class="section-heading" id="sec-head-importstl">Or import an STL</h3>
         <div id="import-panel" style="display:none">
-          <div class="import-drop" id="stl-drop">
+          <div class="import-drop" id="stl-drop" tabindex="0" role="button">
             Drop an STL file here<br>or click to browse
             <input type="file" id="stl-file" accept=".stl" hidden>
           </div>
@@ -306,12 +309,12 @@
         <div class="drow"><span>Z twist (turns)</span><input type="number" id="d-ztwist" min="0" max="2" step="0.25"></div>
 
         <div class="cv-editor">
-          <div class="cv-head"><b>Wave amplitude over height</b><span class="cv-reset" id="amp-reset">reset</span></div>
+          <div class="cv-head"><b>Wave amplitude over height</b><button type="button" class="cv-reset" id="amp-reset">reset</button></div>
           <canvas id="amp-curve" width="360" height="100"></canvas>
           <div id="amp-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span class="cv-readout-sub">hover or drag a point</span></div>
           <div id="slope-read" class="cv-note"></div>
         </div>
-        <div class="hint" id="amp-limit-hint" style="margin-top:-2px"></div>
+        <div class="limit-note" id="amp-limit-hint" style="margin-top:-2px"></div>
         </div>
 
         <hr>
@@ -392,7 +395,7 @@
           <div class="drow"><span>Loops per turn</span><input type="number" id="d-loop-per-turn" min="1" max="48" step="1"></div>
           <div class="drow"><span>Row height (mm)</span><input type="number" id="d-loop-row" min="1" max="6" step="0.5"></div>
           <div class="drow"><span>Loop height (mm)</span><input type="number" id="d-loop-up" min="1" max="8" step="0.5"></div>
-          <div class="hint" id="loop-zcap" style="margin-top:-4px;margin-bottom:2px"></div>
+          <div class="limit-note" id="loop-zcap" style="margin-top:-4px;margin-bottom:2px"></div>
           <div class="drow"><span>Outward lean (mm)</span><input type="number" id="d-loop-out" min="0" max="5" step="0.25"></div>
           <div class="drow"><span>Alignment</span>
             <select id="d-loop-align">
@@ -411,7 +414,7 @@
           <div class="drow" id="row-loop-coast"><span>Tip coast (mm)</span><input type="number" id="d-loop-coast" min="0" max="6" step="0.2"></div>
           <div class="drow" id="row-loop-retract"><span>Tip retract (mm)</span><input type="number" id="d-loop-retract" min="0" max="2" step="0.1"></div>
           <div class="hint" id="retract-hint" style="margin-top:-4px;margin-bottom:2px">Pulls filament back
-            during the peak pause — the strong fix for oozy tips. 0 = off.</div>
+            during the peak pause &#8212; the strong fix for oozy tips. 0 = off.</div>
           <div class="drow"><span>Row wave (mm)</span><input type="number" id="d-loop-waveamp" min="0" max="3" step="0.25"></div>
           <div class="drow"><span>Waves around</span><input type="number" id="d-loop-waves" min="1" max="40" step="1"></div>
           <div class="drow"><span>Strand thickness &times;</span><input type="number" id="d-loop-flow" min="0.5" max="2.5" step="0.1"></div>
@@ -461,10 +464,10 @@
         </div>
 
         <div class="cv-editor" id="sil-section">
-          <div class="cv-head"><b>Silhouette</b><span class="cv-reset" id="sil-reset">reset</span></div>
+          <div class="cv-head"><b>Silhouette</b><button type="button" class="cv-reset" id="sil-reset">reset</button></div>
           <div id="sil-mode-bar" class="sil-mode-bar">
-            <button class="sil-mode-btn" data-silmode="sym">Symmetrical</button>
-            <button class="sil-mode-btn" data-silmode="asym">Freeform (3D)</button>
+            <button class="sil-mode-btn" data-silmode="sym" aria-pressed="false">Symmetrical</button>
+            <button class="sil-mode-btn" data-silmode="asym" aria-pressed="false">Freeform (3D)</button>
           </div>
           <div id="sil-sym-panel">
             <canvas id="sil-curve" width="360" height="100"></canvas>
@@ -514,7 +517,7 @@
         <div class="hint" style="margin-top:2px">Leave blank to use the selected filament's temperatures; set either to override. Bed temp can be set to 0 to turn the bed heater off.</div>
 
         <div class="cv-editor">
-          <div class="cv-head"><b>Line width over height</b><span class="cv-reset" id="width-reset">reset</span></div>
+          <div class="cv-head"><b>Line width over height</b><button type="button" class="cv-reset" id="width-reset">reset</button></div>
           <canvas id="width-curve" width="360" height="100"></canvas>
           <div id="width-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span class="cv-readout-sub">hover or drag a point</span></div>
           <div class="hint" style="margin-top:2px">Scales bead width at each height (0.6-1.8&times;).
@@ -530,7 +533,7 @@
           <div class="hint tight-top">Produces the single-wall non-planar G-code this app prints
             directly.</div>
           <button id="gen-btn" class="btn btn-primary btn-block mt-2">Generate &amp; preview</button>
-          <div id="gen-status" class="gen-status"></div>
+          <div id="gen-status" class="gen-status" role="status"></div>
           <div id="gen-progress" class="gen-progress" role="progressbar" aria-valuemin="0"
                aria-valuemax="100" aria-valuenow="0" aria-label="Generate progress">
             <div id="gen-progress-fill" class="gen-progress-fill"></div>
@@ -556,7 +559,7 @@
     </div>
 
     <div id="mode-viewer" class="mode-panel">
-    <div class="drop" id="drop">
+    <div class="drop" id="drop" tabindex="0" role="button">
       Click to choose a .gcode file<br>or drag &amp; drop anywhere
       <input type="file" id="file" accept=".gcode,.gco,.g,.nc,.txt" hidden>
     </div>
@@ -598,8 +601,8 @@
       <label class="row"><span>Show bed grid</span><span><input type="checkbox" id="t-bed" checked></span></label>
       <label class="row"><span>Spin</span><input type="checkbox" id="t-spin"></label>
       <label class="row"><span>True bead width</span><input type="checkbox" id="t-truewidth" checked></label>
-      <label class="row" id="row-width" style="opacity:.45"><span>Line thickness (px)</span>
-        <input type="range" id="t-width" min="1" max="9" step="0.5" value="2" style="width:110px"></label>
+      <label class="row" id="row-width"><span>Line thickness (px)</span>
+        <input type="range" id="t-width" min="1" max="9" step="0.5" value="2" style="width:110px" disabled></label>
       <button id="fit-view" class="btn btn-block mt-2">Fit view to model &nbsp;(F)</button>
       <div class="legend" id="legend"></div>
       <div class="legend-labels" id="legend-labels"><span id="z-lo">0</span><span id="z-mid">height (mm)</span><span id="z-hi">&#8211;</span></div>
@@ -906,7 +909,7 @@
 
       <div class="guide-slide" data-slide="1">
         <h3>Fastest start</h3>
-        <div class="guide-fig" data-frames="guide/01-fastest-start" data-count="6"></div>
+        <div class="guide-fig" data-frames="guide/01-fastest-start" data-count="6" aria-hidden="true"></div>
         <ul>
           <li>Pick a preset from the preset bar at the top of Design.</li>
           <li>Press <b>Generate &amp; preview</b>.</li>
@@ -917,7 +920,7 @@
 
       <div class="guide-slide" data-slide="2">
         <h3>The four steps</h3>
-        <div class="guide-fig" data-frames="guide/02-four-steps" data-count="5"></div>
+        <div class="guide-fig" data-frames="guide/02-four-steps" data-count="5" aria-hidden="true"></div>
         <ul>
           <li><b>1. Model</b> &#8212; pick a shape and its size, or import your own STL.</li>
           <li><b>2. Texture</b> &#8212; shape the Z-wave and silhouette curves, add a surface
@@ -929,7 +932,7 @@
 
       <div class="guide-slide" data-slide="3">
         <h3>Shaping</h3>
-        <div class="guide-fig" data-frames="guide/03-shaping" data-count="5"></div>
+        <div class="guide-fig" data-frames="guide/03-shaping" data-count="5" aria-hidden="true"></div>
         <ul>
           <li>Two curve editors: <b>Wave amplitude over height</b> and <b>Silhouette</b> (radius
             scale). In both, the left edge is the bottom of the print, the right edge the top.</li>
@@ -943,7 +946,7 @@
 
       <div class="guide-slide" data-slide="4">
         <h3>Textures</h3>
-        <div class="guide-fig" data-frames="guide/04-textures" data-count="4"></div>
+        <div class="guide-fig" data-frames="guide/04-textures" data-count="4" aria-hidden="true"></div>
         <ul>
           <li>Seven radial wave patterns (v-wave, h-wave, ripple, diamond, bubbles, pleats,
             hammered), plus blobs, plus loop fabric.</li>
@@ -956,7 +959,7 @@
 
       <div class="guide-slide" data-slide="5">
         <h3>After generating</h3>
-        <div class="guide-fig" data-frames="guide/05-after-generating" data-count="4"></div>
+        <div class="guide-fig" data-frames="guide/05-after-generating" data-count="4" aria-hidden="true"></div>
         <ul>
           <li>The viewer: a playback timeline, colour modes (plain / height / overhang), the
             measure tool, and the orientation cube.</li>
