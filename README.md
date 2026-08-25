@@ -83,8 +83,9 @@ python presets.py        # writes 5 tuned, machine-safe files into examples/
 | `05_aggressive_twist_star` | Show-off: 6-pt star, 3 twists, 8-wave rim, fast | 25.0 mm/s |
 
 Each is tuned to fit the bed, stay under 160 mm, keep Z-rate ≤ 25 mm/s, and stay
-inside the **probe keep-out** (z-amp ≤ 1.9 mm — collision re-measured at 2.0 mm
-wave amplitude against the toolhead body/Omron probe behind the nozzle).
+inside the Trident's **probe keep-out** — `z_amp_max` is `0.95 mm` (see
+[Read before you print](#read-before-you-print) for why), and every preset
+here sits at 0.7–0.9 mm, comfortably under it.
 **For a first real print, use `01_gentle_wave_vase` in PLA** and watch the first
 few layers. Then open the matching settings in `presets.py` and tweak from there.
 
@@ -216,21 +217,27 @@ Three model-based checks, all driven from the parsed toolpath:
   probe's footprint rises above `nozzle_z + probe_clearance`, reporting the risky
   move count and worst violation depth.
 
-  **Measure your real clearance** (default assumption 2.0 mm): bring the nozzle
-  to Z=0 on the bed, then measure the gap under the probe body with feeler
-  gauges. Check any file against your number:
+  **Measure your real clearance** (default assumption `3.8 mm`, the Trident
+  profile's `probe_clearance`): bring the nozzle to Z=0 on the bed, then
+  measure the gap under the probe body with feeler gauges. Check any file
+  against your number:
 
   ```bash
   python analyze.py design.gcode --probe-clearance 2.5
   ```
 
-  Rule of thumb for wave prints: **max z-amp <= clearance / 2** (crest-to-trough
-  span is 2x the amplitude). At the machine's measured 3.8 mm clearance that
-  means z-amp <= 1.9 mm; `examples/01b_probe_safe_vase.gcode` (z-amp 0.9) is
-  pre-generated and verified 0 risky moves. Surface-mode domes are far over any
-  realistic clearance — do not print them with the probe mounted. To get big
-  amplitudes back: remount the probe higher, remove it for non-planar jobs, or
-  switch to a dockable probe (Klicky-style).
+  **The naive rule of thumb — max z-amp <= clearance / 2 — is not what this app
+  actually enforces.** At the Trident's 3.8 mm measured clearance that rule
+  predicts 1.9 mm as "safe"; a real probe strike happened well within that
+  regime, which is why `z_amp_max` for the Trident profile was revised down to
+  **0.95 mm** instead (see [Read before you print](#read-before-you-print)) —
+  roughly clearance/4, not clearance/2. Treat the /2 figure as a historical
+  lower bound on the risk, not a target: `examples/01b_probe_safe_vase.gcode`
+  (z-amp 0.9) is pre-generated and verified 0 risky moves, sitting just under
+  the current 0.95 mm ceiling. Surface-mode domes are far over any realistic
+  clearance — do not print them with the probe mounted. To get big amplitudes
+  back: remount the probe higher, remove it for non-planar jobs, or switch to
+  a dockable probe (Klicky-style).
 
 ## Using your OrcaSlicer filament settings
 
@@ -258,9 +265,10 @@ whether a thick continuous print will out-run the hotend.
 ## Texture patterns (OGcode-style, probe-safe)
 
 Seven wall textures displace the **radius** instead of Z — they cost zero
-Z-velocity budget and **cannot hit the probe**, so unlike the Z-waves (capped at
-1.9 mm) these can be bold: `vwave` (vertical ridges), `hwave` (horizontal
-rings), `ripple` (diagonal), `diamond`, `bubbles`, `pleats`, `hammered`.
+Z-velocity budget and **cannot hit the probe**, so unlike the Z-waves (capped
+at the printer's own `z_amp_max` — 0.95 mm on the Trident) these can be bold:
+`vwave` (vertical ridges), `hwave` (horizontal rings), `ripple` (diagonal),
+`diamond`, `bubbles`, `pleats`, `hammered`.
 
 ```bash
 python generate.py --pattern ripple --pattern-amp 1.2 --pattern-waves 14 \
@@ -322,9 +330,12 @@ OrcaSlicer profiles). Then shape the print with **two draggable curve editors**,
 each plotting a value from the bottom of the print (left) to the top (right):
 
 - **Wave amplitude over height** — how strong the non-planar wave texture is at
-  each height (mm). Drag the six control points up/down. A red dashed line marks
-  the **1.9 mm probe limit**; the amplitude defaults to 0 at the very bottom so
-  the first layers stay flat and adhere.
+  each height (mm). Drag the control points up/down; a dashed line marks the
+  selected printer's own `z_amp_max` ceiling (labeled e.g. `amp limit 0.95` for
+  the Trident), and every point is clamped to it — including on reset — so the
+  curve can never be dragged, loaded, or reset past what that machine can
+  safely take. The amplitude defaults to 0 at the very bottom so the first
+  layers stay flat and adhere.
 - **Silhouette (radius scale)** — a multiplier on the radius at each height, for
   bulges and tapers. `1.0` (the dashed reference) is the plain outline; push a
   point above 1.0 to bulge, below to pinch.
@@ -356,13 +367,16 @@ through up to 50 recent edits, and **Save design** / **Load design** export
 or import the full parameter set as JSON so a design survives a browser
 restart or moves between machines.
 
-**The 1.9 mm probe ceiling is enforced, not just suggested.** The wave amplitude
-is clamped to `[0, 1.9] mm` both in the curve editor and again on the server, so
+**The printer's own probe ceiling is enforced, not just suggested.** The wave
+amplitude is clamped to `[0, z_amp_max]` for whichever printer is selected —
+`0.95 mm` on the Trident — both in the curve editor (drag, reset, loading a
+saved design, and switching printers all re-clamp) and again on the server, so
 even a hand-crafted request can't ask for a print tall enough to strike the
-toolhead body/Omron probe behind the nozzle (crest-to-trough span is 2x the
-amplitude; 1.9 mm keeps a safety margin under the 3.8 mm measured clearance).
-Radius scale is clamped to `[0.2, 1.5]`. Requests that wouldn't fit the bed or
-exceed Z max are rejected with a clear error in the status line.
+toolhead body/Omron probe behind the nozzle. `z_amp_max` is a per-profile
+value, not a fixed number: switching printers, or importing your own config,
+changes the ceiling the curve editor draws and clamps against. Radius scale is
+clamped to `[0.2, 1.5]`. Requests that wouldn't fit the bed or exceed Z max are
+rejected with a clear error in the status line.
 
 ## Asymmetric shaping (app only)
 
@@ -443,10 +457,15 @@ the numbers this app leans on hardest. `max_z_velocity` (30 mm/s) and
 `max_z_accel` are shared conservative values across the whole family rather
 than per-model measurements. `z_amp_max` (4.0 mm) is not a vendor figure at
 all — it is this app's own maximum Z excursion below already-printed
-material, assuming the probe-less toolhead geometry these machines have. It
-has not been print-tested on a Bambu by anyone. Start well under it and work
-up, or import your own machine profile from Bambu Studio and adjust in the
-review dialog.
+material, assuming the probe-less toolhead geometry these machines have.
+
+As of 2026-08, real print testing is underway on Bambu Lab **A1, P1S, and
+P2S** — but "testing is underway" is not "verified": until a print actually
+confirms these numbers on those machines, treat them exactly like every other
+un-printed profile in this list. Start well under `z_amp_max` and work up, or
+import your own machine profile from Bambu Studio and adjust in the review
+dialog. This section will be updated with real findings once that testing has
+something conclusive to report.
 
 Every profile also carries `quality_slope_max`, a *print-quality* ceiling
 distinct from `z_amp_max`'s hardware clearance: the steepest printable
@@ -840,7 +859,7 @@ python calibrate.py     # writes into examples/cal/
 |------|---------------|----------------|
 | `cal_first_layer.gcode` | 40 mm spiral disk, 1 layer, squish 0.75 | Live-Z offset |
 | `cal_flow_ladder.gcode` | Single-wall cylinder r=25, 30 mm tall, 5 x 6 mm flow bands (0.90 / 0.95 / 1.00 / 1.05 / 1.10) | Flow multiplier (`--flow`) |
-| `cal_zamp_ladder.gcode` | Single-wall cylinder r=25, 36 mm tall, 4 x 9 mm Z-amp bands (0 / 0.8 / 1.4 / 1.9 mm) | Maximum safe `--z-amp` |
+| `cal_zamp_ladder.gcode` | Single-wall cylinder r=25, 36 mm tall, 4 x 9 mm Z-amp bands (0 / 0.3 / 0.6 / 0.95 mm) | Maximum safe `--z-amp` |
 | `cal_base_adhesion.gcode` | Circle r=25, 15 mm tall, flaring 0.5x->1.0x radius (top-heavy), 2-layer base + 3-loop brim sized to the wall's own r=12.5 footprint | Whether the smaller (post-6332a6a) base still holds a flaring part down |
 
 Each file is checked by `analyze.py` (exit 0) and takes under 20 minutes.  A
