@@ -347,6 +347,15 @@
   var histRunKey = null, histRunTimer = null;
 
   function endHistRun(){
+    // Ignores any event arg (this is passed directly as a pointerup/
+    // pointercancel/change listener in several places) -- flushes whatever
+    // logical edit was open using the CURRENT lastSnap, which histFinish's
+    // own callers below guarantee is the correct post-state at every call
+    // site. Must run before histRunKey is cleared: histFinish reads only
+    // histPre, not histRunKey, but keeping this ordering matches
+    // persistDesign's own "close the previous run before opening the next
+    // one" sequencing.
+    histFinish(lastSnap);
     histRunKey = null;
     if(histRunTimer){ clearTimeout(histRunTimer); histRunTimer = null; }
   }
@@ -402,11 +411,43 @@
           undoStack.push(lastSnap);
           if(undoStack.length > HIST_MAX) undoStack.shift();
           redoStack.length = 0;
+          // Same guard as the undo push right above (histRunKey === null,
+          // !histSuppress, snap actually changed) -- captured here, not
+          // read back off undoStack later, so the edit-history log's
+          // granularity is provably identical to the undo stack's, without
+          // undoStack's own HIST_MAX shifting or doUndo/doRedo's pushes
+          // ever being mistaken for "the pre-state of the run now closing".
+          histPre = histLogArmed ? lastSnap : null;
         }
         if(key !== null) armHistRun(key);
       }
     }
     lastSnap = snap;
+    // Discrete (un-keyed) edits -- a <select>, a checkbox, a preset apply --
+    // never open a coalescing run for endHistRun() to later close, so they
+    // must finalize their own history entry right here, on arrival. Keyed
+    // edits (histRunKey !== null) are still mid-run and skip this; their
+    // entry lands when the run ends (endHistRun, above).
+    if(histRunKey === null){
+      // An explicit label (import/preset/reset) names an EVENT, not a value
+      // change -- it must still record even when the loaded/applied design
+      // happens to be byte-identical to what was already live (e.g.
+      // importing a file that round-trips your current design exactly),
+      // which is exactly the case histFinish's histPre-gate below would
+      // otherwise drop. histPre is cleared here rather than left for a
+      // later, unrelated endHistRun() to find and misattribute: it may have
+      // been armed by the undo-push above if snap DID change, but has
+      // nothing left to auto-diff once the explicit label has spoken for
+      // this edit.
+      if(histLogArmed && histLabelOnce !== null){
+        histPre = null;
+        histAppend(histLabelOnce);
+      } else {
+        histFinish(snap);
+      }
+    }
+    histLabelOnce = null;   // consume-or-discard: never leaks onto the
+                             // user's NEXT, unrelated edit.
     updateHistButtons();
     updateStaleBadge();
     updateActiveSummary();
@@ -431,16 +472,26 @@
 
   function doUndo(){
     // Close any run first: the entry we are about to pop must be complete, and
-    // the next edit must not fold itself into a pre-undo run.
+    // the next edit must not fold itself into a pre-undo run. This also
+    // flushes any pending edit-history entry (chronologically before the
+    // undo's own entry below).
     endHistRun();
     if(!undoStack.length) return;
-    redoStack.push(JSON.stringify(design));
+    var cur = JSON.stringify(design);
+    // Logged here, not through persistDesign/histPre: restoreSnapshot below
+    // sets histSuppress = true, which is exactly the flag that stops
+    // histPre from ever being set (persistDesign's own guard), so this is
+    // the only place an undo's own entry can be recorded.
+    histAppend('undo -- ' + (describeDesignDiff(cur, undoStack[undoStack.length - 1]) || 'restored previous state'));
+    redoStack.push(cur);
     restoreSnapshot(undoStack.pop());
   }
   function doRedo(){
     endHistRun();
     if(!redoStack.length) return;
-    undoStack.push(JSON.stringify(design));
+    var cur = JSON.stringify(design);
+    histAppend('redo -- ' + (describeDesignDiff(cur, redoStack[redoStack.length - 1]) || 'reapplied next state'));
+    undoStack.push(cur);
     restoreSnapshot(redoStack.pop());
   }
   function updateHistButtons(){
@@ -461,6 +512,235 @@
   };
   // Test-only: force a coalescing run closed without waiting out HIST_IDLE_MS.
   window.__histEndRun = endHistRun;
+
+  // ---- edit-history log ------------------------------------------------
+  // A human-readable log of what changed, exported inside a .trident file
+  // (buildGenerateBody's Save handler, further down) so a design shared
+  // with someone else carries its own "here's what happened" record, not
+  // just the final numbers. NOT the same thing as #telemetry-card, which is
+  // the live G-code playback HUD (speed/flow under the playhead) -- naming
+  // here deliberately says "history", never "telemetry", to keep the two
+  // apart at a glance.
+  //
+  // One entry per COMPLETED edit, riding the exact same coalescing the undo
+  // stack already does (a whole drag, a whole field commit) -- never one
+  // per pointermove or per keystroke. See histFinish()/the two hook sites
+  // in endHistRun() and persistDesign() below for how that is guaranteed.
+  var HIST_LOG_KEY = 'design-edit-log';   // own localStorage key -- never overloads 'design-state'
+  var HIST_LOG_MAX = 200;                 // ~110 bytes/entry * 200 =~ 22KB, well under quota;
+                                           // roughly 4x a dense session's completed-edit count, so
+                                           // several export/import/edit rounds accumulate without
+                                           // the oldest context falling off, and the modal stays a
+                                           // list, not a wall.
+  var TRIDENT_FORMAT = 'trident-design';
+  var TRIDENT_FORMAT_VERSION = 1;
+
+  var histLog = [];        // [{at: ISO8601 string, summary: string}, ...], oldest first
+  var histPre = null;      // pre-edit snapshot STRING of the logical edit currently in flight
+  var histLabelOnce = null; // explicit summary for the next logged entry (load/preset/reset/undo/redo);
+                             // consumed-or-discarded by persistDesign so it can never leak onto an
+                             // unrelated later edit.
+  var histLogArmed = false; // true once the user has actually touched the page. NOT previewArmed --
+                             // the printer combobox (a custom listbox, see selectPrinter) fires no
+                             // change/input on #design-group, so previewArmed would miss a real
+                             // printer change; and loadPrinterOptions() persists on every page load
+                             // (RESTORE_IGNORED_KEYS above documents exactly which fields that
+                             // touches), which would otherwise log bogus entries on every reload.
+  document.addEventListener('pointerdown', function(){ histLogArmed = true; }, true);
+  document.addEventListener('keydown', function(){ histLogArmed = true; }, true);
+
+  try {
+    var savedHist = JSON.parse(localStorage.getItem(HIST_LOG_KEY) || '[]');
+    if(Array.isArray(savedHist)) histLog = savedHist.slice(-HIST_LOG_MAX);
+  } catch(e){ /* ignore corrupt log */ }
+
+  function saveHistLog(){
+    try { localStorage.setItem(HIST_LOG_KEY, JSON.stringify(histLog)); } catch(e){}
+  }
+
+  function historyModalOpen(){
+    var m = document.getElementById('history-modal');
+    return !!(m && m.style.display !== 'none');
+  }
+
+  // The single place an entry is actually recorded. Deliberately takes only
+  // {at, summary} -- a loaded file's entries are passed through verbatim
+  // (see the Load handler below) rather than rebuilt, and renderHistList()
+  // reads only these two keys and ignores anything else, which is what
+  // keeps a future field (e.g. print/test notes) addable later without a
+  // format break.
+  function histAppend(summary){
+    if(!summary) return;
+    histLog.push({ at: new Date().toISOString(), summary: String(summary) });
+    if(histLog.length > HIST_LOG_MAX) histLog.shift();
+    saveHistLog();
+    if(historyModalOpen() && typeof renderHistList === 'function') renderHistList();
+  }
+
+  // The single finalization point for a logical edit. Reads and clears ONLY
+  // histPre -- never undoStack/redoStack/histRunKey/histRunTimer/lastSnap/
+  // histSuppress/designRev -- which is the entire safety argument for why
+  // this cannot affect undo/redo: it observes the same state those already
+  // maintain, but never writes to any of it.
+  function histFinish(postSnap){
+    if(histPre === null) return;
+    var pre = histPre;
+    histPre = null;   // clear first: re-entrancy safe, a stray second call is a no-op
+    var s = histLabelOnce || describeDesignDiff(pre, postSnap);
+    histAppend(s);
+  }
+
+  // Pure string-in/string-out: two design JSON snapshots -> one short,
+  // human-readable line describing what changed between them. Never reads
+  // live `design` -- persistDesign's "a different control takes over" path
+  // can call endHistRun() (which calls this via histFinish) AFTER design
+  // has already been mutated to the NEW run's value while lastSnap still
+  // holds the OLD run's final state, so only the two snapshot strings are
+  // trustworthy here.
+  var HIST_FIELD_LABELS = {
+    xy_twist:'XY twist', z_twist:'Z twist', layer_height:'layer height',
+    line_width:'line width', z_waves:'Z waves', pattern_amp:'texture depth',
+    pattern_twist:'pattern twist', spine_mm:'spine offset', spine_deg:'spine angle',
+    ovality:'ovality', first_layer_height:'first layer height', squish:'first layer squish',
+    overhang_flow_k:'overhang flow', nozzle_temp:'nozzle temp', bed_temp:'bed temp',
+    base_layers:'base layers', brim:'brim', skirt:'skirt', print_speed:'print speed',
+    spacing_factor:'first layer spacing', fan_overhang_min:'min overhang fan',
+    fan_overhang_max:'max overhang fan', fan_off_layers:'fan-off layers',
+    loop_row:'loop row height', loop_up:'loop height', loop_style:'loop style',
+    loop_align:'loop alignment', loop_mode:'loop mode', star_points:'star points',
+    lean_mm:'lean', lean_deg:'lean direction', base_style:'base style',
+    bottom:'bottom style', sil_mode:'silhouette mode'
+  };
+  var HIST_FIELD_UNITS = {
+    xy_twist:'', z_twist:'', layer_height:'mm', line_width:'mm', radius:'mm',
+    height:'mm', pattern_amp:'mm', pattern_twist:'', spine_mm:'mm', spine_deg:'deg',
+    first_layer_height:'mm', squish:'%', overhang_flow_k:'', nozzle_temp:'C',
+    bed_temp:'C', base_layers:'', brim:'mm', skirt:'mm', print_speed:'mm/s',
+    spacing_factor:'', loop_row:'mm', loop_up:'mm', lean_mm:'mm', lean_deg:'deg'
+  };
+  // Fields whose CONTENTS must never appear in a summary -- named only, and
+  // only when the change is a genuine edit (both sides non-null). One side
+  // null <-> non-null is a DERIVED transition (activateSilMode's ensureCage,
+  // applyDesignToUI's own re-derivation), not something the user typed, so
+  // it is skipped entirely rather than reported as "adjusted".
+  var HIST_OPAQUE_FIELDS = {
+    cage:'shape cage adjusted', point_ffd_grid:'point-edit cage adjusted',
+    amp_profile:'wave amplitude curve edited', radius_profile:'silhouette curve edited',
+    width_profile:'line width curve edited'
+  };
+  // Derived, never user intent -- always skipped.
+  var HIST_SKIP_FIELDS = { bed_center:1, sil3d:1 };
+
+  function histFmtNum(n){
+    if(typeof n !== 'number' || !isFinite(n)) return String(n);
+    var s = n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+    return s === '' || s === '-0' ? '0' : s;
+  }
+  function histFieldPart(key, a, b){
+    if(HIST_SKIP_FIELDS[key]) return null;
+    if(HIST_OPAQUE_FIELDS.hasOwnProperty(key)){
+      if(a == null || b == null) return null;   // derived null<->grid transition, not an edit
+      return HIST_OPAQUE_FIELDS[key];
+    }
+    var label = HIST_FIELD_LABELS[key] || key.replace(/_/g, ' ');
+    if(typeof a === 'boolean' || typeof b === 'boolean'){
+      return label + ' ' + (b ? 'on' : 'off');
+    }
+    if(a === null || b === null){
+      // null is this app's own "auto"/"inherit" convention (first_layer_height,
+      // line_width, nozzle_temp, bed_temp, pattern fields, ...).
+      var known = a === null ? 'auto' : histFmtNum(a) + (HIST_FIELD_UNITS[key] || '');
+      var next = b === null ? 'auto' : histFmtNum(b) + (HIST_FIELD_UNITS[key] || '');
+      return label + ' ' + known + '->' + next;
+    }
+    if(typeof a === 'number' && typeof b === 'number'){
+      var unit = HIST_FIELD_UNITS[key] || '';
+      return label + ' ' + histFmtNum(a) + unit + '->' + histFmtNum(b) + unit;
+    }
+    if(typeof a === 'string' && typeof b === 'string'){
+      var av = a === '' ? '(none)' : a, bv = b === '' ? '(none)' : b;
+      return label + ' changed to ' + bv;
+    }
+    if(Array.isArray(a) || Array.isArray(b) || typeof a === 'object' || typeof b === 'object'){
+      // Standing safety net: any array/object field not named in
+      // HIST_OPAQUE_FIELDS above still never has its contents emitted.
+      return label + ' changed';
+    }
+    return label + ' changed to ' + b;
+  }
+
+  function histZoneMm(t, height){ return (height > 0) ? t * height : 0; }
+  // color_idx is deliberately never compared -- assigned once at creation
+  // (nextZoneColorIdx), it never changes as a user edit.
+  function histPluralZones(n){ return n + (n === 1 ? ' zone' : ' zones'); }
+  function describeZoneOverridesDiff(preZones, postZones, postHeight){
+    preZones = preZones || []; postZones = postZones || [];
+    if(postZones.length > preZones.length) return 'zone added (' + histPluralZones(postZones.length) + ')';
+    if(postZones.length < preZones.length){
+      return postZones.length === 0 ? 'all zones cleared' : 'zone removed (' + histPluralZones(postZones.length) + ')';
+    }
+    var changedIdx = [];
+    for(var i = 0; i < postZones.length; i++){
+      if(JSON.stringify(preZones[i]) !== JSON.stringify(postZones[i])) changedIdx.push(i);
+    }
+    if(changedIdx.length === 0) return null;
+    if(changedIdx.length > 2) return changedIdx.length + ' zones changed';
+    var parts = [];
+    changedIdx.forEach(function(i){
+      var a = preZones[i] || {}, b = postZones[i] || {};
+      var n = i + 1;
+      if(a.t_lo !== b.t_lo || a.t_hi !== b.t_hi){
+        parts.push('zone ' + n + ' band moved to ' +
+          histFmtNum(histZoneMm(b.t_lo, postHeight)) + '-' + histFmtNum(histZoneMm(b.t_hi, postHeight)) + 'mm');
+      }
+      if(a.blend !== b.blend){
+        parts.push('zone ' + n + ' blend ' + histFmtNum(a.blend) + '->' + histFmtNum(b.blend));
+      }
+      if(a.pattern !== b.pattern){
+        parts.push('zone ' + n + ' texture changed to ' + (b.pattern || '(global)'));
+      }
+      if(a.pattern_amp !== b.pattern_amp){
+        parts.push('zone ' + n + ' depth ' + (b.pattern_amp == null ? 'set to inherit' : histFmtNum(a.pattern_amp) + '->' + histFmtNum(b.pattern_amp)));
+      }
+      if(a.pattern_twist !== b.pattern_twist){
+        parts.push('zone ' + n + ' pattern twist ' + (b.pattern_twist == null ? 'set to inherit' : histFmtNum(a.pattern_twist) + '->' + histFmtNum(b.pattern_twist)));
+      }
+      if(a.xy_twist !== b.xy_twist){
+        parts.push('zone ' + n + ' XY twist ' + (b.xy_twist == null ? 'set to inherit' : histFmtNum(a.xy_twist) + '->' + histFmtNum(b.xy_twist)));
+      }
+      if(a.enabled !== b.enabled){
+        parts.push('zone ' + n + ' ' + (b.enabled ? 'enabled' : 'disabled'));
+      }
+    });
+    return parts.join('; ');
+  }
+
+  function describeDesignDiff(preStr, postStr){
+    var a, b;
+    try { a = JSON.parse(preStr); b = JSON.parse(postStr); } catch(e){ return ''; }
+    if(!a || !b || typeof a !== 'object' || typeof b !== 'object') return '';
+    var keys = {}, k;
+    for(k in a){ if(a.hasOwnProperty(k)) keys[k] = 1; }
+    for(k in b){ if(b.hasOwnProperty(k)) keys[k] = 1; }
+    var parts = [];
+    for(k in keys){
+      if(!keys.hasOwnProperty(k)) continue;
+      if(k === 'zone_overrides'){
+        var zp = describeZoneOverridesDiff(a[k], b[k], b.height);
+        if(zp) parts.push(zp);
+        continue;
+      }
+      if(JSON.stringify(a[k]) === JSON.stringify(b[k])) continue;
+      var part = histFieldPart(k, a[k], b[k]);
+      if(part) parts.push(part);
+    }
+    if(parts.length === 0) return '';
+    var out;
+    if(parts.length > 8) out = parts.length + ' settings changed';
+    else if(parts.length > 3) out = parts.slice(0, 3).join('; ') + ' (+' + (parts.length - 3) + ' more)';
+    else out = parts.join('; ');
+    return out.length > 140 ? out.slice(0, 137) + '...' : out;
+  }
 
   document.addEventListener('keydown', function(e){
     // Leave native text-field undo alone while typing in an input.
@@ -5376,22 +5656,33 @@
     activateSilMode(design.sil_mode || 'sym');
   }
 
-  // Save design as JSON file download.
+  // Save design as a .trident file download -- still plain JSON text under
+  // the hood (the extension is a naming/recognition convention only, not a
+  // different serialization), wrapped in a small envelope so the edit-
+  // history log travels with it. A session that hasn't edited anything
+  // exports history: [].
   document.getElementById('save-design').addEventListener('click', function(){
     var data = JSON.parse(JSON.stringify(design));
     data.amp_profile = ampEditor.profile();
     data.radius_profile = silEditor.profile();
     data.width_profile = widthEditor.profile();
-    var blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+    var env = {
+      format: TRIDENT_FORMAT,
+      format_version: TRIDENT_FORMAT_VERSION,
+      exported_at: new Date().toISOString(),
+      design: data,
+      history: histLog.slice()   // shallow copy: entries pass through verbatim
+    };
+    var blob = new Blob([JSON.stringify(env, null, 2)], {type:'application/json'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'trident_design_' + design.shape + '_' + design.height + 'mm.json';
+    a.download = 'trident_design_' + design.shape + '_' + design.height + 'mm.trident';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
   });
 
-  // Load design from JSON file.
+  // Load design from a .trident (or an older plain-design .json) file.
   document.getElementById('load-design').addEventListener('click', function(){
     document.getElementById('load-design-file').click();
   });
@@ -5405,7 +5696,10 @@
   // parsing ("reject non-finite values at the boundary; never clamp them"),
   // just reachable here via a loaded file instead of a config string. Scan
   // BEFORE merging anything into `design` so a bad file can't partially
-  // corrupt the current design.
+  // corrupt the current design. Also covers a .trident envelope's own
+  // exported_at/history -- deliberately the ONE gate for the whole loaded
+  // object (envelope and all), not a second, easier-to-forget-about check
+  // scoped to just `design`.
   function findNonFiniteNumber(v, path){
     if(typeof v === 'number') return isFinite(v) ? null : (path || '(root)');
     if(Array.isArray(v)){
@@ -5427,6 +5721,14 @@
 
   document.getElementById('load-design-file').addEventListener('change', function(e){
     if(!e.target.files.length) return;
+    // Captured NOW, synchronously: reader.onload below fires asynchronously,
+    // by which point `e.target.value = ''` (also below, runs synchronously
+    // right after readAsText) has already cleared e.target.files -- reading
+    // e.target.files[0] from inside onload would throw on an empty
+    // FileList, which the catch below would swallow into a "could not load"
+    // alert, silently skipping applyDesignToUI() (and with it, e.g., a
+    // printer switch the loaded file specified).
+    var fname = e.target.files[0].name;
     var reader = new FileReader();
     reader.onload = function(ev){
       try {
@@ -5434,8 +5736,34 @@
         if(!loaded || typeof loaded !== 'object') throw new Error('not an object');
         var badPath = findNonFiniteNumber(loaded, '');
         if(badPath) throw new Error('non-finite value at ' + badPath + ' (NaN/Infinity are not valid design values)');
-        for(var k in loaded){ if(design.hasOwnProperty(k)) design[k] = loaded[k]; }
+        // Detected by SHAPE, never by file extension -- #load-design-file
+        // accepts both .trident and legacy .json, and both are read
+        // identically as text; only their CONTENTS differ. No key of
+        // `design` is named "format" or "design", so this is a safe
+        // discriminator against a bare old-format design file.
+        var isEnv = loaded.format === TRIDENT_FORMAT && loaded.design && typeof loaded.design === 'object';
+        var src = isEnv ? loaded.design : loaded;
+        if(isEnv && +loaded.format_version > TRIDENT_FORMAT_VERSION){
+          alert('This .trident file was saved by a newer version -- some information may not be shown.');
+        }
+        // History first, so the "imported <file>" entry below lands AFTER
+        // whatever the file itself carried, keeping one continuous log
+        // across repeated export/import/edit rounds rather than resetting
+        // it each time.
+        if(isEnv && Array.isArray(loaded.history)){
+          histLog = loaded.history.filter(function(h){
+            return h && typeof h === 'object' && typeof h.summary === 'string';
+          }).slice(-HIST_LOG_MAX);
+          saveHistLog();
+          histLabelOnce = 'imported ' + fname;
+        } else {
+          histLabelOnce = 'imported ' + fname + ' (no edit history in file)';
+        }
+        for(var k in src){ if(design.hasOwnProperty(k)) design[k] = src[k]; }
         applyDesignToUI();
+        if(isEnv && loaded.history && loaded.history.length && typeof openHistoryModal === 'function'){
+          openHistoryModal();
+        }
       } catch(err){
         alert('Could not load design: ' + err.message);
       }
@@ -5448,6 +5776,68 @@
     reader.readAsText(e.target.files[0]);
     e.target.value = '';
   });
+
+  // ---- edit-history modal -------------------------------------------------
+  // Read-only view of histLog. Mirrors the open/close/backdrop/Escape
+  // pattern the app's other modals (Zone Overrides, Point Edit, printer
+  // manager) already use, rather than inventing a new interaction shape.
+  // Hoisted function declarations (this whole file is one IIFE), so the
+  // Load handler above -- textually earlier -- calling openHistoryModal()
+  // is exactly the same "declared later, safe to call earlier" pattern
+  // already used throughout this file (e.g. flushZoneEdgePersist, referenced
+  // by pointerup listeners well before its own definition).
+  function openHistoryModal(){
+    var modal = document.getElementById('history-modal');
+    if(!modal) return;
+    renderHistList();
+    modal.style.display = 'flex';
+  }
+  function closeHistoryModal(){
+    var modal = document.getElementById('history-modal');
+    if(modal) modal.style.display = 'none';
+  }
+  (function(){
+    var modal = document.getElementById('history-modal');
+    if(!modal) return;
+    var btn = document.getElementById('history-btn');
+    if(btn) btn.addEventListener('click', openHistoryModal);
+    var closeBtn = document.getElementById('eh-modal-close');
+    if(closeBtn) closeBtn.addEventListener('click', closeHistoryModal);
+    var doneBtn = document.getElementById('eh-modal-done');
+    if(doneBtn) doneBtn.addEventListener('click', closeHistoryModal);
+    var backdrop = modal.querySelector('.eh-modal-backdrop');
+    if(backdrop) backdrop.addEventListener('click', closeHistoryModal);
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && modal.style.display !== 'none') closeHistoryModal();
+    });
+  })();
+
+  function renderHistList(){
+    var list = document.getElementById('eh-list');
+    var empty = document.getElementById('eh-empty');
+    if(!list) return;
+    list.innerHTML = '';
+    if(empty) empty.style.display = histLog.length ? 'none' : '';
+    // Newest first -- iterate the persisted (oldest-first) array backwards.
+    for(var i = histLog.length - 1; i >= 0; i--){
+      var e = histLog[i];
+      var li = document.createElement('li');
+      li.className = 'eh-item';
+      var when = document.createElement('span');
+      when.className = 'eh-when';
+      var d = new Date(e.at);
+      when.textContent = isNaN(d.getTime()) ? String(e.at) :
+        d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) + '  ' +
+        d.toLocaleDateString([], {day:'numeric', month:'short'});
+      var what = document.createElement('span');
+      what.className = 'eh-what';
+      // textContent only, never innerHTML: this renders values out of
+      // localStorage AND out of a file someone else wrote and handed you.
+      what.textContent = e.summary;
+      li.appendChild(when); li.appendChild(what);
+      list.appendChild(li);
+    }
+  }
 
   // ---- STL mesh import (Import tab) ---------------------------------------
   var MESH_MAX_MB = 50;

@@ -173,9 +173,11 @@
         <select id="preset-select"><option value="">Load preset...</option></select>
         <button id="undo-btn" class="btn btn-icon" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
         <button id="redo-btn" class="btn btn-icon" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
-        <button id="save-design" class="btn btn-sm" title="Save design as JSON">Save</button>
-        <button id="load-design" class="btn btn-sm" title="Load design from JSON">Load</button>
-        <input type="file" id="load-design-file" accept=".json" hidden>
+        <button id="save-design" class="btn btn-sm" title="Save design as a .trident file">Save</button>
+        <button id="load-design" class="btn btn-sm" title="Load a .trident or .json design file">Load</button>
+        <button id="history-btn" class="btn btn-icon" type="button"
+          title="Edit history" aria-label="Edit history" aria-haspopup="dialog">&#8801;</button>
+        <input type="file" id="load-design-file" accept=".trident,.json" hidden>
       </div>
 
       <!-- ---- Persistent machine bar: the printer is context for every step, ---- -->
@@ -901,6 +903,37 @@
     <div class="sr-modal-footer">
       <button id="sr-new" class="btn" type="button">Start new design</button>
       <button id="sr-continue" class="btn btn-primary" type="button">Continue previous session</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================= -->
+<!-- Edit-history log. Read-only view of the running log exported into -->
+<!-- a .trident file and restored from one (designer.js's histLog).    -->
+<!-- NOT related to #telemetry-card, which is the live G-code playback -->
+<!-- HUD -- naming here deliberately says "history", never             -->
+<!-- "telemetry", to keep the two apart at a glance. Ordinary --accent -->
+<!-- chrome like .sr-modal / .pm-modal: this is neither a safety state -->
+<!-- nor a subsystem with a reserved colour. Entry point: #history-btn -->
+<!-- in #preset-bar; also auto-opens once after importing a file that  -->
+<!-- carried history.                                                  -->
+<!-- ================================================================= -->
+<div id="history-modal" class="eh-modal" style="display:none">
+  <div class="eh-modal-backdrop"></div>
+  <div class="eh-modal-card" role="dialog" aria-modal="true" aria-labelledby="eh-modal-title">
+    <div class="eh-modal-header">
+      <h2 id="eh-modal-title">Edit history</h2>
+      <button id="eh-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
+    </div>
+    <div class="eh-modal-body">
+      <p class="hint" style="margin-top:0">What has been changed in this design, newest
+        first. Saving with <b>Save</b> writes this log into the <code>.trident</code>
+        file, so whoever opens it next sees the same list and keeps adding to it.</p>
+      <ol id="eh-list" class="eh-list"></ol>
+      <p id="eh-empty" class="hint">No edits recorded yet.</p>
+    </div>
+    <div class="eh-modal-footer">
+      <button id="eh-modal-done" class="btn btn-primary" type="button">Done</button>
     </div>
   </div>
 </div>

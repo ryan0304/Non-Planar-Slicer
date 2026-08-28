@@ -368,8 +368,14 @@ result.
 Every change is autosaved to the browser (`localStorage`) and undoable --
 **Ctrl+Z** / **Ctrl+Shift+Z** (or the undo/redo buttons) step back and forward
 through up to 50 recent edits, and **Save design** / **Load design** export
-or import the full parameter set as JSON so a design survives a browser
-restart or moves between machines.
+or import the full parameter set as a `.trident` file (plain JSON text) so a
+design survives a browser restart or moves between machines. The file also
+carries a plain-language **edit history** -- what was changed and roughly
+when, capped at the 200 most recent entries and viewable from the clock-icon
+button beside Save/Load -- so sharing a `.trident` file with someone else
+hands them that context too, not just the final numbers; loading one keeps
+adding to the same running log rather than resetting it. Older plain `.json`
+exports from before this still load fine, just with an empty history.
 
 **The printer's own probe ceiling is enforced, not just suggested.** The wave
 amplitude is clamped to `[0, z_amp_max]` for whichever printer is selected —

@@ -377,7 +377,8 @@ h1 { font-size:16px; font-weight:600; margin:0 0 var(--sp-1); letter-spacing:-0.
    feature -- scoped to headings only, per DESIGN.md, not applied file-wide
    where it could shift a numeral or a mono readout nobody asked to move. */
 .card-title, .sr-modal-header h2, .pe-modal-header h2, .pm-modal-header h2,
-.zo-modal-header h2, .guide-modal-header h2, .guide-slide h3 { font-feature-settings:"ss03"; }
+.zo-modal-header h2, .guide-modal-header h2, .guide-slide h3,
+.eh-modal-header h2 { font-feature-settings:"ss03"; }
 .sub { color:var(--ink-muted); font-size:12px; margin-bottom:var(--sp-4); }
 
 /* ---- brand mark: "the toolpath is the logo" (header glyph, favicon, empty-
@@ -1078,6 +1079,44 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .sr-note { font-size:11px; color:var(--ink-muted); margin:0; line-height:1.55; }
 .sr-modal-footer { display:flex; justify-content:flex-end; gap:8px;
   padding:var(--sp-3) var(--sp-4) var(--sp-4); }
+
+/* =========================================================================
+   Edit-history log dialog. Same neutral --accent chrome as .sr-modal /
+   .pm-modal. NO new colour token: a log of past edits is not a machine-
+   safety state (--ok/--warn/--danger), not Point Edit Modifiers
+   (--accent-purple), not the measure tool (--measure), not the shape cage
+   (--cage) and not Zone Overrides (--zone) -- every one of those is
+   reserved by the :root comments above and by CLAUDE.md. It is ordinary
+   chrome, so it uses --line/--surface/--ink-muted and nothing else.
+   z-index 55: above the three subsystem modals (50) since it can be opened
+   over them, below .sr-modal (60), which must always ask first.
+   Unrelated to .telemetry-card, which is the live playback HUD.
+   ========================================================================= */
+.eh-modal { position:fixed; inset:0; z-index:55; display:flex; align-items:center; justify-content:center; }
+.eh-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
+.eh-modal-card { position:relative; width:min(520px, 92vw); max-height:80vh;
+  display:flex; flex-direction:column; background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-float); overflow:hidden; }
+.eh-modal-header { display:flex; align-items:center; justify-content:space-between;
+  padding:var(--sp-3) var(--sp-4); border-bottom:1px solid var(--line); flex:none; }
+.eh-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+.eh-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4); }
+.eh-modal-footer { display:flex; justify-content:flex-end; gap:8px;
+  padding:var(--sp-3) var(--sp-4); border-top:1px solid var(--line); flex:none; }
+
+.eh-list { list-style:none; margin:var(--sp-3) 0 0; padding:0;
+  display:flex; flex-direction:column; }
+.eh-item { display:flex; gap:var(--sp-3); align-items:baseline;
+  padding:6px 0; border-top:1px solid var(--line); }
+.eh-item:first-child { border-top:none; }
+/* The timestamp is a measured readout, so it takes the mono/tabular-nums
+   treatment TASTES.md requires. The summary beside it is prose and stays
+   in the ordinary UI font. */
+.eh-when { flex:none; width:96px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; font-size:10.5px; color:var(--ink-muted); }
+.eh-what { flex:1 1 auto; min-width:0; font-size:12px; color:var(--ink); line-height:1.45; }
+.eh-list:empty { display:none; }
 
 /* ---- design wizard step bar ---- */
 .step-bar { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:10px; }
