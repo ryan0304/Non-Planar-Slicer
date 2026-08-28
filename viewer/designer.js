@@ -889,7 +889,16 @@
       else if(window.__measureAppMode) window.__measureAppMode();
       if(name === 'viewer'){
         // Viewing the generated G-code: drop the live blue draft so the
-        // rainbow toolpath is unobstructed.
+        // rainbow toolpath is unobstructed. Also cancel any in-flight
+        // schedulePreview() debounce -- without this, an edit made just
+        // before switching (or just before clicking Generate, which calls
+        // this same branch) can still be sitting in its 100ms setTimeout;
+        // left alive, it fires AFTER clearPreview() above, redrawing the
+        // stale zone-tinted draft (a different, possibly differently-shaped
+        // revision of the design) as a ghost detached from the real toolpath
+        // now on screen. Clearing it here is safe unconditionally: going
+        // back to Design re-arms via schedulePreview() in the else branch.
+        if(previewTimer){ clearTimeout(previewTimer); previewTimer = null; }
         if(window.clearPreview) window.clearPreview();
         if(window.__viewerResize) window.__viewerResize();
       } else {

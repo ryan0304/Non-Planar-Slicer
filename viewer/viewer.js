@@ -671,7 +671,6 @@ function buildGeometry(d){
     let ti=0;
     for(let s=0;s<nSeg;s++){ while(ti+1<cuts.length && s>=cuts[ti+1]) ti++; segTurn[s]=ti; }
   }
-
   // Per-vertex colours (one per segment endpoint), then fat-line geometry.
   const cols=new Float32Array(d.ext.length);
   const span=Math.max(1e-6, d.maxz-d.minz);
@@ -698,7 +697,8 @@ function buildGeometry(d){
       } else {
         rgb = ramp((zc-d.minz)/span);       // height (viridis)
       }
-      if(banding){                          // darken every other turn -> visible ribs
+      if(banding){                          // darken every other turn -> visible ribs,
+                                              // one stripe per real layer_height
         const b = (segTurn[segIdx] % 2 === 0) ? 1.0 : 0.55;
         rgb=[rgb[0]*b, rgb[1]*b, rgb[2]*b];
       }
@@ -1085,7 +1085,9 @@ async function load(name,text){
     parsed.riskyCount = riskyCount;
     parsed.overhang = overhang;
     lastData = parsed;
+    window.__lastData = lastData;          // automation/debug hook, same convention as __camera/__controls
     cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
+    window.__cuts = cuts;                  // automation/debug hook, same convention as __camera/__controls
     buildGeometry(lastData); showStats(name,lastData);   // heavy: O(segments)
     measureReload();                       // new model: any old measurement is meaningless
     // A file was loaded (dropped, picked, or generated) - show the viewer mode.
@@ -4268,6 +4270,17 @@ function measureReload(){
 // viewer so the card's own collapsed/expanded state survives.
 function syncCanvasChromeForMode(){
   const show = viewerModeActive() && !!extArr;
+
+  // Zone Overrides' interactive on-model rings + mm chips are a Design-mode
+  // tool (viewer.js's showZoneRings() already refuses to (re)build them in
+  // viewer mode -- see its own guard), but that guard is only checked the
+  // NEXT time a zone edit calls it. Switching modes with no further edit
+  // left whatever rings/chips were already built sitting in `scene` forever
+  // -- depthTest:false, so they render fully on top of the loaded G-code,
+  // geometrically stale (built from the Designer's own draft wall sample,
+  // not the real toolpath) and visibly detached from it. Same "ownership
+  // belongs to the mode switch" rule as the toolpath visibility below.
+  if(viewerModeActive() && window.hideZoneRings) window.hideZoneRings();
 
   // The measure rail is an instrument of BOTH modes now -- G-code Viewer
   // measures the loaded toolpath, Design measures the live draft -- so it is
