@@ -88,33 +88,86 @@ const bedGroup = new THREE.Group(); scene.add(bedGroup);
   ln.computeLineDistances(); bedGroup.add(ln);
 }
 
-// ---- Voron Trident frame / bed / gantry -----------------------------------
-// A simplified but recognisable machine: 2020 aluminium frame, a moving bed
-// plate, and a fixed gantry beam at the top -- sized from the build volume.
+// ---- Voron Trident build plate ---------------------------------------------
+// The printer frame/gantry cage was removed on request so the model-viewing
+// stage shows just the build plate and the print standing alone.
+// Grey Trident logo baked into the PEI texture: the app's own brand mark
+// (see viewer/brand/README.md, "Concept 06, Constructed Trident") -- same
+// path data as index.html's #brand-mark-header full glyph, in the mark's
+// grey (--ink-muted / #9aa0a6), no busy-highlight or nozzle dot since this
+// is a static plate marking, not the animating header mark.
+const TRIDENT_MARK_D =
+  'M 22.000,78.000 L 22.000,45.127 A 4.200 4.200 0 0 1 28.370,43.720 ' +
+  'L 30.499,48.307 A 4.200 4.200 0 0 0 38.303,47.836 L 44.006,30.290 ' +
+  'A 4.200 4.200 0 0 1 51.994,30.290 L 57.697,47.836 A 4.200 4.200 0 0 0 ' +
+  '65.501,48.307 L 67.630,43.720 A 4.200 4.200 0 0 1 74.000,45.127 ' +
+  'L 74.000,78.000';
+// full glyph's viewBox: "8.22 12.92 80.26 80.26" (see brand/README.md)
+const TRIDENT_MARK_VB = { x: 8.22, y: 12.92, w: 80.26 };
+
+function buildTridentLogoTexture(peiHex){
+  const size = 512;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = peiHex;
+  ctx.fillRect(0, 0, size, size);
+
+  const logoPx = size * 0.30;                        // rendered mark size on the plate
+  const boxTop = size/2 - logoPx/2;
+  const scale = logoPx / TRIDENT_MARK_VB.w;
+  ctx.save();
+  ctx.translate(size/2 - logoPx/2, boxTop);
+  ctx.scale(scale, scale);
+  ctx.translate(-TRIDENT_MARK_VB.x, -TRIDENT_MARK_VB.y);
+  ctx.strokeStyle = '#9aa0a6';   // --ink-muted, same grey as the app's mark
+  ctx.lineWidth = 5;             // matches .brand-mark.full's stroke-width
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke(new Path2D(TRIDENT_MARK_D));
+  ctx.restore();
+
+  // Draws `text` centered at (cx, baselineY) with manual per-character
+  // letter-spacing (portable -- no reliance on ctx.letterSpacing support).
+  function drawSpacedText(text, cx, baselineY, fontPx, weight, spacingFrac, fillStyle){
+    ctx.font = `${weight} ${fontPx}px -apple-system, "Segoe UI", Arial, sans-serif`;
+    ctx.fillStyle = fillStyle;
+    const spacing = fontPx * spacingFrac;
+    const charW = [...text].map(ch => ctx.measureText(ch).width);
+    const totalW = charW.reduce((a,b) => a+b, 0) + spacing*(text.length-1);
+    let x = cx - totalW/2;
+    for (let i = 0; i < text.length; i++) {
+      ctx.fillText(text[i], x + charW[i]/2, baselineY);
+      x += charW[i] + spacing;
+    }
+  }
+
+  // "TRIDENT / NON-PLANAR SLICER" wordmark below the glyph, matching the
+  // naming used on the brand's own social/promo assets. Ink bounds for the
+  // full glyph are y 24.9-81.2 within its own 12.92-93.18 viewBox span (see
+  // brand/README.md), so the ink's bottom edge sits 85.1% down the drawn box
+  // -- used here to clear the glyph regardless of logoPx.
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const inkBottom = boxTop + logoPx * ((81.2 - TRIDENT_MARK_VB.y) / TRIDENT_MARK_VB.w);
+  const titlePx = size * 0.042;
+  const titleY = inkBottom + size*0.035 + titlePx*0.8;
+  drawSpacedText('TRIDENT', size/2, titleY, titlePx, 700, 0.32, '#9aa0a6');
+  const subPx = titlePx * 0.52;
+  const subY = titleY + titlePx*0.6 + subPx*1.3;
+  drawSpacedText('NON-PLANAR SLICER', size/2, subY, subPx, 600, 0.28, 'rgba(154,160,166,0.75)');
+
+  const tex = new THREE.CanvasTexture(c);
+  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 const printerGroup = new THREE.Group(); scene.add(printerGroup);
 {
-  const HX = BED_X/2 + 30, HZ = BED_Y/2 + 30;   // frame half-extents
-  const Y_BOT = -25, Y_TOP = BED_Z + 45;         // frame bottom / top (world Y up)
-  const T = 12;                                   // extrusion thickness
-  // Lightened from 0x3b424c alongside the 0x2b3036 canvas background -- at
-  // the old value the frame's contrast against the background nearly halved
-  // (a smaller lift than the grid needed since the frame is a lit mesh, not
-  // a flat colour, but still enough to start disappearing into the canvas).
-  const alu = new THREE.MeshStandardMaterial({ color:0x4a5360, metalness:0.6, roughness:0.5 });
-  const accent = new THREE.MeshStandardMaterial({ color:0xc0392b, metalness:0.3, roughness:0.6 });
-
-  const beam = (x,y,z, sx,sy,sz, mat=alu) => {
+  const beam = (x,y,z, sx,sy,sz, mat) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), mat);
     m.position.set(x,y,z); printerGroup.add(m); return m;
   };
-  const H = Y_TOP - Y_BOT, MY = (Y_TOP + Y_BOT)/2;
-  // 4 vertical extrusions
-  for (const sx of [-HX,HX]) for (const sz of [-HZ,HZ]) beam(sx,MY,sz, T,H,T);
-  // top + bottom rails along X and along Z
-  for (const y of [Y_BOT,Y_TOP]) {
-    for (const sz of [-HZ,HZ]) beam(0,y,sz, 2*HX,T,T);
-    for (const sx of [-HX,HX]) beam(sx,y,0, T,T,2*HZ);
-  }
   // moving bed plate. IMPORTANT: the PEI's TOP surface must sit exactly at
   // world Y=0 (the print's Z=0) or first layers get swallowed inside the
   // plate mesh by the depth buffer. Plate stack is built strictly below Y=0.
@@ -123,14 +176,14 @@ const printerGroup = new THREE.Group(); scene.add(printerGroup);
   // when viewing from underneath.
   const plateMat = new THREE.MeshStandardMaterial({ color:0x14181f, metalness:0.2,
     roughness:0.85, transparent:true, opacity:0.95 });
-  const peiMat = new THREE.MeshStandardMaterial({ color:0x2a2f1c, metalness:0.1,
-    roughness:0.95, transparent:true, opacity:0.95 });
+  // color left white: MeshStandardMaterial multiplies map texels by `color`,
+  // and the canvas texture already paints the PEI background itself, so a
+  // tinted base color would darken the grey logo lines toward invisibility.
+  const peiMat = new THREE.MeshStandardMaterial({ color:0xffffff, metalness:0.1,
+    roughness:0.95, transparent:true, opacity:0.95, map: buildTridentLogoTexture('#2a2f1c') });
   window.__bedMats = [plateMat, peiMat];
   const plate = beam(0,-4.6,0, BED_X,8,BED_Y, plateMat);
   const pei = beam(0,-0.32,0, BED_X-6,0.6,BED_Y-6, peiMat);
-  // fixed gantry beam across the top + a small toolhead block
-  beam(0, Y_TOP-18, 0, 2*HX-T, T, T);                  // X gantry rail
-  beam(0, Y_TOP-18, 0, T, T*1.6, T*2.4, accent);       // toolhead carriage
 }
 
 let pathObj=null, travelObj=null;
