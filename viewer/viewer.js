@@ -1110,23 +1110,27 @@ async function load(name,text){
   }
 }
 
-// Detect spiral-turn boundaries by unwrapping the path's angle about its centre.
-// Each full 2*pi revolution = one "layer/turn" for the step controls.
+// Detect spiral-turn boundaries directly from Z height: in vase/spiral mode
+// layer_height IS "mm of Z rise per one XY revolution" by construction, so
+// crossing each layer_height multiple is exactly one turn -- no need to
+// unwrap the path's XY angle about a rotation centre at all.
+//
+// This replaces an earlier angle-unwrap approach (about a bounding-box
+// centroid, offset by the viewer's own hardcoded BED_X/BED_Y since it
+// renders every printer on one generic plate) that quietly assumed the
+// print has a single, stable rotation centre. A leaning or heavily
+// asymmetric print does not: its footprint can sprawl far past its actual
+// cross-section, so the assumed centre landed nowhere near the true axis,
+// the angle stopped winding monotonically, and the whole print collapsed
+// to a single detected "turn" -- exactly the failure that made Emphasize
+// layers render as one flat colour with no visible layer lines. Z always
+// climbs monotonically once per revolution regardless of any XY lean.
 function computeTurns(d){
-  // cz mirrors parseGcode's negated printer-Y -> world-Z mapping (az = cy - y),
-  // as fitView() does. ext[] holds world coords, so deriving the centre with
-  // the un-negated form put it at the reflected position -- harmless for a
-  // bed-centred print (both land near 0) but wrong for an off-centre one,
-  // where the angle unwrap below would be taken about a point outside the
-  // model and hand back garbage turn boundaries.
-  const cx=((d.minx+d.maxx)/2)-BED_X/2, cz=BED_Y/2-((d.miny+d.maxy)/2);
-  const ext=d.ext, nSeg=ext.length/6;
-  const out=[0]; let cum=0, prev=null, last=0;
+  const extCol=d.extCol, nSeg=extCol.length/2;
+  const lh = Math.max((d.meta && d.meta.layerHeight) || 0.3, 1e-6);
+  const out=[0]; let last=0;
   for(let s=0;s<nSeg;s++){
-    const a=Math.atan2(ext[s*6+5]-cz, ext[s*6+3]-cx);
-    if(prev!==null){ let dd=a-prev; if(dd>Math.PI)dd-=2*Math.PI; if(dd<-Math.PI)dd+=2*Math.PI; cum+=dd; }
-    prev=a;
-    const t=Math.floor(Math.abs(cum)/(2*Math.PI));
+    const t=Math.floor((extCol[s*2]-d.minz)/lh);
     if(t>last){ last=t; out.push(s); }
   }
   out.push(nSeg);            // final boundary = end of print
