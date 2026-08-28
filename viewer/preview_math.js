@@ -116,6 +116,56 @@
     }
   };
 
+  // ---- Zone Overrides (matches trident_gcode/paths.py's zone_weight() /
+  // zone_twist_integral() exactly) -- height-band regions that generate with
+  // a different texture pattern/depth and/or xy-twist than the rest of the
+  // print. A DIFFERENT subsystem from Point Edit Modifiers below: zones
+  // change how the wall is GENERATED, Point Edit deforms it after slicing.
+  function zoneWeight(z, t){
+    var a = z.t_lo, d = z.t_hi;
+    if(t <= a || t >= d) return 0.0;
+    var bl = Math.max(0.0, Math.min(z.blend, (d - a) / 2.0));
+    if(bl <= 0.0) return 1.0;
+    var b = a + bl, c = d - bl;
+    if(t < b) return (t - a) / bl;
+    if(t > c) return (d - t) / bl;
+    return 1.0;
+  }
+  function zoneTwistIntegral(z, t){
+    var a = z.t_lo, d = z.t_hi;
+    if(t <= a) return 0.0;
+    var bl = Math.max(0.0, Math.min(z.blend, (d - a) / 2.0));
+    var b = a + bl, c = d - bl;
+    if(bl <= 0.0) return (t > a) ? Math.min(t, d) - a : 0.0;
+    if(t <= b) return (t - a) * (t - a) / (2.0 * bl);
+    if(t <= c) return bl / 2.0 + (t - b);
+    if(t <= d) return bl / 2.0 + (c - b) + (t - c) - (t - c) * (t - c) / (2.0 * bl);
+    return (d - a) - bl;
+  }
+  // True if this zone actually overrides at least one of pattern/depth/
+  // pattern-twist/xy-twist -- the single predicate both activeZones() below
+  // (which zones REACH THE GENERATOR) and window.__zoneInertBands further
+  // down (which zones are enabled but do nothing yet) are built from, so the
+  // two can never disagree about which zones are "meaningful".
+  function zoneHasOverride(z){
+    return !!(z && (z.pattern || z.pattern_amp != null ||
+              z.pattern_twist != null || z.xy_twist != null));
+  }
+  // Zones with no override are dropped client-side too (mirrors serve.py's
+  // _parse_zone_overrides, which never sends an inert zone to the generator).
+  function activeZones(design){
+    var zones = design.zone_overrides;
+    if(!zones || !zones.length) return null;
+    var out = zones.filter(function(z){
+      return z && z.enabled && zoneHasOverride(z) &&
+             typeof z.t_lo === 'number' && typeof z.t_hi === 'number' && z.t_hi > z.t_lo;
+    });
+    return out.length ? out : null;
+  }
+  function zoneOverridesActive(design){
+    return !!activeZones(design);
+  }
+
   // ---- fade envelope (matches Python _fade_envelope) ------------------------
   function fadeEnvelope(t, fadeIn, fadeOut){
     var e = 1.0;
@@ -852,6 +902,39 @@
   // request will not carry.
   // Returns Float32Array of [x0,y0,z0, x1,y1,z1, ...] for LineSegments2.
   // Coordinates are in world space (Three.js: X = printer X - cx, Y = printer Z,
+  // ---- first-layer adhesion math (mirrors continuous_spiral.py exactly) --
+  // Only the disk FILL DENSITY (loop pitch) depends on the assumed 0.4mm
+  // nozzle fallback -- the disk's outer EXTENT is radiusFn's exact outline
+  // either way, so a wrong nozzle guess never moves the pancake's edge, only
+  // how many loops pave it. Factored out of generatePreview() so viewer.js
+  // can convert a right-click's world Y into a height fraction `t` (for
+  // Zone Overrides) without a second copy of this math -- see
+  // window.previewWallOffset below.
+  function previewWallOffset(design, spec){
+    spec = spec || { base_layers: 0, brim: 0 };
+    var layerHeight = design.layer_height;
+    var lw = (typeof design.line_width === 'number' && design.line_width > 0)
+      ? design.line_width
+      : Math.round((design.nozzle || 0.4) * 1.125 * 1000) / 1000;  // serve.py:729-730
+    var firstLayerSquish = Math.min(Math.max(
+      (design.first_layer_height > 0)
+        ? design.first_layer_height / Math.max(layerHeight, 1e-6)
+        : (design.squish != null ? design.squish : 0.75),
+      0.5), 1.0);
+    var spacingFactor = Math.max(0.8, Math.min(
+      design.spacing_factor != null ? design.spacing_factor : 1.25, 1.5));
+    var baseLayers = Math.max(0, Math.round(spec.base_layers || 0));
+    var brimLoops = Math.max(0, Math.round(spec.brim || 0));
+    var adhesion = (firstLayerSquish < 1.0) || (baseLayers > 0) || (brimLoops > 0);
+    var squish = adhesion ? firstLayerSquish : 1.0;
+    var baseZ = squish * layerHeight;
+    var s0 = lw / Math.max(squish, 1e-6) * Math.max(spacingFactor, 0.5);
+    var wallOff = baseLayers > 0 ? (baseZ + (baseLayers - 1) * layerHeight) : baseZ;
+    return { wallOff: wallOff, baseZ: baseZ, s0: s0, squish: squish,
+             firstLayerSquish: firstLayerSquish, spacingFactor: spacingFactor,
+             baseLayers: baseLayers, brimLoops: brimLoops, lw: lw };
+  }
+
   // Z = cy - printer Y) to match the viewer's coordinate convention. Printer Y
   // is NEGATED (not just offset) so the world basis stays right-handed --
   // otherwise the swap of two axes (Y-up <- Z-up) is a reflection, and any
@@ -894,34 +977,16 @@
     var xyTwist = design.xy_twist || 0;
     var zTwist = design.z_twist || 0;
 
-    // ---- first-layer adhesion math (mirrors continuous_spiral.py exactly) --
-    // Only the disk FILL DENSITY (loop pitch) below depends on the assumed
-    // 0.4mm nozzle fallback -- the disk's outer EXTENT is radiusFn's exact
-    // outline either way, so a wrong nozzle guess never moves the pancake's
-    // edge, only how many loops pave it.
-    var lw = (typeof design.line_width === 'number' && design.line_width > 0)
-      ? design.line_width
-      : Math.round((design.nozzle || 0.4) * 1.125 * 1000) / 1000;  // serve.py:729-730
-    var firstLayerSquish = Math.min(Math.max(
-      (design.first_layer_height > 0)
-        ? design.first_layer_height / Math.max(layerHeight, 1e-6)
-        : (design.squish != null ? design.squish : 0.75),
-      0.5), 1.0);
-    var spacingFactor = Math.max(0.8, Math.min(
-      design.spacing_factor != null ? design.spacing_factor : 1.25, 1.5));
-    var baseLayers = Math.max(0, Math.round(spec.base_layers || 0));
-    var brimLoops = Math.max(0, Math.round(spec.brim || 0));
     // Server's OR also includes skirt_loops > 0 (continuous_spiral.py:201-202).
     // Omitted here on purpose, not by oversight: skirt is a known preview
     // omission (never drawn, see below), AND including/excluding it can never
     // change squish/base_z/wall_off numerically -- squish only ends up below
     // 1.0 when first_layer_squish already is, which is already one of these
     // OR terms.
-    var adhesion = (firstLayerSquish < 1.0) || (baseLayers > 0) || (brimLoops > 0);
-    var squish = adhesion ? firstLayerSquish : 1.0;
-    var baseZ = squish * layerHeight;
-    var s0 = lw / Math.max(squish, 1e-6) * Math.max(spacingFactor, 0.5);
-    var wallOff = baseLayers > 0 ? (baseZ + (baseLayers - 1) * layerHeight) : baseZ;
+    var off = previewWallOffset(design, spec);
+    var lw = off.lw, firstLayerSquish = off.firstLayerSquish, s0 = off.s0;
+    var baseLayers = off.baseLayers, brimLoops = off.brimLoops;
+    var baseZ = off.baseZ, wallOff = off.wallOff;
 
     // ---- loop fabric: a different generator, so a different preview --------
     // serve.py routes a parametric loops design to build_loop_fabric(), which
@@ -953,6 +1018,13 @@
           return rr;
         };
         window.__sitePreviewSites = null;   // stitches are drawn, not dotted
+        // Zone Overrides only reach the parametric wall (mirrors serve.py's
+        // scope note for loop fabric) -- clear any stale band from a
+        // previous, non-fabric preview so the 3-D highlight never survives
+        // into a design it no longer describes.
+        window.__zonePreviewBands = null;
+        window.__zoneInertBands = null;
+        window.__previewWallMeta = null;
         var fabric = buildLoopFabricPreview(design, lf, radiusAt, height,
                                             layerHeight, firstLayerSquish,
                                             design.nozzle);
@@ -1042,6 +1114,17 @@
     for(var bi = 0; bi < baseFloatCount; bi++) out[bi] = baseSegs[bi];
     var amps = new Float32Array(totalSteps + 1);  // rate-limited amplitudes
 
+    // Layout of the wall segment run inside `out` (== window.previewPositions
+    // once showPreview() adopts it), published so viewer.js can slice a ring
+    // of samples at an arbitrary height fraction `t` for the Zone Overrides
+    // in-model drag handles -- WITHOUT a second copy of this wall math. Every
+    // sample the ring shows (texture, cage, ovality, spine, Point Edit) is
+    // therefore exactly what the draft already drew, not a re-derivation.
+    window.__previewWallMeta = {
+      baseFloatCount: baseFloatCount, totalSteps: totalSteps,
+      pointsPerTurn: pointsPerTurn, wallOff: wallOff, height: height
+    };
+
     // Raw per-sample world positions, kept only when site placement needs to
     // look up a specific sample index (see computeSitePreview() below), or a
     // Point Edit Modifier needs neighbor lookups across turns (Point Smooth).
@@ -1052,6 +1135,33 @@
     var wantSites = design.pattern === 'loops';
     var wantPointEdit = pointEditActive(design);
     var allPos = (wantSites || wantPointEdit) ? new Float32Array((totalSteps + 1) * 3) : null;
+
+    // Zone Overrides: height-band regions generated with a different texture
+    // pattern/depth and/or xy-twist (see zoneWeight()/zoneTwistIntegral()
+    // above, mirroring paths.py exactly). null when no zone would actually
+    // do anything -- the loop below then takes the exact same path as
+    // before this feature existed.
+    var zones = activeZones(design);
+    window.__zonePreviewBands = zones ? zones.map(function(z){
+      return { y0: wallOff + z.t_lo * height, y1: wallOff + z.t_hi * height,
+               b: Math.min(z.blend, (z.t_hi - z.t_lo) / 2) * height,
+               ci: (z.color_idx | 0) };
+    }) : null;
+    // Inert bands: zones the user has placed and enabled but that override
+    // nothing yet (every field still "use global"). These change nothing
+    // about the generated G-code, so they get a disjoint, deliberately
+    // blend-less shape here -- no "b" field -- so the render layer can never
+    // draw them with the same ramped, active-zone look and mislead the user
+    // into thinking an inert zone is doing something.
+    var allZones = design.zone_overrides;
+    var inert = allZones ? allZones.filter(function(z){
+      return z && z.enabled && !zoneHasOverride(z) &&
+             typeof z.t_lo === 'number' && typeof z.t_hi === 'number' && z.t_hi > z.t_lo;
+    }) : [];
+    window.__zoneInertBands = inert.length ? inert.map(function(z){
+      return { y0: wallOff + z.t_lo * height, y1: wallOff + z.t_hi * height,
+               ci: (z.color_idx | 0) };
+    }) : null;
 
     var prevX = 0, prevY = 0, prevZ = 0;
     var outIdx = baseFloatCount;   // wall segments start after the base disks'
@@ -1064,6 +1174,15 @@
 
       // Rotate cross-section outline for twisted column.
       var shapeAngle = theta - xyTwist * TWO_PI * t;
+      if(zones){
+        var extraTwist = 0.0;
+        for(var zi = 0; zi < zones.length; zi++){
+          if(zones[zi].xy_twist != null){
+            extraTwist += (zones[zi].xy_twist - xyTwist) * zoneTwistIntegral(zones[zi], t);
+          }
+        }
+        if(extraTwist !== 0.0) shapeAngle -= extraTwist * TWO_PI;
+      }
       var r = shapeFn(shapeAngle);
 
       // Radius envelope from silhouette curve.
@@ -1076,15 +1195,56 @@
         r *= cageScale(design.cage, theta, t);
       }
 
-      // Radial surface texture.
-      if(patternFn){
-        var a = patternWaves * theta + TWO_PI * (patternTwist * t + patternPhase);
-        if(patternAlternate && Math.floor(phi / TWO_PI) % 2 === 1){
-          a += Math.PI;        // odd turns swing the opposite way
+      // Radial surface texture, crossfaded against any active zone's own
+      // pattern/depth/twist (mirrors paths.py's spiral_path() zone branch
+      // exactly, INCLUDING the max(1, sum-of-weights) normalization that
+      // lets zones overlap -- a hard switch would step the radius between
+      // two adjacent turns, and an unnormalized overlap could exceed any
+      // single zone's own r_amp ceiling).
+      var activeHere = zones ? zones.filter(function(z){
+        var w = zoneWeight(z, t);
+        return w > 0.0 && (z.pattern || z.pattern_amp != null || z.pattern_twist != null);
+      }) : null;
+      if(!activeHere || !activeHere.length){
+        if(patternFn){
+          var a = patternWaves * theta + TWO_PI * (patternTwist * t + patternPhase);
+          if(patternAlternate && Math.floor(phi / TWO_PI) % 2 === 1){
+            a += Math.PI;        // odd turns swing the opposite way
+          }
+          var b = TWO_PI * patternBands * t;
+          var env = fadeEnvelope(t, patternFadeIn, patternFadeOut);
+          r += patternAmp * env * patternFn(a, b);
         }
-        var b = TWO_PI * patternBands * t;
-        var env = fadeEnvelope(t, patternFadeIn, patternFadeOut);
-        r += patternAmp * env * patternFn(a, b);
+      } else {
+        var a2 = patternWaves * theta + TWO_PI * (patternTwist * t + patternPhase);
+        if(patternAlternate && Math.floor(phi / TWO_PI) % 2 === 1){
+          a2 += Math.PI;
+        }
+        var b2 = TWO_PI * patternBands * t;
+        var env2 = fadeEnvelope(t, patternFadeIn, patternFadeOut);
+        var normHere = 1.0, wsumHere = 0.0;
+        for(var wi = 0; wi < activeHere.length; wi++){
+          wsumHere += zoneWeight(activeHere[wi], t);
+        }
+        if(wsumHere > 1.0) normHere = wsumHere;
+        var baseW = 1.0, add = 0.0;
+        for(var ai = 0; ai < activeHere.length; ai++){
+          var z2 = activeHere[ai], w2 = zoneWeight(z2, t) / normHere;
+          baseW -= w2;
+          var name2 = z2.pattern || patternName;
+          var amp2 = z2.pattern_amp != null ? z2.pattern_amp : patternAmp;
+          var fn2 = name2 ? R_PATTERNS[name2] : null;
+          var a2z = a2;
+          if(z2.pattern_twist != null && z2.pattern_twist !== patternTwist){
+            a2z = patternWaves * theta + TWO_PI * (z2.pattern_twist * t + patternPhase);
+            if(patternAlternate && Math.floor(phi / TWO_PI) % 2 === 1){
+              a2z += Math.PI;
+            }
+          }
+          if(fn2) add += amp2 * env2 * fn2(a2z, b2) * w2;
+        }
+        if(patternFn && baseW > 0.0) add += patternAmp * env2 * patternFn(a2, b2) * baseW;
+        r += add;
       }
 
       // Printer XY (centred on origin).
@@ -1216,4 +1376,12 @@
   window.applyPointEditsPreview = applyPointEditsPreview;
   window.buildFFDCageFromGrid = buildFFDCageFromGrid;
   window.ffdSample = ffdSample;
+  // Zone Overrides -- viewer.js's right-click handler uses previewWallOffset()
+  // to convert a 3-D pick's world Y into a height fraction `t`, and
+  // zoneOverridesActive() to gate the active-summary/UI dot logic the same
+  // way pointEditActive() gates Point Edit's.
+  window.previewWallOffset = previewWallOffset;
+  window.zoneOverridesActive = zoneOverridesActive;
+  window.zoneWeight = zoneWeight;
+  window.zoneTwistIntegral = zoneTwistIntegral;
 })();

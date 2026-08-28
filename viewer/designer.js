@@ -261,7 +261,18 @@
     point_smooth_strength: 1.0,
     point_radial_push_enable: false,
     point_radial_push_amp: 1.0,
-    point_radial_push_strength: 1.0
+    point_radial_push_strength: 1.0,
+    // ---- Zone Overrides (height-band GENERATION overrides; see paths.py's
+    // ZoneOverride -- a different subsystem from Point Edit above, which
+    // deforms the already-sliced path instead). Each entry:
+    //   { enabled, t_lo, t_hi, blend, pattern, pattern_amp, xy_twist }
+    // pattern: '' means "(use global)" (inherit); any real pattern name is an
+    // override; there is no separate "explicit smooth" option in the UI (the
+    // server accepts one via pattern:"" in the request, but exposing a
+    // fourth state -- inherit / a pattern / explicitly none -- in one select
+    // was judged not worth the confusion for v1). pattern_amp/xy_twist: null
+    // means inherit; a number overrides.
+    zone_overrides: []
   };
 
   // Snapshot of the shipped defaults, taken before any saved state is merged
@@ -350,6 +361,15 @@
   // `pointerup` (mouse, pen and touch alike) rather than `mouseup`.
   document.addEventListener('pointerup', endHistRun, true);
   document.addEventListener('pointercancel', endHistRun, true);
+  // Safety net for the zone-edge drag's deferred persist (setZoneEdge,
+  // further down this file, a hoisted function declaration so naming it
+  // here -- before its textual definition -- is fine): a pending persist
+  // must never outlive the gesture that created it, or a refresh mid-drag
+  // loses the edit. Covers pointercancel on the modal axis path too, which
+  // that path's own listeners don't. A flush with nothing pending is a
+  // no-op.
+  document.addEventListener('pointerup', flushZoneEdgePersist, true);
+  document.addEventListener('pointercancel', flushZoneEdgePersist, true);
 
   // Stale-gcode tracking: designRev bumps on every real design change;
   // generatedRev records the revision the loaded G-code was generated from.
@@ -473,6 +493,7 @@
           var ov = document.getElementById('overlay');
           if(ov) ov.style.display = 'none';
           if(design.sil3d) refreshShapeCage();
+          if(typeof refreshZoneRings === 'function') refreshZoneRings();
         }
         // The fabric draft resolves build_loop_fabric's own clamps; report
         // anything it had to cut. No-op for every non-fabric design.
@@ -822,6 +843,11 @@
       chips.push({ text: peCount + ' point-edit mod' + (peCount === 1 ? '' : 's'),
                    step: 'texture', openPE: true });
     }
+    if(typeof zoneOverridesAnyEnabled === 'function' && zoneOverridesAnyEnabled()){
+      var zoCount = (design.zone_overrides || []).filter(zoneOverrideMeaningful).length;
+      chips.push({ text: zoCount + ' zone override' + (zoCount === 1 ? '' : 's'),
+                   step: 'texture', openZO: true });
+    }
     if(typeof meshState !== 'undefined' && meshState && meshState.mesh_id){
       chips.push({ text: 'STL: ' + (meshState.filename || 'imported'), step: 'model', section: 'importstl' });
     }
@@ -843,6 +869,7 @@
         if(c.step) activateStep(c.step);
         if(c.section) expandSectionByKey(c.section);
         if(c.openPE && window.__openPointEditModal) window.__openPointEditModal();
+        if(c.openZO && window.__openZoneModal) window.__openZoneModal();
       });
       host.appendChild(btn);
     });
@@ -3980,6 +4007,725 @@
   // is out of scope for point edits, same as the asymmetric shape cage).
   document.getElementById('d-pattern').addEventListener('change', updatePointEditScopeNote);
 
+  // ---- Zone Overrides: height-band regions generated with a different
+  // texture pattern/depth and/or xy-twist than the rest of the print. A
+  // DIFFERENT subsystem from Point Edit Modifiers above: zones change how
+  // the wall is GENERATED (see trident_gcode/paths.py's ZoneOverride and
+  // spiral_path()'s zone branch), Point Edit deforms the already-sliced
+  // path. Mirrors preview_math.js's zoneWeight()/zoneTwistIntegral() for
+  // the live client-side draft preview.
+  var ZONE_MAX_CLIENT = 8;   // mirrors serve.py's ZONE_MAX; server is the real ceiling
+  var ZONE_PATTERNS = ['vwave', 'hwave', 'ripple', 'diamond', 'bubbles', 'pleats', 'hammered'];
+  // --zone-c1..c5, mirrored from style.css's :root block (keep the two in
+  // step -- see that block's comment for why this palette tops out at 5 and
+  // for the reasoning behind each colour choice). Read via getComputedStyle
+  // so a future palette edit in CSS needs no matching edit here.
+  var ZONE_PALETTE_SIZE = 5;
+  function zoneColorVar(colorIdx){
+    return '--zone-c' + ((((colorIdx | 0) % ZONE_PALETTE_SIZE) + ZONE_PALETTE_SIZE) % ZONE_PALETTE_SIZE + 1);
+  }
+  function zoneColorHex(z){
+    var name = zoneColorVar(z && z.color_idx != null ? z.color_idx : 0);
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#ff6fd8';
+  }
+  // Stable per-zone colour: the lowest palette slot no EXISTING zone is
+  // using, so deleting a zone never recolours the survivors (an array-index-
+  // derived colour would do exactly that on every remove). Falls back to
+  // cycling by count once every slot is taken (ZONE_MAX_CLIENT 8 > 5).
+  function nextZoneColorIdx(zones){
+    for(var c = 0; c < ZONE_PALETTE_SIZE; c++){
+      if(!zones.some(function(z){ return z && z.color_idx === c; })) return c;
+    }
+    return zones.length % ZONE_PALETTE_SIZE;
+  }
+  // Designs saved before v2 have no color_idx on their zones. Backfill in
+  // place -- deliberately WITHOUT persistDesign(), which would push a
+  // spurious undo entry just for loading a file; the next real edit persists
+  // it naturally.
+  function normalizeZoneColors(){
+    var zones = design.zone_overrides;
+    if(!zones || !zones.length) return;
+    zones.forEach(function(z){
+      if(z && z.color_idx == null) z.color_idx = nextZoneColorIdx(zones);
+    });
+  }
+
+  function minZoneSpan(){
+    return Math.max(2.0 * (design.layer_height || 0.3) / Math.max(design.height || 60, 1e-6), 1e-4);
+  }
+  function zoneMmFromT(t){ return t * (design.height || 60); }
+  function zoneTFromMm(mm){ return (design.height > 0) ? mm / design.height : 0; }
+
+  // Single source of truth for "is this zone actually going to do anything"
+  // -- enabled AND overrides at least one of pattern/depth/twist. The
+  // POST-body assembly (buildGenerateBody) gates on this exact same
+  // function, so the active dot can never show "on" for a zone that would
+  // silently send nothing.
+  function zoneOverrideMeaningful(z){
+    return !!(z && z.enabled && (z.pattern || z.pattern_amp != null ||
+              z.pattern_twist != null || z.xy_twist != null));
+  }
+  function zoneOverridesAnyEnabled(){
+    return (design.zone_overrides || []).some(zoneOverrideMeaningful);
+  }
+  function updateZoneActiveDot(){
+    var dot = document.getElementById('zo-active-dot');
+    if(dot) dot.classList.toggle('active', zoneOverridesAnyEnabled());
+  }
+  // Zone overrides only reach the parametric wall spiral -- loop fabric and
+  // STL import ignore them server-side, same limitation (and same UI
+  // treatment) as updatePointEditScopeNote() above.
+  function updateZoneScopeNote(){
+    var note = document.getElementById('zo-scope-note');
+    var btn = document.getElementById('zone-btn');
+    var outOfScope = design.pattern === 'loops' || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+    if(note) note.style.display = outOfScope ? '' : 'none';
+    if(btn) btn.classList.toggle('zo-out-of-scope', outOfScope);
+    if(typeof refreshZoneRings === 'function') refreshZoneRings();
+  }
+  document.getElementById('d-pattern').addEventListener('change', updateZoneScopeNote);
+
+  function positionZoneAxisEls(idx, band, hLo, hHi, axisH){
+    var z = (design.zone_overrides || [])[idx];
+    if(!z) return;
+    var yTop = axisH * (1 - z.t_hi);
+    var yBot = axisH * (1 - z.t_lo);
+    band.style.top = yTop + 'px';
+    band.style.height = Math.max(0, yBot - yTop) + 'px';
+    hHi.style.top = (yTop - 2) + 'px';
+    hLo.style.top = (yBot - 2) + 'px';
+    // Height-axis mm labels ride the exact same yTop/yBot as the handles
+    // they describe, so a label can never disagree with the edge it's next
+    // to -- looked up by (zone idx, edge) rather than threaded through as
+    // extra params, so every existing call site (initial build AND every
+    // live-drag reposition in setZoneEdge) updates them for free.
+    var host = band.parentNode;
+    if(host){
+      var lHi = host.querySelector('.zo-axis-label[data-zone-idx="' + idx + '"][data-edge="hi"]');
+      var lLo = host.querySelector('.zo-axis-label[data-zone-idx="' + idx + '"][data-edge="lo"]');
+      if(lHi){ lHi.style.top = yTop + 'px'; lHi.textContent = zoneMmFromT(z.t_hi).toFixed(2) + ' mm'; }
+      if(lLo){ lLo.style.top = yBot + 'px'; lLo.textContent = zoneMmFromT(z.t_lo).toFixed(2) + ' mm'; }
+    }
+  }
+  var ZONE_AXIS_H = 260;   // matches --zo-axis height in style.css
+  var ZO_AXIS_LABEL_GAP_PX = 17;   // ~ one .zo-axis-label's own rendered
+                                    // height (11px font * 1.45 line-height +
+                                    // padding/border) -- two labels closer
+                                    // than this in axis-Y read as overlapping.
+  var ZO_AXIS_SCALE_INSET_PX = 9;  // nudges the two track scale labels
+                                    // (0 mm / full height) in from the very
+                                    // top/bottom of the 260px track so they
+                                    // stay clear of the track's own border
+                                    // even when a zone edge sits right at 0%/100%.
+
+  function renderZoneAxis(){
+    var axisHost = document.getElementById('zo-axis');
+    if(!axisHost) return;
+    axisHost.innerHTML = '';
+    (design.zone_overrides || []).forEach(function(z, i){
+      if(!z.enabled) return;   // a disabled zone doesn't crowd the axis
+      var color = zoneColorHex(z);
+      var band = document.createElement('div');
+      band.className = 'zo-axis-band';
+      band.setAttribute('data-zone-idx', i);
+      band.style.borderTopColor = color;
+      band.style.borderBottomColor = color;
+      band.style.background = 'color-mix(in srgb, ' + color + ' 32%, transparent)';   // raised
+        // from 14% -- same contrast pass as ZONE_TINT_BOOST in viewer.js, so the
+        // modal's own axis reads as clearly-coloured as the model does now.
+      axisHost.appendChild(band);
+      var hHi = document.createElement('div');
+      hHi.className = 'zo-axis-handle';
+      hHi.setAttribute('data-zone-idx', i);
+      hHi.setAttribute('data-edge', 'hi');
+      hHi.style.background = color;
+      axisHost.appendChild(hHi);
+      var hLo = document.createElement('div');
+      hLo.className = 'zo-axis-handle';
+      hLo.setAttribute('data-zone-idx', i);
+      hLo.setAttribute('data-edge', 'lo');
+      hLo.style.background = color;
+      axisHost.appendChild(hLo);
+      var lHi = document.createElement('div');
+      lHi.className = 'zo-axis-label';
+      lHi.setAttribute('data-zone-idx', i);
+      lHi.setAttribute('data-edge', 'hi');
+      lHi.style.color = color;
+      axisHost.appendChild(lHi);
+      var lLo = document.createElement('div');
+      lLo.className = 'zo-axis-label';
+      lLo.setAttribute('data-zone-idx', i);
+      lLo.setAttribute('data-edge', 'lo');
+      lLo.style.color = color;
+      axisHost.appendChild(lLo);
+      positionZoneAxisEls(i, band, hLo, hHi, ZONE_AXIS_H);
+    });
+    // Track's own base/top marks -- not a zone, so no data-edge/zone-idx to
+    // match a handle; always present, same "show the wall's own extent"
+    // idea as the 3-D view's .zone-tag-scale chips (viewer.js
+    // zoneLabelsRebuild).
+    var sTop = document.createElement('div');
+    sTop.className = 'zo-axis-label zo-axis-label-scale';
+    sTop.setAttribute('data-zone-idx', -1);
+    sTop.style.top = ZO_AXIS_SCALE_INSET_PX + 'px';
+    sTop.textContent = zoneMmFromT(1).toFixed(2) + ' mm';
+    axisHost.appendChild(sTop);
+    var sBot = document.createElement('div');
+    sBot.className = 'zo-axis-label zo-axis-label-scale';
+    sBot.setAttribute('data-zone-idx', -1);
+    sBot.style.top = (ZONE_AXIS_H - ZO_AXIS_SCALE_INSET_PX) + 'px';
+    sBot.textContent = zoneMmFromT(0).toFixed(2) + ' mm';
+    axisHost.appendChild(sBot);
+    cullZoneAxisLabels(null);
+  }
+
+  // Hides whichever .zo-axis-label chips would visually collide (closer than
+  // ZO_AXIS_LABEL_GAP_PX in axis-Y), rather than letting the track fill with
+  // overlapping mm text as zones get placed close together. focusIdx (the
+  // zone currently hovered/dragged, or null) always wins its own collisions;
+  // after that, zone edge labels beat the track's own scale marks, which are
+  // the least essential and the first hidden.
+  function cullZoneAxisLabels(focusIdx){
+    var axisHost = document.getElementById('zo-axis');
+    if(!axisHost) return;
+    var els = Array.prototype.slice.call(axisHost.querySelectorAll('.zo-axis-label'));
+    els.forEach(function(el){ el.style.display = ''; });
+    var items = els.map(function(el){
+      var zi = +el.getAttribute('data-zone-idx');
+      var prio = (focusIdx != null && zi === focusIdx) ? 0 : (zi < 0 ? 2 : 1);
+      return { el: el, top: parseFloat(el.style.top) || 0, prio: prio };
+    });
+    items.sort(function(a, b){ return a.prio - b.prio || a.top - b.top; });
+    var placed = [];
+    items.forEach(function(it){
+      var collide = placed.some(function(p){ return Math.abs(p.top - it.top) < ZO_AXIS_LABEL_GAP_PX; });
+      if(collide) it.el.style.display = 'none';
+      else placed.push(it);
+    });
+  }
+
+  function syncZoneRowMmInputs(idx){
+    var row = document.querySelector('.zo-row[data-zone-row-idx="' + idx + '"]');
+    var z = (design.zone_overrides || [])[idx];
+    if(!row || !z) return;
+    var fromInp = row.querySelector('[data-help-id="zo-from"] input');
+    var toInp = row.querySelector('[data-help-id="zo-to"] input');
+    if(fromInp && document.activeElement !== fromInp) fromInp.value = zoneMmFromT(z.t_lo).toFixed(2);
+    if(toInp && document.activeElement !== toInp) toInp.value = zoneMmFromT(z.t_hi).toFixed(2);
+  }
+
+  // Rebuilds #zo-rows + #zo-axis from `design.zone_overrides` -- called on
+  // load/undo/redo/preset-apply (mirrors applyPointEditUIFromDesign()'s job)
+  // and after any add/remove. Full rebuild each time, same convention as
+  // buildFFDGridUI() above.
+  function renderZoneRows(){
+    var rowsHost = document.getElementById('zo-rows');
+    var emptyHint = document.getElementById('zo-empty-hint');
+    if(!rowsHost) return;
+    normalizeZoneColors();
+    var zones = design.zone_overrides || [];
+    rowsHost.innerHTML = '';
+    if(emptyHint) emptyHint.style.display = zones.length ? 'none' : '';
+
+    zones.forEach(function(z, i){
+      var row = document.createElement('div');
+      row.className = 'zo-row' + (z.enabled ? '' : ' disabled')
+        + (window.__zoneJustAdded === i ? ' is-new' : '');
+      row.setAttribute('data-zone-row-idx', i);
+      // Clears itself on the row's own next interaction, not on a timer --
+      // the marker's job is "which one did I just add", not "for N seconds".
+      if(window.__zoneJustAdded === i){
+        row.style.borderLeftColor = zoneColorHex(z);
+        row.addEventListener('pointerdown', function clearNew(){
+          row.classList.remove('is-new');
+          row.removeEventListener('pointerdown', clearNew);
+          if(window.__zoneJustAdded === i) window.__zoneJustAdded = null;
+        }, { once: true });
+      }
+
+      var swatch = document.createElement('span');
+      swatch.className = 'zo-row-swatch';
+      swatch.style.background = zoneColorHex(z);
+      swatch.title = 'zone ' + (i + 1) + ' colour (matches its band on the model)';
+      row.appendChild(swatch);
+
+      var enableField = document.createElement('label');
+      enableField.className = 'zo-row-field';
+      var enableLab = document.createElement('span');
+      enableLab.textContent = 'On';
+      enableField.appendChild(enableLab);
+      var enableChk = document.createElement('input');
+      enableChk.type = 'checkbox';
+      enableChk.checked = !!z.enabled;
+      enableChk.addEventListener('change', function(){
+        z.enabled = enableChk.checked;
+        row.classList.toggle('disabled', !z.enabled);
+        previewArmed = true;
+        persistDesign();
+        schedulePreview();
+        updateZoneActiveDot();
+        renderZoneAxis();
+        refreshZoneRings();
+      });
+      enableField.appendChild(enableChk);
+      row.appendChild(enableField);
+
+      function numField(labelText, helpId, unit, value, step, min, max, placeholder, onChange){
+        var f = document.createElement('div');
+        f.className = 'drow zo-row-field';
+        f.setAttribute('data-help-id', helpId);
+        var lab = document.createElement('span');
+        lab.textContent = labelText;
+        f.appendChild(lab);
+        var inp = document.createElement('input');
+        inp.type = 'number';
+        if(step != null) inp.step = step;
+        if(min != null) inp.min = min;
+        if(max != null) inp.max = max;
+        if(unit) inp.setAttribute('data-unit', unit);
+        if(placeholder) inp.placeholder = placeholder;
+        inp.value = (value == null || value === '') ? '' : value;
+        inp.addEventListener('input', function(){ onChange(inp); });
+        inp.addEventListener('change', endHistRun);
+        f.appendChild(inp);
+        return f;
+      }
+
+      row.appendChild(numField('From (mm)', 'zo-from', 'mm',
+        +zoneMmFromT(z.t_lo).toFixed(2), 0.5, 0, design.height, null, function(inp){
+          var mm = parseFloat(inp.value);
+          if(Number.isNaN(mm)) return;
+          z.t_lo = Math.max(0, Math.min(zoneTFromMm(mm), z.t_hi - minZoneSpan()));
+          previewArmed = true;
+          persistDesign('zone:' + i + ':t_lo');
+          schedulePreview();
+          renderZoneAxis();
+          refreshZoneRings();
+        }));
+      row.appendChild(numField('To (mm)', 'zo-to', 'mm',
+        +zoneMmFromT(z.t_hi).toFixed(2), 0.5, 0, design.height, null, function(inp){
+          var mm = parseFloat(inp.value);
+          if(Number.isNaN(mm)) return;
+          z.t_hi = Math.min(1, Math.max(zoneTFromMm(mm), z.t_lo + minZoneSpan()));
+          previewArmed = true;
+          persistDesign('zone:' + i + ':t_hi');
+          schedulePreview();
+          renderZoneAxis();
+          refreshZoneRings();
+        }));
+      row.appendChild(numField('Blend (mm)', 'zo-blend', 'mm',
+        +zoneMmFromT(z.blend != null ? z.blend : 0.02).toFixed(2), 0.5, 0, design.height / 2, null, function(inp){
+          var mm = parseFloat(inp.value);
+          if(Number.isNaN(mm) || mm < 0) return;
+          z.blend = zoneTFromMm(mm);
+          previewArmed = true;
+          persistDesign('zone:' + i + ':blend');
+          schedulePreview();
+          renderZoneAxis();
+          refreshZoneRings();
+        }));
+
+      var pf = document.createElement('div');
+      pf.className = 'drow zo-row-field';
+      pf.setAttribute('data-help-id', 'zo-pattern');
+      var pLab = document.createElement('span');
+      pLab.textContent = 'Texture';
+      pf.appendChild(pLab);
+      var pSel = document.createElement('select');
+      var optInherit = document.createElement('option');
+      optInherit.value = ''; optInherit.textContent = '(use global)';
+      pSel.appendChild(optInherit);
+      ZONE_PATTERNS.forEach(function(p){
+        var o = document.createElement('option');
+        o.value = p; o.textContent = p;
+        pSel.appendChild(o);
+      });
+      pSel.value = z.pattern || '';
+      pf.appendChild(pSel);
+      row.appendChild(pf);
+
+      var depthField = numField('Depth (mm)', 'zo-depth', 'mm',
+        z.pattern_amp != null ? z.pattern_amp : '', 0.1, 0, 4, 'inherit', function(inp){
+          var v = inp.value === '' ? null : parseFloat(inp.value);
+          z.pattern_amp = (v == null || Number.isNaN(v)) ? null : Math.max(0, Math.min(v, 4));
+          previewArmed = true;
+          persistDesign('zone:' + i + ':pattern_amp');
+          schedulePreview();
+          updateZoneActiveDot();
+        });
+      var depthInput = depthField.querySelector('input');
+      depthInput.disabled = !z.pattern;
+      row.appendChild(depthField);
+      pSel.addEventListener('change', function(){
+        z.pattern = pSel.value || '';
+        depthInput.disabled = !z.pattern;
+        previewArmed = true;
+        persistDesign();
+        schedulePreview();
+        updateZoneActiveDot();
+      });
+
+      row.appendChild(numField('Pattern twist (turns)', 'zo-ptwist', 'turns',
+        z.pattern_twist != null ? z.pattern_twist : '', 0.25, -6, 6, 'inherit', function(inp){
+          var v = inp.value === '' ? null : parseFloat(inp.value);
+          z.pattern_twist = (v == null || Number.isNaN(v)) ? null : v;
+          previewArmed = true;
+          persistDesign('zone:' + i + ':pattern_twist');
+          schedulePreview();
+          updateZoneActiveDot();
+        }));
+
+      row.appendChild(numField('XY twist (turns)', 'zo-twist', 'turns',
+        z.xy_twist != null ? z.xy_twist : '', 0.25, -6, 6, 'inherit', function(inp){
+          var v = inp.value === '' ? null : parseFloat(inp.value);
+          z.xy_twist = (v == null || Number.isNaN(v)) ? null : v;
+          previewArmed = true;
+          persistDesign('zone:' + i + ':xy_twist');
+          schedulePreview();
+          updateZoneActiveDot();
+          updateZoneTwistCautions();
+        }));
+      var twistCaution = document.createElement('div');
+      twistCaution.className = 'hint zo-caution zo-twist-caution';
+      twistCaution.style.display = 'none';
+      row.appendChild(twistCaution);
+
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'zo-row-remove';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', function(){ removeZone(i); });
+      row.appendChild(removeBtn);
+
+      rowsHost.appendChild(row);
+    });
+
+    renderZoneAxis();
+    refreshZoneRings();
+    updateZoneTwistCautions();
+  }
+
+  // A zone's xy_twist rotates the WALL CROSS-SECTION's own angular sampling
+  // (mirrors paths.py's spiral_path(): shape_angle -= extra_twist * 2*pi) --
+  // on a perfectly round `circle` shape that has no effect at all to see,
+  // since every angle already has the same radius (r_amp'd radial texture
+  // is a SEPARATE control, pattern_twist, unaffected by this). A user typing
+  // a value into "XY twist (turns)" and watching nothing move is exactly
+  // that: not a bug, just this control genuinely having nothing to rotate on
+  // a circle. Told here rather than silently letting it look broken, the
+  // same reasoning as #zo-scope-note for loop fabric/STL mode above.
+  function zoneTwistNoOpNote(z){
+    if(design.shape !== 'circle') return null;
+    if(z.xy_twist == null || z.xy_twist === 0) return null;
+    return 'No visible effect on a circle shape -- there is no angular ' +
+           'asymmetry for a twist to rotate. Try star or square instead.';
+  }
+  function updateZoneTwistCautions(){
+    var zones = design.zone_overrides || [];
+    document.querySelectorAll('.zo-row').forEach(function(row){
+      var idx = parseInt(row.getAttribute('data-zone-row-idx'), 10);
+      var z = zones[idx];
+      var el = row.querySelector('.zo-twist-caution');
+      if(!el || !z) return;
+      var note = zoneTwistNoOpNote(z);
+      el.textContent = note || '';
+      el.style.display = note ? '' : 'none';
+    });
+  }
+  // Exposed so applyDesignToUI() (load/undo/redo/preset-apply) can re-sync
+  // this panel the same way applyPointEditUIFromDesign() re-syncs its own.
+  window.__applyZoneUIFromDesign = renderZoneRows;
+
+  // Single removal path -- both the modal row's Remove button and the
+  // in-model right-click "Remove zone" entry (viewer.js) call this.
+  function removeZone(i){
+    design.zone_overrides.splice(i, 1);
+    previewArmed = true;
+    persistDesign();
+    schedulePreview();
+    renderZoneRows();
+    updateZoneActiveDot();
+  }
+  window.__zoneRemove = removeZone;
+
+  // Converts a 3-D pick's world Y (== printer Z, see preview_math.js's
+  // generatePreview comment on the coordinate convention) into a height
+  // fraction `t`, for viewer.js's right-click handler -- kept here rather
+  // than in viewer.js because only this closure holds `design` and
+  // effectiveBaseSpec(), which previewWallOffset() needs.
+  window.__zoneTFromWorldY = function(worldY){
+    var off = window.previewWallOffset ? window.previewWallOffset(design, effectiveBaseSpec()) : { wallOff: 0 };
+    var t = (worldY - off.wallOff) / Math.max(design.height || 60, 1e-6);
+    return Math.max(0, Math.min(1, t));
+  };
+  // The on-model mm labels' single source of the number they print -- kept
+  // here for the same reason __zoneTFromWorldY is (only this closure holds
+  // `design`). Deliberately the exact inverse of zoneMmFromT below, but
+  // exposed globally since viewer.js has no other way to reach it.
+  window.__zoneMmFromT = function(t){ return zoneMmFromT(t); };
+  // The exact inverse, exposed for the same reason: the on-model chip's
+  // double-click-to-edit (viewer.js's zoneLabelBeginEdit) needs to turn a
+  // typed mm value back into a t before it can call window.__zoneRingDrag,
+  // and must use the SAME conversion the row's own From/To (mm) inputs use
+  // -- not a re-derivation from window.__previewWallMeta's height, which
+  // can briefly disagree with design.height mid-debounce.
+  window.__zoneTFromMm = function(mm){ return zoneTFromMm(mm); };
+  window.__zoneCanAdd = function(){
+    return (design.zone_overrides || []).length < ZONE_MAX_CLIENT;
+  };
+  // Right-click "Add zone here" (viewer.js): adds a zone and shows its rings
+  // immediately WITHOUT opening the modal -- see openModal's own comment for
+  // why forcing the modal open on every add was the friction being fixed.
+  window.__zoneAddAt = function(seedT){
+    if(!window.__zoneCanAdd()) return -1;
+    addZone(seedT);
+    renderZoneRows();
+    return design.zone_overrides.length - 1;
+  };
+
+  function addZone(seedT){
+    var zones = design.zone_overrides || (design.zone_overrides = []);
+    if(zones.length >= ZONE_MAX_CLIENT) return;
+    var t = seedT != null ? seedT : 0.5;
+    var half = 0.06;
+    // Bands may overlap (v2) -- no clamp against existing zones here, unlike
+    // v1. A fresh zone simply centres on the seed point (or the middle of
+    // the wall with no seed) and can be dragged wherever the user wants.
+    zones.push({
+      enabled: true,
+      t_lo: Math.max(0, t - half), t_hi: Math.min(1, t + half),
+      blend: 0.02, pattern: '', pattern_amp: null, pattern_twist: null, xy_twist: null,
+      color_idx: nextZoneColorIdx(zones)
+    });
+    window.__zoneJustAdded = zones.length - 1;
+    previewArmed = true;
+    persistDesign();
+    schedulePreview();
+  }
+
+  // Single source of truth for "where may this zone's edge legally go" --
+  // used by BOTH the modal's #zo-axis drag (below) and the in-model rings
+  // (viewer.js, via window.__zoneRingDrag), so the two interactions can
+  // never disagree about a bound. Overlap with OTHER zones is allowed (v2)
+  // -- only this zone's own minimum span and [0,1] constrain an edge.
+  // slideBand=true moves both edges together (the whole band), preserving
+  // its span -- the modal's own hint already promises "drag its middle to
+  // slide it"; Shift+drag on either UI does the same thing.
+  function setZoneEdge(idx, edge, t, slideBand){
+    var zones = design.zone_overrides || [];
+    var z = zones[idx];
+    if(!z) return;
+    var minSpan = minZoneSpan();
+    if(slideBand){
+      var span = Math.max(z.t_hi - z.t_lo, minSpan);
+      var half = span / 2;
+      var mid = Math.max(half, Math.min(t, 1 - half));
+      z.t_lo = mid - half;
+      z.t_hi = mid + half;
+    } else if(edge === 'lo'){
+      z.t_lo = Math.max(0, Math.min(t, z.t_hi - minSpan));
+    } else {
+      z.t_hi = Math.min(1, Math.max(t, z.t_lo + minSpan));
+    }
+    z.blend = Math.min(z.blend != null ? z.blend : 0.02, (z.t_hi - z.t_lo) / 2);
+    previewArmed = true;
+    // A drag streams this function at pointer-event rate (60-120Hz). The
+    // EDIT (above) must stay live every move -- that's what makes the ring/
+    // handle/label track the pointer -- but persistDesign()'s JSON.stringify
+    // of the whole design plus its synchronous localStorage.setItem plus
+    // updateActiveSummary()'s chip-rebuild are far too heavy for that frame,
+    // and were the actual cause of the drag "glitching" (a synchronous main-
+    // thread write on nearly every move). So mid-drag we only bump designRev
+    // (keeps updateStaleBadge() honest live -- see its own call below) and
+    // record which coalesce key is owed a real persist; the real persist
+    // happens exactly once, at drag release, via flushZoneEdgePersist(). One
+    // persist per drag is also exactly what the 'zoneaxis:<idx>' coalescing
+    // key already collapsed a whole drag's worth of persists down to, so the
+    // undo stack still gets exactly one entry holding the pre-drag state.
+    if(zoneEdgeDragLive()){
+      zoneEdgePersistPending = 'zoneaxis:' + idx;
+      designRev++;
+      updateStaleBadge();
+    } else {
+      persistDesign('zoneaxis:' + idx);
+    }
+    schedulePreview();
+    var band = document.querySelector('#zo-axis .zo-axis-band[data-zone-idx="' + idx + '"]');
+    var hLo = document.querySelector('#zo-axis .zo-axis-handle[data-zone-idx="' + idx + '"][data-edge="lo"]');
+    var hHi = document.querySelector('#zo-axis .zo-axis-handle[data-zone-idx="' + idx + '"][data-edge="hi"]');
+    if(band && hLo && hHi) positionZoneAxisEls(idx, band, hLo, hHi, ZONE_AXIS_H);
+    cullZoneAxisLabels(idx);
+    syncZoneRowMmInputs(idx);
+    // The modal axis drag has no viewer.js counterpart doing its own live
+    // ring update (unlike the in-model drag, see the comment on the return
+    // value below), so route it through the cheap in-place ring mover
+    // instead of refreshZoneRings()'s full teardown/rebuild -- that rebuild
+    // is fine paid once per debounced preview regen, not once per
+    // pointermove. Falls back to the full refresh whenever this zone has no
+    // live rings to move (out-of-scope design, disabled zone, or the modal
+    // just opened and showZoneRings() hasn't built them yet).
+    if(!(zoneAxisDragging && window.__zoneRingsMoveZone && window.__zoneRingsMoveZone(idx, z.t_lo, z.t_hi))){
+      refreshZoneRings();
+    }
+    // Returned so viewer.js's in-model ring drag can reposition its OWN ring
+    // geometry directly (refreshZoneRings() above is a no-op mid-drag, by
+    // design -- see its own guard comment) without a second read of `design`.
+    return { t_lo: z.t_lo, t_hi: z.t_hi };
+  }
+  // Exposed for viewer.js's in-model ring drag -- see setZoneEdge's own
+  // comment for why this is the ONLY place either UI mutates a zone's edges.
+  window.__zoneRingDrag = setZoneEdge;
+
+  // --- deferred persist for zone-edge drags -----------------------------
+  // See the comment inside setZoneEdge above for why this exists. Both drag
+  // paths funnel through setZoneEdge, so one predicate covers both: the
+  // in-model ring drag sets window.__zoneRingDragActive itself (viewer.js,
+  // on pointerdown, strictly before its first pointermove); the modal axis
+  // drag sets zoneAxisDragging below.
+  var zoneEdgePersistPending = null;   // coalesce key of a persist not yet flushed, or null
+  var zoneAxisDragging = false;
+  function zoneEdgeDragLive(){ return zoneAxisDragging || !!window.__zoneRingDragActive; }
+  function flushZoneEdgePersist(){
+    if(!zoneEdgePersistPending) return;
+    var key = zoneEdgePersistPending;
+    zoneEdgePersistPending = null;   // null first: re-entrancy safe, and a
+                                      // stray second flush is a no-op.
+    persistDesign(key);
+    // persistDesign only ARMS the coalescing run (histRunKey); closing it
+    // here, rather than waiting on the idle timer or the capture-phase
+    // pointerup/pointercancel listeners above, keeps a flushed drag's undo
+    // entry from folding into whatever the user does next.
+    endHistRun();
+  }
+  window.__zoneEdgeFlush = flushZoneEdgePersist;
+
+  // Rebuilds the in-model drag rings from current zone state. A no-op until
+  // viewer.js defines window.showZoneRings/hideZoneRings (guarded so this
+  // file loads and works standalone, e.g. under dev_smoke.html, without
+  // viewer.js present). Skips entirely mid-drag (window.__zoneRingDragActive)
+  // so the debounced rebuild never yanks a ring out from under the pointer,
+  // same guard refreshShapeCage() uses for the FFD cage.
+  function refreshZoneRings(){
+    if(!window.showZoneRings || !window.hideZoneRings) return;
+    if(window.__zoneRingDragActive) return;
+    var outOfScope = design.pattern === 'loops' ||
+      !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+    var zones = (design.zone_overrides || []);
+    var live = [];
+    zones.forEach(function(z, idx){
+      if(z && z.enabled) live.push({ idx: idx, t_lo: z.t_lo, t_hi: z.t_hi, color: zoneColorHex(z) });
+    });
+    if(outOfScope || !live.length){ window.hideZoneRings(); return; }
+    window.showZoneRings(live);
+  }
+  window.__refreshZoneRings = refreshZoneRings;
+
+  (function(){
+    var modal = document.getElementById('zone-modal');
+    var openBtn = document.getElementById('zone-btn');
+    var closeBtn = document.getElementById('zo-modal-close');
+    var doneBtn = document.getElementById('zo-modal-done');
+    var addBtn = document.getElementById('zo-add-zone');
+    var resetBtn = document.getElementById('zo-reset-all');
+    var backdrop = modal ? modal.querySelector('.zo-modal-backdrop') : null;
+    if(!modal || !openBtn) return;
+
+    // seedT (optional): a height fraction to seed a new zone at. No longer
+    // used by the right-click flow (viewer.js's "Add zone here" calls
+    // window.__zoneAddAt directly and never opens this modal) but kept for
+    // the sidebar #zone-btn / "Zone Overrides..." entry, which still opens
+    // the all-zones form with nothing pre-added.
+    //
+    // focusIdx (optional): scrolls to and pulses that zone's row -- used by
+    // the right-click "Edit zone N textures..." entry (viewer.js), which
+    // reaches an EXISTING zone the user already positioned on the model.
+    function openModal(seedT, focusIdx){
+      previewArmed = true;
+      if(seedT != null) addZone(seedT);
+      renderZoneRows();
+      modal.style.display = 'flex';
+      if(focusIdx != null){
+        var row = document.querySelector('.zo-row[data-zone-row-idx="' + focusIdx + '"]');
+        if(row){
+          row.scrollIntoView({ block: 'nearest' });
+          // Same pulse-cue convention as the param-search jump-to-control
+          // (designer.js's param-search IIFE): remove-reflow-add so a
+          // repeat call restarts the animation instead of no-op'ing.
+          row.classList.remove('param-search-hit'); void row.offsetWidth;
+          row.classList.add('param-search-hit');
+          setTimeout(function(){ row.classList.remove('param-search-hit'); }, 1400);
+        }
+      }
+    }
+    function closeModal(){ modal.style.display = 'none'; }
+    window.__openZoneModal = openModal;
+    // Right-click "Edit zone N textures..." (viewer.js) -- opens the modal
+    // scrolled to and pulsing an EXISTING zone, adding nothing new.
+    window.__zoneOpenModalAt = function(idx){ openModal(null, idx); };
+
+    openBtn.addEventListener('click', function(){ openModal(null); });
+    if(closeBtn) closeBtn.addEventListener('click', closeModal);
+    if(doneBtn) doneBtn.addEventListener('click', closeModal);
+    if(backdrop) backdrop.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
+    });
+    if(addBtn) addBtn.addEventListener('click', function(){ addZone(0.5); renderZoneRows(); });
+    if(resetBtn) resetBtn.addEventListener('click', function(){
+      design.zone_overrides = [];
+      previewArmed = true;
+      renderZoneRows();
+      persistDesign();
+      schedulePreview();
+      updateZoneActiveDot();
+    });
+
+    // Height-axis drag: mousedown on a handle, track pointermove/pointerup on
+    // the document (not the handle) so the drag survives leaving the small
+    // handle's own hit area, same pattern as the FFD cage drag in viewer.js.
+    // The actual edge-clamp logic lives in setZoneEdge() (below), shared with
+    // the in-model ring drag in viewer.js -- one code path, so the two
+    // interactions can never disagree about a bound.
+    var axisHost = document.getElementById('zo-axis');
+    var dragging = null;   // {idx, edge:'lo'|'hi'}
+    if(axisHost){
+      axisHost.addEventListener('pointerdown', function(e){
+        var t = e.target;
+        if(!t.classList || !t.classList.contains('zo-axis-handle')) return;
+        dragging = { idx: parseInt(t.getAttribute('data-zone-idx'), 10), edge: t.getAttribute('data-edge') };
+        t.classList.add('dragging');
+        zoneAxisDragging = true;
+        e.preventDefault();
+      });
+    }
+    function tAtClientY(clientY){
+      var rect = axisHost.getBoundingClientRect();
+      return Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
+    }
+    document.addEventListener('pointermove', function(e){
+      if(!dragging) return;
+      setZoneEdge(dragging.idx, dragging.edge, tAtClientY(e.clientY), e.shiftKey);
+    });
+    document.addEventListener('pointerup', function(){
+      if(!dragging) return;
+      dragging = null;
+      zoneAxisDragging = false;
+      if(axisHost) axisHost.querySelectorAll('.zo-axis-handle.dragging').forEach(function(h){
+        h.classList.remove('dragging');
+      });
+      // Flush the persist setZoneEdge deferred during the drag (see its own
+      // comment), THEN the one full ring/label re-sync for this drag --
+      // mirrors zoneEndDrag's own order in viewer.js for the in-model path.
+      flushZoneEdgePersist();
+      refreshZoneRings();
+      endHistRun();
+    });
+
+    renderZoneRows();
+    updateZoneActiveDot();
+    updateZoneScopeNote();
+  })();
+
   // Print tab.
   bindSelect('d-nozzle', 'nozzle');
   document.getElementById('d-nozzle').addEventListener('change', function(){ widthEditor.draw(); });
@@ -4137,6 +4883,11 @@
     if(skirtRow) skirtRow.style.display = (isLoopFabric || meshLoaded) ? 'none' : '';
     var loopBaseHint = document.getElementById('loop-base-hint');
     if(loopBaseHint) loopBaseHint.style.display = isLoopFabric ? '' : 'none';
+    // A zone's xy_twist no-op note (zoneTwistNoOpNote below) depends on the
+    // shape too -- refresh it here rather than only from the field's own
+    // input handler, or switching TO circle after already setting a zone's
+    // twist would leave the note stale (missing) until the field is touched.
+    if(typeof updateZoneTwistCautions === 'function') updateZoneTwistCautions();
   }
   document.getElementById('d-shape').addEventListener('change', refreshShapeRows);
 
@@ -4314,11 +5065,16 @@
     function labelSpan(row){
       return row.querySelector(':scope > span');
     }
-    // The id a row's tooltip is keyed on: prefer a real form control, fall
-    // back to a plain readout <span id> (the STL mesh-info rows have no
-    // input at all), and finally the row's own id (the Bottom radio row has
-    // no per-input id -- see id="d-bottom" on that .drow in index.html).
+    // The id a row's tooltip is keyed on: prefer an explicit data-help-id
+    // (dynamically-built rows -- currently only Zone Overrides -- have no
+    // stable element id to key PARAM_HELP on, since there can be several of
+    // the same row at once), then a real form control, then a plain readout
+    // <span id> (the STL mesh-info rows have no input at all), and finally
+    // the row's own id (the Bottom radio row has no per-input id -- see
+    // id="d-bottom" on that .drow in index.html).
     function helpIdFor(row){
+      var explicit = row.getAttribute('data-help-id');
+      if(explicit) return explicit;
       var el = row.querySelector('input[id], select[id], textarea[id], span[id]');
       if(el) return el.id;
       return row.id || null;
@@ -4419,7 +5175,8 @@
     }
 
     var hoverContainers = [document.getElementById('panel-scroll'),
-                            document.getElementById('point-edit-modal')];
+                            document.getElementById('point-edit-modal'),
+                            document.getElementById('zone-modal')];
     hoverContainers.forEach(function(c){
       if(!c) return;
       c.addEventListener('mouseover', onMouseOver);
@@ -4428,9 +5185,11 @@
       c.addEventListener('focusout', onFocusOut);
     });
     // 'scroll' does not bubble, so it needs the actual scrolling elements --
-    // #panel-scroll for the sidebar, .pe-panels for the modal's own body.
+    // #panel-scroll for the sidebar, .pe-panels/.zo-modal-body for each
+    // modal's own body.
     var scrollContainers = [document.getElementById('panel-scroll'),
-                             document.querySelector('.pe-panels')];
+                             document.querySelector('.pe-panels'),
+                             document.querySelector('.zo-modal-body')];
     scrollContainers.forEach(function(c){ if(c) c.addEventListener('scroll', hide, {passive:true}); });
     document.addEventListener('keydown', function(e){ if(e.key === 'Escape') hide(); });
     document.addEventListener('click', hide, true);
@@ -4606,6 +5365,9 @@
     design.amp_profile = ampEditor.profile();
     ampEditor.draw(); silEditor.draw(); widthEditor.draw();
     if(typeof applyPointEditUIFromDesign === 'function') applyPointEditUIFromDesign();
+    if(typeof window.__applyZoneUIFromDesign === 'function') window.__applyZoneUIFromDesign();
+    if(typeof updateZoneActiveDot === 'function') updateZoneActiveDot();
+    if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
     persistDesign();
     refreshShapeRows();
     refreshPatternRows();
@@ -4780,6 +5542,7 @@
     document.getElementById('mesh-height').textContent = data.height.toFixed(1);
     showMeshCheck(data.vase_check);
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
+    if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
   }
 
   // We keep only the largest contour per layer, so holes and islands are dropped
@@ -4850,6 +5613,7 @@
     showMeshCheck(null);
     stlFile.value = '';
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
+    if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
     // Clearing the mesh can turn loops back into fabric (loop-fabric hides
     // base/brim/skirt) - re-evaluate those rows.
     refreshShapeRows();
@@ -4961,6 +5725,22 @@
         amp_mm: design.point_radial_push_amp,
         strength: design.point_radial_push_strength != null ? design.point_radial_push_strength : 1.0
       };
+    }
+    // Zone Overrides: only sent when at least one zone would actually do
+    // something (mirrors the Point Edit gating above). A different
+    // subsystem from Point Edit: zones change how the wall is GENERATED for
+    // a height band, not the already-sliced path. Only the parametric wall
+    // honors these -- loop fabric and STL mesh mode ignore them server-side
+    // and surface a scope warning in the report.
+    if(zoneOverridesAnyEnabled()){
+      body.zone_overrides = design.zone_overrides.filter(zoneOverrideMeaningful).map(function(z){
+        var entry = { t_lo: z.t_lo, t_hi: z.t_hi, blend: z.blend != null ? z.blend : 0.02 };
+        if(z.pattern) entry.pattern = z.pattern;
+        if(z.pattern_amp != null) entry.pattern_amp = z.pattern_amp;
+        if(z.pattern_twist != null) entry.pattern_twist = z.pattern_twist;
+        if(z.xy_twist != null) entry.xy_twist = z.xy_twist;
+        return entry;
+      });
     }
     // Route texture params by the pattern dropdown: loops are a site-based
     // texture (server pattern stays null), wave patterns send the pattern_*

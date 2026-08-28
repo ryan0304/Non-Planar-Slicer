@@ -106,6 +106,49 @@ class SpiralSpec:
     # Works best with vwave/pleats, amp 2-3mm, waves 15-40, slow print speed.
     r_alternate: bool = False
 
+    # Zone Overrides: height-band regions that override texture pattern/depth
+    # and/or xy-twist rate for just that band (see ZoneOverride below). None
+    # or an empty list = today's behaviour exactly, byte-identical.
+    zones: "list[ZoneOverride] | None" = None
+
+
+@dataclass
+class ZoneOverride:
+    """One height band of the wall generated with different parameters than
+    the rest of the print -- the "Zone Overrides" feature.
+
+    ``t_lo``/``t_hi`` are height fractions (0..1); ``blend`` is the ramp
+    width, in t, at EACH edge (so a full band shorter than 2*blend still
+    ramps smoothly, never spikes). ``r_pattern``: ``None`` inherits
+    ``SpiralSpec.r_pattern``, ``""`` means "no texture in this band" (an
+    explicit override to smooth), any name in ``_R_PATTERNS`` overrides.
+    ``r_amp``/``r_twist_turns``/``xy_twist_turns``: ``None`` inherits the
+    global value.
+
+    ``r_twist_turns`` rotates only this zone's TEXTURE (the pattern's own
+    angular coordinate), crossfaded exactly like ``r_pattern``/``r_amp`` --
+    its contribution is already bounded by ``r_amp`` and made continuous by
+    the same weight ramp, so it needs no separate integral treatment.
+    ``xy_twist_turns`` instead rotates the WALL's own cross-section, which is
+    unbounded and must accumulate continuously (see zone_twist_integral
+    below) -- the two twists are independent axes and can be set differently.
+
+    Zones MAY overlap (v2): where two bands' weights both cover a point,
+    spiral_path() rescales the weights (max(1, sum of weights)) so the
+    combined displacement can never exceed the deepest single zone's own
+    r_amp -- see spiral_path()'s texture-crossfade block for the exact
+    argument. This module does not itself store any resolution of overlap;
+    each zone_weight()/zone_twist_integral() call is independent of every
+    other zone.
+    """
+    t_lo: float
+    t_hi: float
+    blend: float = 0.02
+    r_pattern: str | None = None
+    r_amp: float | None = None
+    r_twist_turns: float | None = None
+    xy_twist_turns: float | None = None
+
 
 # Max change of the Z-wave amplitude per spiral turn, as a fraction of the
 # layer height. Keeps the vertical gap between successive turns positive
@@ -145,6 +188,63 @@ _R_PATTERNS: dict = {
 R_PATTERN_NAMES = sorted(_R_PATTERNS.keys())
 
 
+def _r_pattern_fn(name: str):
+    """``_R_PATTERNS[name]``, raising the same error ``spiral_path`` always
+    has for an unknown pattern name. Shared by the global texture and every
+    Zone Override so there is exactly one implementation of each pattern.
+    """
+    fn = _R_PATTERNS.get(name)
+    if fn is None:
+        raise ValueError(
+            f"unknown r_pattern '{name}', expected one of {R_PATTERN_NAMES}")
+    return fn
+
+
+def zone_weight(z: "ZoneOverride", t: float) -> float:
+    """Trapezoid membership of height fraction ``t`` in zone ``z``: 0 outside
+    ``[t_lo, t_hi]``, ramping linearly 0->1 over ``blend`` at each edge, 1 in
+    the middle. Same shape as point_edit.py's ProtectionSpec falloff ramp.
+    """
+    a, d = z.t_lo, z.t_hi
+    if t <= a or t >= d:
+        return 0.0
+    bl = max(0.0, min(z.blend, (d - a) / 2.0))
+    if bl <= 0.0:
+        return 1.0
+    b, c = a + bl, d - bl
+    if t < b:
+        return (t - a) / bl
+    if t > c:
+        return (d - t) / bl
+    return 1.0
+
+
+def zone_twist_integral(z: "ZoneOverride", t: float) -> float:
+    """Closed-form INTEGRAL_0^t zone_weight(z, u) du.
+
+    Lets a zone's xy-twist be treated as a RATE and integrated into a
+    continuous rotation angle instead of switched abruptly at the zone edges
+    -- an abrupt switch would rotate the cross-section instantly between two
+    adjacent turns, printing a new turn with nothing underneath it. O(1),
+    resolution-independent (matches at any points_per_turn), and mirrored
+    verbatim in viewer/preview_math.js for the live draft preview.
+    """
+    a, d = z.t_lo, z.t_hi
+    if t <= a:
+        return 0.0
+    bl = max(0.0, min(z.blend, (d - a) / 2.0))
+    b, c = a + bl, d - bl
+    if bl <= 0.0:
+        return min(t, d) - a if t > a else 0.0
+    if t <= b:
+        return (t - a) ** 2 / (2.0 * bl)
+    if t <= c:
+        return bl / 2.0 + (t - b)
+    if t <= d:
+        return bl / 2.0 + (c - b) + (t - c) - (t - c) ** 2 / (2.0 * bl)
+    return (d - a) - bl
+
+
 def _fade_envelope(t: float, fade_in: float, fade_out: float) -> float:
     """0..1 envelope ramping in over ``fade_in`` and out over ``fade_out``."""
     e = 1.0
@@ -153,6 +253,31 @@ def _fade_envelope(t: float, fade_in: float, fade_out: float) -> float:
     if fade_out > 0.0 and t > 1.0 - fade_out:
         e = min(e, (1.0 - t) / fade_out)
     return max(0.0, e)
+
+
+def _r_coords(spec: SpiralSpec, theta: float, t: float, phi: float,
+              r_twist_turns: float | None = None) -> tuple[float, float, float]:
+    """(a, b, env) angular/vertical texture coordinates + fade envelope, for
+    the GLOBAL r_pattern settings on ``spec`` -- exactly the expression
+    ``spiral_path`` has always used, factored out so a Zone Override's own
+    pattern can reuse it (its ``a``/``b`` differ only when the zone sets its
+    own r_pattern/r_amp/r_twist_turns, never its own waves/bands/phase/fades
+    -- those stay global by design, see paths.py's SpiralSpec docstring).
+
+    ``r_twist_turns``: ``None`` (the default) uses ``spec.r_twist_turns`` --
+    the SAME float, so a caller that never passes this gets a bit-identical
+    ``a`` to before this parameter existed. A Zone Override with its own
+    ``r_twist_turns`` passes it here instead, rotating only that zone's own
+    sampled texture.
+    """
+    tw = spec.r_twist_turns if r_twist_turns is None else r_twist_turns
+    a = spec.r_waves * theta + 2.0 * math.pi * (tw * t + spec.r_phase)
+    if spec.r_alternate and int(phi / (2.0 * math.pi)) % 2 == 1:
+        a += math.pi          # odd turns swing the opposite way
+    b = 2.0 * math.pi * spec.r_bands * t
+    env = (spec.r_envelope(t) if spec.r_envelope is not None
+           else _fade_envelope(t, spec.r_fade_in, spec.r_fade_out))
+    return a, b, env
 
 
 def cage_scale(cage, theta, t):
@@ -220,6 +345,19 @@ def spiral_path(
         # The point still sits at angle ``theta`` (so each loop is complete),
         # but the lobe pattern is sampled at a height-rotated angle.
         shape_angle = theta - spec.xy_twist_turns * 2.0 * math.pi * t
+        if spec.zones:
+            # Zone Overrides: treat each zone's xy_twist_turns as a RATE and
+            # integrate it, so the extra rotation accumulates continuously
+            # instead of stepping at the zone edges (paths.py's ZoneOverride
+            # docstring). Skipped entirely (no float op at all) when no zone
+            # actually overrides twist -- byte-identical to the line above.
+            extra = 0.0
+            for z in spec.zones:
+                if z.xy_twist_turns is not None:
+                    extra += ((z.xy_twist_turns - spec.xy_twist_turns)
+                              * zone_twist_integral(z, t))
+            if extra != 0.0:
+                shape_angle -= extra * 2.0 * math.pi
         r = shape(shape_angle)
         if spec.radius_envelope is not None:
             r *= spec.radius_envelope(t)
@@ -228,20 +366,61 @@ def spiral_path(
 
         # Radial surface texture: probe-safe (never moves Z). ``a`` follows the
         # twisted angular coordinate, ``b`` climbs 2*pi per band over height.
-        if spec.r_pattern:
-            fn = _R_PATTERNS.get(spec.r_pattern)
-            if fn is None:
-                raise ValueError(
-                    f"unknown r_pattern '{spec.r_pattern}', expected one of "
-                    f"{R_PATTERN_NAMES}")
-            a = (spec.r_waves * theta
-                 + 2.0 * math.pi * (spec.r_twist_turns * t + spec.r_phase))
-            if spec.r_alternate and int(phi / (2.0 * math.pi)) % 2 == 1:
-                a += math.pi          # odd turns swing the opposite way
-            b = 2.0 * math.pi * spec.r_bands * t
-            env = (spec.r_envelope(t) if spec.r_envelope is not None
-                   else _fade_envelope(t, spec.r_fade_in, spec.r_fade_out))
-            r += spec.r_amp * env * fn(a, b)
+        active_zones = ([(z, zone_weight(z, t)) for z in spec.zones]
+                         if spec.zones else [])
+        active_zones = [(z, w) for z, w in active_zones
+                         if w > 0.0 and (z.r_pattern is not None
+                                         or z.r_amp is not None
+                                         or z.r_twist_turns is not None)]
+        if not active_zones:
+            if spec.r_pattern:
+                a, b, env = _r_coords(spec, theta, t, phi)
+                r += spec.r_amp * env * _r_pattern_fn(spec.r_pattern)(a, b)
+        else:
+            # Zone Overrides: crossfade the DISPLACEMENT (not switch the
+            # pattern -- a pattern name can't be interpolated) so the radius
+            # never steps between two adjacent turns, which would leave a new
+            # turn's bead unsupported.
+            #
+            # Zones MAY overlap (v2). Where two bands' weights both cover this
+            # t, their raw sum can exceed 1 and an unnormalized sum of
+            # displacements could exceed what any single zone's own r_amp
+            # clamp ever bounded (two 4mm zones at full weight would ask for
+            # ~8mm combined). Rescaling every weight by max(1, sum-of-weights)
+            # caps the blend at exactly one zone's worth of displacement while
+            # preserving the RELATIVE mix each zone's ramp asks for -- a
+            # convex combination (weights sum to <=1) of terms each bounded by
+            # r_amp can never exceed r_amp itself.
+            #
+            # Exact no-op when zones do not overlap: at most one trapezoid is
+            # non-zero at any t (two disjoint intervals cannot both contain a
+            # point), so the raw sum is already <=1, norm is exactly 1.0, and
+            # `w / 1.0` is bit-identical to `w` in IEEE754 -- the reason
+            # regression_ref/ref_zone_overrides.gcode never needed
+            # regenerating when overlap support was added.
+            a, b, env = _r_coords(spec, theta, t, phi)
+            norm = 1.0
+            wsum = 0.0
+            for _z, w in active_zones:
+                wsum += w
+            if wsum > 1.0:
+                norm = wsum
+            base_w = 1.0
+            add = 0.0
+            for z, w in active_zones:
+                wn = w / norm
+                base_w -= wn
+                name = z.r_pattern if z.r_pattern is not None else spec.r_pattern
+                amp = z.r_amp if z.r_amp is not None else spec.r_amp
+                if z.r_twist_turns is None or z.r_twist_turns == spec.r_twist_turns:
+                    a_z = a
+                else:
+                    a_z, _b_z, _env_z = _r_coords(spec, theta, t, phi, z.r_twist_turns)
+                if name:
+                    add += amp * env * _r_pattern_fn(name)(a_z, b) * wn
+            if spec.r_pattern and base_w > 0.0:
+                add += spec.r_amp * env * _r_pattern_fn(spec.r_pattern)(a, b) * base_w
+            r += add
 
         x = r * math.cos(theta)
         y = r * math.sin(theta)

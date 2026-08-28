@@ -121,6 +121,97 @@ def run_loop_fabric_case(tmpdir: Path, ref_name: str, xy_twist_turns: float) -> 
     return True, "OK"
 
 
+def run_zone_override_case(tmpdir: Path) -> tuple[bool, str]:
+    """SpiralSpec.zones has no CLI flag either (see paths.py's ZoneOverride) --
+    same direct-construction pattern as run_loop_fabric_case(). Also asserts,
+    in memory, that zones=None and zones=[] produce byte-identical output to
+    each other -- proving an empty zone list is a genuine bit-exact no-op
+    without needing a second reference file just to say so."""
+    from trident_gcode.profile import PrinterProfile
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.paths import SpiralSpec, ZoneOverride, circle
+    from trident_gcode.generators.continuous_spiral import build_continuous_spiral
+
+    ref_name = "ref_zone_overrides.gcode"
+    ref = REF_DIR / ref_name
+    if not ref.exists():
+        return False, f"reference file missing: {ref}"
+
+    def _build(zones):
+        profile = PrinterProfile()
+        writer = GcodeWriter(
+            profile=profile, line_width=0.45, layer_height=0.3,
+            bed_temp=60.0, nozzle_temp=210.0, material="PLA",
+            print_speed=40.0, first_layer_speed=20.0,
+        )
+        spec = SpiralSpec(
+            base_radius=30.0, height=30.0, layer_height=0.3, points_per_turn=240,
+            xy_twist_turns=0.0, r_pattern="vwave", r_amp=1.0, zones=zones,
+        )
+        build_continuous_spiral(writer, spec, shape=circle(30.0))
+        return writer
+
+    # In-memory text comparison (not the byte comparison below, which goes
+    # through save()'s text-mode file write like every other case in this
+    # module -- on Windows that applies its own newline translation, so
+    # comparing raw .text() strings here keeps this check platform-neutral).
+    none_text = _build(None).text()
+    empty_text = _build([]).text()
+    if none_text != empty_text:
+        return False, "zones=None and zones=[] produced different output (should be an exact no-op)"
+
+    zone = ZoneOverride(t_lo=0.35, t_hi=0.70, blend=0.02, r_pattern="diamond",
+                        r_amp=2.0, xy_twist_turns=1.0)
+    out = tmpdir / ref_name
+    _build([zone]).save(str(out))
+    generated = out.read_bytes()
+    expected = ref.read_bytes()
+    if generated != expected:
+        return False, f"byte mismatch: generated {len(generated)}b vs reference {len(expected)}b"
+    return True, "OK"
+
+
+def run_zone_overlap_case(tmpdir: Path) -> tuple[bool, str]:
+    """Zones may OVERLAP (v2, see paths.py's spiral_path() texture-crossfade
+    normalization). Two overlapping zones (0.45-0.60 shared), one of them
+    also exercising the per-zone pattern_twist (r_twist_turns) added in the
+    same change. No CLI flag routes to this either -- same direct-
+    construction pattern as run_zone_override_case()."""
+    from trident_gcode.profile import PrinterProfile
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.paths import SpiralSpec, ZoneOverride, circle
+    from trident_gcode.generators.continuous_spiral import build_continuous_spiral
+
+    ref_name = "ref_zone_overlap.gcode"
+    ref = REF_DIR / ref_name
+    if not ref.exists():
+        return False, f"reference file missing: {ref}"
+
+    profile = PrinterProfile()
+    writer = GcodeWriter(
+        profile=profile, line_width=0.45, layer_height=0.3,
+        bed_temp=60.0, nozzle_temp=210.0, material="PLA",
+        print_speed=40.0, first_layer_speed=20.0,
+    )
+    zones = [
+        ZoneOverride(t_lo=0.25, t_hi=0.60, blend=0.05, r_pattern="diamond", r_amp=3.0),
+        ZoneOverride(t_lo=0.45, t_hi=0.80, blend=0.05, r_pattern="pleats",
+                     r_amp=3.0, r_twist_turns=1.5),
+    ]
+    spec = SpiralSpec(
+        base_radius=30.0, height=30.0, layer_height=0.3, points_per_turn=240,
+        xy_twist_turns=0.0, r_pattern="vwave", r_amp=1.0, zones=zones,
+    )
+    build_continuous_spiral(writer, spec, shape=circle(30.0))
+    out = tmpdir / ref_name
+    writer.save(str(out))
+    generated = out.read_bytes()
+    expected = ref.read_bytes()
+    if generated != expected:
+        return False, f"byte mismatch: generated {len(generated)}b vs reference {len(expected)}b"
+    return True, "OK"
+
+
 def main() -> int:
     sys.path.insert(0, str(ROOT))
     all_ok = True
@@ -142,6 +233,14 @@ def main() -> int:
             ok, msg = run_loop_fabric_case(tmpdir, ref_name, xy_twist_turns)
             print(f"{'PASS' if ok else 'FAIL'}  {ref_name:28s} {msg if not ok else ''}")
             all_ok &= ok
+
+        ok, msg = run_zone_override_case(tmpdir)
+        print(f"{'PASS' if ok else 'FAIL'}  {'ref_zone_overrides.gcode':28s} {msg if not ok else ''}")
+        all_ok &= ok
+
+        ok, msg = run_zone_overlap_case(tmpdir)
+        print(f"{'PASS' if ok else 'FAIL'}  {'ref_zone_overlap.gcode':28s} {msg if not ok else ''}")
+        all_ok &= ok
 
     print("ALL PASS" if all_ok else "REGRESSION DETECTED")
     return 0 if all_ok else 1

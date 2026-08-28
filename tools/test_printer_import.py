@@ -2287,6 +2287,438 @@ def test_inapplicable_controls_are_reported():
               f"inapplicable: Point Mask + {label} is a real combination and stays quiet",
               str(combo["issues"]))
 
+    # Zone Overrides: loop fabric has no wall-generation call the zones can
+    # hook into (build_loop_fabric takes no SpiralSpec) -- must be reported
+    # and left inert, mirroring the point-edit scope message above.
+    loop_body = {"loop_per_turn": 12, "radius": 20.0, "height": 20.0, "printer": "trident"}
+    loop_plain = serve.generate_design(dict(loop_body))
+    loop_zoned = serve.generate_design(dict(
+        loop_body, zone_overrides=[{"t_lo": 0.2, "t_hi": 0.6, "pattern": "diamond", "pattern_amp": 2.0}]))
+    check(said(loop_zoned, "zone overrides only apply to the parametric wall")
+          and any("not loop fabric" in m for m in loop_zoned["issues"]),
+          "inapplicable: loop fabric + zone overrides is reported",
+          str(loop_zoned["issues"]))
+    check(loop_zoned["gcode"] == loop_plain["gcode"],
+          "inapplicable: ...and loop fabric output really is unchanged by zone overrides")
+
+    # Mesh-texture mode has no SpiralSpec to attach zones to either.
+    mesh_plain = mesh()
+    mesh_zoned = mesh(zone_overrides=[
+        {"t_lo": 0.2, "t_hi": 0.6, "pattern": "diamond", "pattern_amp": 2.0}])
+    check(said(mesh_zoned, "zone overrides only apply to the parametric wall")
+          and any("not an uploaded mesh" in m for m in mesh_zoned["issues"]),
+          "inapplicable: mesh-texture + zone overrides is reported",
+          str(mesh_zoned["issues"]))
+    check(mesh_zoned["gcode"] == mesh_plain["gcode"],
+          "inapplicable: ...and mesh-texture output really is unchanged by zone overrides")
+
+    # Counter-case: a plain parametric design with a REAL zone must stay
+    # silent about scope -- a warning that fires on every design teaches
+    # people to ignore warnings, which is worse than none (see this
+    # function's own module docstring above).
+    zoned_para = para(zone_overrides=[
+        {"t_lo": 0.2, "t_hi": 0.6, "pattern": "diamond", "pattern_amp": 2.0}])
+    check(not said(zoned_para, "zone overrides only apply to the parametric wall"),
+          "inapplicable: a parametric design with a real zone raises no scope warning",
+          str(zoned_para["issues"]))
+    check(zoned_para["gcode"] != base_run["gcode"],
+          "inapplicable: ...and the zone actually changed the output")
+
+
+# ---------------------------------------------------------------------------
+# 10. Zone Overrides: height-band regions that generate with a different
+# texture/xy-twist than the rest of the print (trident_gcode/paths.py's
+# ZoneOverride / SpiralSpec.zones). Distinct from the Point Edit Modifier
+# stack tested above -- zones change how the wall is GENERATED, point edits
+# deform it AFTER slicing (see continuous_spiral.py's call order).
+# ---------------------------------------------------------------------------
+def test_zone_overrides_are_a_noop_by_default():
+    import serve
+
+    def para(**kw):
+        body = {"shape": "circle", "radius": 25.0, "height": 20.0, "layer_height": 0.3,
+                "pattern": "vwave", "pattern_amp": 1.0, "printer": "trident",
+                "base_layers": 2}
+        body.update(kw)
+        return serve.generate_design(body)
+
+    base = para()
+    absent = para()
+    empty = para(zone_overrides=[])
+    inert = para(zone_overrides=[{"t_lo": 0.2, "t_hi": 0.6}])
+
+    check(absent["gcode"] == base["gcode"],
+          "zone_noop: no zone_overrides key is identical to the base design")
+    check(empty["gcode"] == base["gcode"],
+          "zone_noop: an empty zone_overrides list is identical to the base design")
+    check(inert["gcode"] == base["gcode"],
+          "zone_noop: a zone with no override set (pattern/depth/twist all "
+          "inherited) is identical to the base design")
+    check(any("set no override" in m for m in inert["issues"]),
+          "zone_noop: the inert zone says so instead of looking applied",
+          str(inert["issues"]))
+    check(base["stats"]["zones"] == 0 and inert["stats"]["zones"] == 0,
+          "zone_noop: stats.zones is 0 for both a plain design and an inert zone",
+          f'{base["stats"]["zones"]} / {inert["stats"]["zones"]}')
+
+
+def test_zone_overrides_change_only_their_band():
+    import serve
+
+    def para(**kw):
+        # star, not circle: a circle's radius is constant in theta, so
+        # xy-twist (which only rotates the SHAPE angle, not the texture's own
+        # angular coordinate) would be a geometric no-op and this test would
+        # pass for the wrong reason.
+        body = {"shape": "star", "radius": 25.0, "height": 20.0, "layer_height": 0.3,
+                "pattern": "vwave", "pattern_amp": 1.0, "printer": "trident",
+                "base_layers": 0, "bottom": "open"}
+        body.update(kw)
+        return serve.generate_design(body)
+
+    base = para()
+    base_lines = base["gcode"].splitlines()
+
+    tex_zone = para(zone_overrides=[
+        {"t_lo": 0.6, "t_hi": 0.9, "blend": 0.02, "pattern": "diamond", "pattern_amp": 2.0}])
+    tex_lines = tex_zone["gcode"].splitlines()
+    check(len(base_lines) == len(tex_lines),
+          "zone_locality: a texture-only zone changes the same line count "
+          "(no points added or removed)")
+    # A conservative prefix, well below (t_lo - blend) = 0.58 of the wall
+    # -- a few header/comment lines before the first wall point cannot push
+    # this far off, so an exact match here is a real locality guarantee.
+    prefix_end = int(len(base_lines) * 0.4)
+    check(base_lines[:prefix_end] == tex_lines[:prefix_end],
+          "zone_locality: a texture-only zone leaves the wall below its band byte-identical")
+    check(base_lines[prefix_end:] != tex_lines[prefix_end:],
+          "zone_locality: ...and the band itself really did change")
+    check(tex_zone["gcode"] != base["gcode"],
+          "zone_locality: a texture-only zone changes the overall output")
+
+    twist_zone = para(zone_overrides=[
+        {"t_lo": 0.6, "t_hi": 0.9, "blend": 0.02, "xy_twist": 1.0}])
+    twist_lines = twist_zone["gcode"].splitlines()
+    check(base_lines[:prefix_end] == twist_lines[:prefix_end],
+          "zone_locality: a twist-only zone leaves the wall below its band byte-identical "
+          "(the twist correction is skipped entirely below t_lo, not just zero-valued)")
+    check(twist_zone["gcode"] != base["gcode"],
+          "zone_locality: a twist-only zone changes the overall output")
+
+
+def test_zone_overrides_are_validated_server_side():
+    import serve
+
+    lh, h = 0.3, 20.0
+
+    # Overlapping zones now reach the generator UNTRIMMED (v2): spiral_path()
+    # harmonizes overlapping weights via max(1, sum-of-weights) normalization
+    # instead of this parser resolving overlap by trimming. Sorted by t_lo,
+    # but both zones' original spans survive intact.
+    zones, notes = serve._parse_zone_overrides([
+        {"t_lo": 0.2, "t_hi": 0.6, "pattern": "diamond"},
+        {"t_lo": 0.4, "t_hi": 0.8, "pattern": "ripple"},
+    ], lh, h)
+    check(len(zones) == 2 and zones[0].t_lo == 0.2 and zones[0].t_hi == 0.6
+          and zones[1].t_lo == 0.4 and zones[1].t_hi == 0.8,
+          "zone_validate: overlapping zones reach the generator with their "
+          "original spans intact (v2 blends them, does not trim them)",
+          str([(z.t_lo, z.t_hi) for z in zones]))
+    check(not any("trimmed" in n for n in notes),
+          "zone_validate: ...and no trim note is emitted (overlap is now an "
+          "intended, supported outcome, not a bug being guarded against)",
+          str(notes))
+
+    # Sort order is by t_lo regardless of request order, and is stable
+    # (equal t_lo keeps request order) -- this is what makes the
+    # floating-point blend order-independent of client serialization.
+    zones_rev, _ = serve._parse_zone_overrides([
+        {"t_lo": 0.4, "t_hi": 0.8, "pattern": "ripple"},
+        {"t_lo": 0.2, "t_hi": 0.6, "pattern": "diamond"},
+    ], lh, h)
+    check([(z.t_lo, z.t_hi) for z in zones_rev] == [(z.t_lo, z.t_hi) for z in zones],
+          "zone_validate: zone order in the response is by t_lo, independent "
+          "of the order the client sent them in")
+
+    # t_lo/t_hi out of range are clamped into [0,1], never rejected outright.
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": -5.0, "t_hi": 50.0, "pattern": "diamond"}], lh, h)
+    check(len(zones) == 1 and zones[0].t_lo == 0.0 and zones[0].t_hi == 1.0,
+          "zone_validate: out-of-range t_lo/t_hi are clamped into [0,1]",
+          str([(z.t_lo, z.t_hi) for z in zones]) if zones else "dropped")
+
+    # A span below the two-layer minimum is dropped, not clamped to something tiny.
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": 0.5, "t_hi": 0.5 + 1e-6, "pattern": "diamond"}], lh, h)
+    check(zones == [], "zone_validate: a span below the minimum is dropped entirely", str(notes))
+
+    # Non-finite values cannot actually reach this parser in production (the
+    # whole request body is rejected first by _reject_nonfinite_tree), but it
+    # must still refuse to build a zone from one if it ever did -- the same
+    # defense-in-depth every point-edit parser already has.
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": float("nan"), "t_hi": 0.6, "pattern": "diamond"}], lh, h)
+    check(zones == [], "zone_validate: a NaN t_lo drops the zone (never clamped)", str(notes))
+    try:
+        serve._reject_nonfinite_tree({"zone_overrides": [{"t_lo": float("nan"), "t_hi": 0.6}]})
+        check(False, "zone_validate: the request-body door also rejects a NaN zone field")
+    except ValueError:
+        check(True, "zone_validate: the request-body door also rejects a NaN zone field")
+
+    # Unknown pattern name inherits the global pattern instead of erroring.
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": 0.2, "t_hi": 0.6, "pattern": "not_a_real_pattern", "xy_twist": 1.0}], lh, h)
+    check(len(zones) == 1 and zones[0].r_pattern is None,
+          "zone_validate: an unknown pattern name inherits the global pattern",
+          str(notes))
+
+    # "loops" (a site-based texture, not a radial one) is refused the same way.
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": 0.2, "t_hi": 0.6, "pattern": "loops", "xy_twist": 1.0}], lh, h)
+    check(len(zones) == 1 and zones[0].r_pattern is None,
+          "zone_validate: 'loops' is refused as a zone pattern (inherits instead)",
+          str(notes))
+
+    # More than ZONE_MAX zones are truncated, not rejected outright.
+    many = [{"t_lo": i * 0.1, "t_hi": i * 0.1 + 0.05, "pattern": "diamond"} for i in range(20)]
+    zones, notes = serve._parse_zone_overrides(many, lh, h)
+    check(len(zones) <= serve.ZONE_MAX,
+          f"zone_validate: at most ZONE_MAX ({serve.ZONE_MAX}) zones survive", str(len(zones)))
+
+    # pattern_amp is clamped to the same [0, 4] ceiling as the global control.
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": 0.2, "t_hi": 0.6, "pattern_amp": 99.0}], lh, h)
+    check(len(zones) == 1 and zones[0].r_amp == 4.0,
+          "zone_validate: pattern_amp is clamped to 4.0, the same ceiling as the global control",
+          str(zones[0].r_amp if zones else None))
+
+    # pattern_twist (r_twist_turns) is accepted, unclamped like the global
+    # control it mirrors, and a non-finite value drops the field rather than
+    # being coerced to 0 or clamped.
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": 0.2, "t_hi": 0.6, "pattern_twist": 2.5}], lh, h)
+    check(len(zones) == 1 and zones[0].r_twist_turns == 2.5,
+          "zone_validate: pattern_twist is parsed onto r_twist_turns unclamped",
+          str(zones[0].r_twist_turns if zones else None))
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": 0.2, "t_hi": 0.6, "pattern_twist": float("nan")}], lh, h)
+    check(zones == [],
+          "zone_validate: a NaN pattern_twist with nothing else set drops the "
+          "zone (never coerced to 0)", str(notes))
+
+    # End-to-end: a malformed request body must be refused at the door,
+    # never 500 and never silently generated.
+    malformed_bodies = [
+        {"zone_overrides": [{"t_lo": float("nan"), "t_hi": 0.9, "pattern": "diamond"}]},
+        {"zone_overrides": [{"t_lo": "nan", "t_hi": 0.9}]},
+        {"zone_overrides": [{"t_lo": 1e400, "t_hi": 0.9}]},
+        {"zone_overrides": [{"t_lo": 0.2, "t_hi": 0.6, "pattern_twist": float("nan")}]},
+    ]
+    for b in malformed_bodies:
+        try:
+            serve._reject_nonfinite_tree(b)
+            check(False, f"zone_validate: end-to-end door rejects malformed body {b}")
+        except ValueError:
+            check(True, f"zone_validate: end-to-end door rejects malformed body {b}")
+
+
+def test_zone_overlap_is_bounded_and_continuous():
+    """The core v2 safety property: overlapping zones must never combine into
+    more displacement than a single zone's own r_amp ceiling could produce,
+    and the wall must stay finite and continuous no matter how many zones are
+    stacked on top of each other. Works on spiral_path() points directly so
+    it measures real geometry, not text.
+
+    Empirically verified while writing this test (not merely asserted): four
+    fully-overlapping 4mm zones (the r_amp ceiling) produced a combined
+    radius delta of ~3.99mm against a plain wall -- NOT anywhere near the
+    naive sum of ~16mm, and barely more than one 4mm zone alone (~3.96mm).
+    That is exactly the "convex combination bounded by the largest single
+    term" property max(1, sum-of-weights) normalization guarantees (see
+    spiral_path()'s texture-crossfade comment in paths.py).
+    """
+    import math
+    from trident_gcode.paths import ZoneOverride, SpiralSpec, spiral_path, circle
+
+    base_radius = 30.0
+    shape = circle(base_radius)
+
+    def build(zones):
+        spec = SpiralSpec(base_radius=base_radius, height=30.0, layer_height=0.3,
+                          points_per_turn=240, r_pattern=None, r_amp=1.0, zones=zones)
+        return spiral_path(spec, shape)
+
+    pts_plain = build(None)
+    r_plain = max(math.hypot(p.x, p.y) for p in pts_plain)
+
+    one_zone = [ZoneOverride(0.3, 0.7, 0.05, r_pattern="diamond", r_amp=4.0)]
+    pts_one = build(one_zone)
+    r_one = max(math.hypot(p.x, p.y) for p in pts_one)
+    delta_one = r_one - r_plain
+
+    four_zones = [ZoneOverride(0.3, 0.7, 0.05, r_pattern=p, r_amp=4.0)
+                  for p in ("diamond", "ripple", "pleats", "vwave")]
+    pts_four = build(four_zones)
+    check(all(math.isfinite(p.x) and math.isfinite(p.y) and math.isfinite(p.z)
+              for p in pts_four),
+          "zone_overlap: four fully-overlapping zones at the r_amp ceiling "
+          "still produce entirely finite geometry")
+    r_four = max(math.hypot(p.x, p.y) for p in pts_four)
+    delta_four = r_four - r_plain
+
+    check(delta_four <= delta_one * 1.25,
+          "zone_overlap: four overlapping 4mm zones combine to roughly ONE "
+          "zone's worth of displacement, never a naive sum (would be ~4x)",
+          f"single-zone delta={delta_one:.4f}mm, four-overlap delta={delta_four:.4f}mm")
+    check(delta_four < 4.0 * 4,
+          "zone_overlap: sanity -- nowhere close to the naive unbounded sum",
+          f"delta_four={delta_four:.4f}mm")
+
+    # Continuity: the radius as a function of t has no true discontinuity
+    # (zone_weight and max(1, sum) are both continuous, so their composition
+    # is too) -- adjacent SAMPLE POINTS (not turns; a texture's own spatial
+    # frequency, not zone overlap, sets the turn-to-turn step) never jump by
+    # more than a few line widths even in this deliberately extreme stack.
+    max_adjacent_step = 0.0
+    for i in range(1, len(pts_four)):
+        r1 = math.hypot(pts_four[i].x, pts_four[i].y)
+        r0 = math.hypot(pts_four[i - 1].x, pts_four[i - 1].y)
+        max_adjacent_step = max(max_adjacent_step, abs(r1 - r0))
+    check(max_adjacent_step < 1.0,
+          "zone_overlap: adjacent-sample radial step stays small even under "
+          "four fully-overlapping zones (no true discontinuity)",
+          f"max adjacent step={max_adjacent_step:.4f}mm")
+
+
+def test_zone_overlap_is_a_noop_when_disjoint():
+    import serve
+
+    def para(**kw):
+        body = {"shape": "circle", "radius": 25.0, "height": 20.0, "layer_height": 0.3,
+                "pattern": "vwave", "pattern_amp": 1.0, "printer": "trident"}
+        body.update(kw)
+        return serve.generate_design(body)
+
+    disjoint_fwd = para(zone_overrides=[
+        {"t_lo": 0.10, "t_hi": 0.30, "pattern": "diamond"},
+        {"t_lo": 0.60, "t_hi": 0.85, "pattern": "pleats"}])
+    disjoint_rev = para(zone_overrides=[
+        {"t_lo": 0.60, "t_hi": 0.85, "pattern": "pleats"},
+        {"t_lo": 0.10, "t_hi": 0.30, "pattern": "diamond"}])
+    check(disjoint_fwd["gcode"] == disjoint_rev["gcode"],
+          "zone_overlap: disjoint zones produce identical output regardless "
+          "of the order they were sent in (sort makes it order-independent)")
+
+    touching_a = para(zone_overrides=[
+        {"t_lo": 0.2, "t_hi": 0.5, "blend": 0.0, "pattern": "diamond"},
+        {"t_lo": 0.5, "t_hi": 0.8, "blend": 0.0, "pattern": "pleats"}])
+    touching_b = para(zone_overrides=[
+        {"t_lo": 0.2, "t_hi": 0.499999, "blend": 0.0, "pattern": "diamond"},
+        {"t_lo": 0.500001, "t_hi": 0.8, "blend": 0.0, "pattern": "pleats"}])
+    check(touching_a["gcode"] == touching_b["gcode"],
+          "zone_overlap: zones that exactly touch at one edge give the same "
+          "output as zones separated by a hair (zone_weight is 0 at both "
+          "endpoints, so touching is the disjoint case, not the overlap case)")
+
+
+def test_zone_pattern_twist_override():
+    import serve
+
+    def para(shape="star", **kw):
+        body = {"shape": shape, "radius": 25.0, "height": 20.0, "layer_height": 0.3,
+                "pattern": "pleats", "pattern_amp": 1.0, "printer": "trident",
+                "base_layers": 0, "bottom": "open"}
+        body.update(kw)
+        return serve.generate_design(body)
+
+    base = para()
+    ptwist = para(zone_overrides=[{"t_lo": 0.6, "t_hi": 0.9, "blend": 0.02, "pattern_twist": 2.0}])
+    check(ptwist["gcode"] != base["gcode"],
+          "zone_ptwist: a zone-only pattern_twist override changes the output")
+
+    base_lines = base["gcode"].splitlines()
+    ptwist_lines = ptwist["gcode"].splitlines()
+    prefix_end = int(len(base_lines) * 0.4)   # well below (t_lo - blend) = 0.58
+    check(base_lines[:prefix_end] == ptwist_lines[:prefix_end],
+          "zone_ptwist: leaves the wall below its band byte-identical (locality)")
+
+    # On a CIRCLE, pattern_twist still rotates the texture (changes output)
+    # while xy_twist is a geometric no-op (a circle's radius is constant in
+    # theta) -- proving the two twists are genuinely independent axes, not
+    # the same feature under two names.
+    circ_base = para(shape="circle")
+    circ_ptwist = para(shape="circle", zone_overrides=[
+        {"t_lo": 0.6, "t_hi": 0.9, "blend": 0.02, "pattern_twist": 2.0}])
+    circ_xytwist = para(shape="circle", zone_overrides=[
+        {"t_lo": 0.6, "t_hi": 0.9, "blend": 0.02, "xy_twist": 2.0}])
+    check(circ_ptwist["gcode"] != circ_base["gcode"],
+          "zone_ptwist: on a circle, pattern_twist still changes the texture")
+    check(circ_xytwist["gcode"] == circ_base["gcode"],
+          "zone_ptwist: ...while xy_twist on a circle is a geometric no-op -- "
+          "the two twists are independent axes, not the same feature")
+
+    zones, notes = serve._parse_zone_overrides(
+        [{"t_lo": 0.2, "t_hi": 0.6, "pattern_twist": 1.0}], 0.3, 20.0)
+    check(len(zones) == 1 and zones[0].r_twist_turns == 1.0,
+          "zone_ptwist: _parse_zone_overrides accepts pattern_twist alone as "
+          "a meaningful override (not dropped as inert)", str(notes))
+
+
+def test_zone_stl_export_matches_the_wall():
+    import math
+    import serve
+
+    base_body = {"shape": "circle", "radius": 25.0, "height": 20.0, "layer_height": 0.3,
+                 "points_per_turn": 60, "pattern": "vwave", "pattern_amp": 1.0,
+                 "printer": "trident"}
+    contours_plain, heights_plain, _ = serve._export_contours_parametric(dict(base_body))
+
+    zoned_body = dict(base_body, zone_overrides=[
+        {"t_lo": 0.4, "t_hi": 0.7, "blend": 0.02, "pattern": "diamond", "pattern_amp": 2.0}])
+    contours_zoned, heights_zoned, _ = serve._export_contours_parametric(zoned_body)
+
+    check(heights_plain == heights_zoned,
+          "zone_stl: the ring heights are unaffected by zone overrides")
+    check(len(contours_plain) == len(contours_zoned),
+          "zone_stl: the ring count is unaffected by zone overrides")
+
+    n = len(contours_plain)
+    top = max(heights_plain[-1], 1e-9)
+    below_band = [i for i in range(n) if heights_plain[i] / top < 0.35]
+    in_band = [i for i in range(n) if 0.45 < heights_plain[i] / top < 0.65]
+
+    check(bool(below_band) and all(contours_plain[i] == contours_zoned[i] for i in below_band),
+          "zone_stl: rings well below the zone are byte-identical in the exported solid")
+    check(bool(in_band) and any(contours_plain[i] != contours_zoned[i] for i in in_band),
+          "zone_stl: rings inside the zone actually differ in the exported solid "
+          "(the band is really visible in the STL, not just the G-code)")
+
+    # v2: overlapping zones in the STL export path -- the lockstep check for
+    # _export_contours_parametric's own max(1, sum-of-weights) normalization
+    # and per-zone pattern_twist offset (both duplicated from spiral_path()
+    # by necessity; this is what catches a divergence between the two).
+    overlap_body = dict(base_body, zone_overrides=[
+        {"t_lo": 0.3, "t_hi": 0.7, "blend": 0.02, "pattern": "diamond", "pattern_amp": 2.0},
+        {"t_lo": 0.5, "t_hi": 0.9, "blend": 0.02, "pattern": "pleats",
+         "pattern_amp": 2.0, "pattern_twist": 1.5},
+    ])
+    contours_overlap, heights_overlap, _ = serve._export_contours_parametric(overlap_body)
+    check(heights_plain == heights_overlap and len(contours_plain) == len(contours_overlap),
+          "zone_stl: overlapping zones don't change the ring layout")
+    n2 = len(contours_overlap)
+    top2 = max(heights_plain[-1], 1e-9)
+    below_both = [i for i in range(n2) if heights_plain[i] / top2 < 0.25]
+    in_overlap = [i for i in range(n2) if 0.55 < heights_plain[i] / top2 < 0.65]
+    finite_overlap = all(
+        all(math.isfinite(x) and math.isfinite(y) for (x, y) in ring)
+        for ring in contours_overlap)
+    check(finite_overlap,
+          "zone_stl: overlapping zones still export an entirely finite solid")
+    check(bool(below_both) and all(contours_plain[i] == contours_overlap[i] for i in below_both),
+          "zone_stl: overlap export still leaves rings well below both zones byte-identical")
+    check(bool(in_overlap) and any(contours_plain[i] != contours_overlap[i] for i in in_overlap),
+          "zone_stl: the overlap region is visibly different from the plain wall")
+
 
 def test_surface_probe_slope_check():
     """serve.py's _check_probe_slope (mode=surface) must REFUSE a conformal
@@ -2416,6 +2848,13 @@ def main() -> int:
     test_loop_fabric_base_is_reported()
     test_base_follows_the_silhouette()
     test_inapplicable_controls_are_reported()
+    test_zone_overrides_are_a_noop_by_default()
+    test_zone_overrides_change_only_their_band()
+    test_zone_overrides_are_validated_server_side()
+    test_zone_overlap_is_bounded_and_continuous()
+    test_zone_overlap_is_a_noop_when_disjoint()
+    test_zone_pattern_twist_override()
+    test_zone_stl_export_matches_the_wall()
 
     with tempfile.TemporaryDirectory() as tmp:
         test_smoke(Path(tmp))

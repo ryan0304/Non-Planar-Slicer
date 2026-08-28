@@ -76,6 +76,77 @@
      end of its design range is not one. Do not reuse elsewhere. */
   --cage:#ffc24c;
 
+  /* Zone-band magenta -- reserved for Zone Overrides (the entry button, its
+     modal chrome, the height-axis bands, the floating right-click context
+     menu and the 3-D band highlight; the JS mirror is ZONE_COL in
+     viewer.js, keep the two in step). Same reasoning as --measure and
+     --cage: --accent is the draft path this is drawn ON TOP of,
+     --accent-purple belongs to Point Edit Modifiers alone (CLAUDE.md), --cage
+     is the Freeform cage, --measure the calipers, and --ok/--warn/--danger
+     are machine-safety states -- a height band generated with a different
+     texture is not one. Contrast on --bg #17191b: 7.15:1 (#ff6fd8), 9.35:1
+     (#ff9ce5), both measured by the sRGB relative-luminance formula. Zone
+     Overrides is NOT the same subsystem as Point Edit Modifiers (purple) --
+     the former changes how the wall is generated, the latter deforms it
+     after slicing (see continuous_spiral.py's call order) -- so the two
+     must never share a colour. Do not reuse elsewhere. */
+  --zone:#ff6fd8;
+  --zone-hover:#ff9ce5;
+  --zone-dim:rgba(255,111,216,.14);
+  --ink-on-zone:#2a0a22;
+
+  /* Per-zone palette (v2): each Zone Override gets its own STABLE colour
+     (assigned once at creation, see designer.js's nextZoneColorIdx) so
+     multiple bands on one model, and a freshly-added band, are visually
+     distinguishable -- not everything the same --zone magenta. The JS
+     mirror is ZONE_PALETTE in viewer.js, keep the two in step.
+
+     The hue wheel is genuinely crowded once every other reserved token is
+     excluded (--danger 0deg, --warn 34deg, --cage 40deg, --ok 157deg,
+     --measure 188deg, --accent-family ~197-255deg, --accent-purple 255deg,
+     --zone itself 316deg) -- only two gaps exceed 45deg (40->157 green, and
+     255->316 violet/magenta). --zone-c1 IS --zone: a one-zone design (the
+     common case) looks exactly like v1, and slot 1 does double duty as both
+     the subsystem's chrome colour and the first zone's identity colour.
+     Slots 6-8 (up to ZONE_MAX) cycle back through 1-3 -- the row swatch,
+     axis position and the band's own height already disambiguate at that
+     count, which is a rare power case.
+
+     Two revisions in (both from real usage: a 5-zone design where c1/c5
+     read as the same pink, then a 3-zone design landing entirely in the
+     green gap where c2/c4/c5 all read as "the same green") made clear that
+     hue alone can't carry five colours through a 117deg + 61deg budget --
+     at these gaps, 20-30deg of hue separation is real but too subtle to
+     read at a glance on a translucent, lit, overlapping band. LIGHTNESS is
+     now the primary channel WITHIN each gap, hue only the secondary one:
+     the green gap holds a dark olive (c2), a bright mid green (c5) and a
+     pale mint (c4) -- three clearly different VALUES, not just three
+     clearly different hues -- and the violet gap pairs light pink (c1, kept
+     as --zone's own colour) against a markedly darker, more saturated
+     violet (c3) instead of two similarly-pale pinks/orchids.
+
+     c3 sits only 30deg from --accent-purple (Point Edit) -- kept anyway
+     because Point Edit renders NOTHING on the model itself (no viewport
+     overlay; its own cage handles are --cage amber) and the two never share
+     a modal, so the two colours never appear side by side where the
+     closeness would read as confusion. A gold/apricot candidate near
+     --warn/--cage was rejected instead: the cage's amber handles ARE drawn
+     on the model, where a near-identical zone band would be a real, direct
+     collision. A rose near --danger was also rejected -- too close to
+     .zo-row-remove's hover colour in the SAME modal.
+
+     Contrast on --bg #17191b, sRGB relative-luminance formula: c1 7.15:1,
+     c2 6.87:1, c3 4.64:1, c4 12.00:1, c5 11.60:1 -- all clear TASTES.md's
+     4.5:1 floor (none is a safety colour, so the 5.8:1 bar does not apply;
+     c3's 4.64:1 is the tightest -- it was deliberately lightened off a
+     near-invisible 2.4:1 first draft to clear the floor while staying
+     visibly darker than c1). Do not reuse elsewhere. */
+  --zone-c1:#ff6fd8;
+  --zone-c2:#9daa0e;
+  --zone-c3:#bc57db;
+  --zone-c4:#92e8a3;
+  --zone-c5:#6fed26;
+
   /* Busy-state system (spinner / status line / the Generate progress bar).
      Deliberately its OWN token, not a reuse of --ok/--warn/--danger (those
      are reserved for safety states -- a slow STL upload or printer-config
@@ -306,7 +377,7 @@ h1 { font-size:16px; font-weight:600; margin:0 0 var(--sp-1); letter-spacing:-0.
    feature -- scoped to headings only, per DESIGN.md, not applied file-wide
    where it could shift a numeral or a mono readout nobody asked to move. */
 .card-title, .sr-modal-header h2, .pe-modal-header h2, .pm-modal-header h2,
-.guide-modal-header h2, .guide-slide h3 { font-feature-settings:"ss03"; }
+.zo-modal-header h2, .guide-modal-header h2, .guide-slide h3 { font-feature-settings:"ss03"; }
 .sub { color:var(--ink-muted); font-size:12px; margin-bottom:var(--sp-4); }
 
 /* ---- brand mark: "the toolpath is the logo" (header glyph, favicon, empty-
@@ -718,6 +789,46 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .cage-tag .cage-tag-meta { color:var(--ink-muted); font-weight:400; }
 .cage-tag .cage-tag-delta { display:block; color:var(--ink-muted); font-weight:400;
   font-size:10.5px; }
+
+/* Zone Overrides: per-ring mm height labels pinned to the model. Same
+   floating-DOM-tracks-a-3D-point pattern as .measure-tag/.cage-tag above;
+   positioned from render() via window.__zoneLabelSync (viewer.js). Colour is
+   set inline per chip from the zone's own --zone-c1..c5 slot (same reason
+   .zo-axis-band sets it inline -- see that rule's own comment). Persistent,
+   not hover-gated: a freshly right-click-added zone gets only a flat, dimmed
+   fill (ZONE_INERT_DIM in viewer.js) until a texture is chosen -- it overrides
+   nothing yet (activeZones() in preview_math.js filters an all-inherit zone
+   out of __zonePreviewBands), so that dim, hard-edged look plus these labels
+   are what make "present but inert" legible without opening the modal. */
+.zone-tags { position:absolute; inset:0; pointer-events:none; z-index:6; }
+.zone-tag { position:absolute; transform:translate(0,-50%); padding:1px 6px;
+  border-radius:var(--radius-sm); background:rgba(30,33,36,.92);
+  border:1px solid currentColor; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; font-size:11px; font-weight:600;
+  white-space:nowrap; line-height:1.45; }
+/* Derived facts (band span, zone number) -- present on engagement (hover/
+   drag) only, never competing with the mm. 400, not 500: the weight ladder
+   is 300/400/600/700 with 500 deliberately absent, same as .cage-tag-meta. */
+.zone-tag .zone-tag-meta { color:var(--ink-muted); font-weight:400; margin-left:6px; }
+/* The wall's own base/top marks -- not a zone, so not a zone colour. Also not
+   editable (there is no zone edge for a double-click to commit), so it stays
+   outside the pointer-events re-enable below. */
+.zone-tag.zone-tag-scale { color:var(--ink-muted); border-color:var(--line); }
+/* A real zone edge's chip is double-click-editable (zoneLabelBeginEdit,
+   viewer.js) -- .zone-tags above is pointer-events:none so a chip sitting
+   over the canvas never steals an orbit-drag; re-enabling it just here, on
+   the small pill itself, is what makes the double-click reachable at all.
+   cursor:text is the only affordance (TASTES.md: no hover lift/shadow
+   bloom); :active gets the app's one allowed press state, layered onto the
+   existing translate so the vertical centering survives the press. */
+.zone-tag:not(.zone-tag-scale) { pointer-events:auto; cursor:text; }
+.zone-tag:not(.zone-tag-scale):active { transform:translate(0,-50%) scale(0.95); }
+/* The inline mm editor itself -- sized to the chip's own text, not a generic
+   form control, since it replaces the chip's text node in place rather than
+   opening any kind of separate field. */
+.zone-tag-input { width:52px; padding:0; border:none; outline:none;
+  background:transparent; color:inherit; font:inherit;
+  font-variant-numeric:tabular-nums; text-align:right; }
 
 /* ---- Design a vase panel ---- */
 .drow { display:flex; align-items:center; justify-content:space-between; font-size:12px;
@@ -1141,6 +1252,137 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .pe-grid input { width:100%; background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:var(--radius-sm); padding:4px 2px; font-size:10.5px; text-align:center; font-family:var(--font-ui); }
 .pe-grid input:focus { border-color:var(--accent-purple); outline:none; }
+
+/* =========================================================================
+   Zone Overrides -- height-band regions generated with a different texture
+   pattern/depth and/or xy-twist than the rest of the print. Entry button
+   lives at the bottom of the Texture pattern section (under the fade/lattice
+   rows, not beside Point Edit's own entry button -- two "..." modal buttons
+   stacked at the top of the step would read as two halves of one subsystem,
+   which is exactly the confusion --zone exists to avoid). Also opened by
+   right-clicking the model in the 3-D view (see viewer.js's contextmenu
+   handler). --zone is reserved for this subsystem only (see :root comment).
+   ========================================================================= */
+.zo-entry-btn { border-color:var(--zone); color:var(--zone); margin-bottom:0; }
+.zo-entry-btn:hover:not(:disabled) { border-color:var(--zone-hover); color:var(--zone-hover);
+  background:var(--zone-dim); }
+/* Same .85 dimming and same reasoning as .pe-entry-btn.pe-out-of-scope --
+   the button stays clickable, #zo-scope-note already says why, so the
+   dimming is only a nudge. */
+.zo-entry-btn.zo-out-of-scope { opacity:.85; }
+.zo-dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:transparent;
+  margin-right:6px; transition:background .15s, box-shadow .15s; vertical-align:middle; }
+.zo-dot.active { background:var(--zone); box-shadow:0 0 0 3px rgba(255,111,216,.22); }
+
+/* The one sentence that stops someone mistaking this for Point Edit
+   Modifiers (purple): risk/caution treatment, not muted .hint grey -- a
+   --zone left border and full --ink text color, same weight as the report's
+   own issue rows (.pm-issue-warn) but in this subsystem's own colour. */
+.zo-caution { border-left:2px solid var(--zone); color:var(--ink); font-size:11px;
+  line-height:1.5; padding:4px 0 4px 8px; margin-top:var(--sp-2); }
+
+.zo-modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; }
+.zo-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
+.zo-modal-card { position:relative; width:min(720px, 94vw); max-height:86vh; display:flex; flex-direction:column;
+  background:var(--surface); border:1px solid var(--zone); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-float); overflow:hidden; }
+.zo-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4);
+  border-bottom:1px solid var(--line); flex:none; }
+.zo-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+.zo-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4); }
+.zo-modal-footer { display:flex; justify-content:space-between; gap:8px; padding:var(--sp-3) var(--sp-4);
+  border-top:1px solid var(--line); flex:none; }
+
+/* Height axis: a vertical track showing every zone as a band, with drag
+   handles at each edge. Sits above the row list rather than beside it (the
+   modal is a fixed 720px card, and a 28px-wide side rail would leave the
+   axis cramped at the 340px sidebar's own narrow width in a mirrored panel;
+   full-width horizontal is legible at every viewport this modal opens in). */
+.zo-axis-wrap { display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-4); }
+.zo-axis { position:relative; width:28px; height:260px; flex:none; background:var(--input-bg);
+  border:1px solid var(--line); border-radius:var(--radius-sm);
+  margin-right:84px; }   /* reserves room in the flex row for .zo-axis-label
+                             chips, which sit outside this element's own 28px
+                             box (see that rule) -- without this a sibling in
+                             .zo-axis-wrap would overlap/clip them. */
+/* Colour (background/border-color) is deliberately NOT set here for
+   .zo-axis-band/.zo-axis-handle/.zo-row-swatch -- each zone has its OWN
+   stable colour from the --zone-c1..c5 palette (see the :root block above),
+   so designer.js sets it as an inline style per element. Keeping a hardcoded
+   var(--zone) here would just be redundant with, and easy to confuse for,
+   the real per-zone value that always wins. */
+.zo-axis-band { position:absolute; left:1px; right:1px; border-top:1px solid; border-bottom:1px solid; }
+.zo-axis-ramp { position:absolute; left:1px; right:1px; background:var(--zone-dim); opacity:.5; }
+.zo-axis-handle { position:absolute; left:-3px; right:-3px; height:4px;
+  border-radius:2px; cursor:ns-resize; }
+.zo-axis-handle:hover, .zo-axis-handle.dragging { filter:brightness(1.2); }
+.zo-axis-readout { font-size:11px; }
+/* Height-axis mm labels: every zone edge's value plus the track's own base/
+   top scale marks, positioned by designer.js (positionZoneAxisEls) from the
+   exact same t each .zo-axis-band/.zo-axis-handle already uses, so a label
+   can never disagree with the band/handle it describes. Deliberately its
+   own class, not .zone-tag reused: this widget lives in the modal's flat
+   CSS layout, not the 3-D camera-projected label track, so it needs no
+   basis/reprojection -- and it must stay pointer-events:none, since it can
+   sit directly over a drag handle it must never intercept. */
+.zo-axis-label { position:absolute; left:32px; transform:translate(0,-50%);
+  padding:1px 6px; border-radius:var(--radius-sm); background:var(--input-bg);
+  border:1px solid currentColor; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; font-size:11px; font-weight:600;
+  white-space:nowrap; line-height:1.45; pointer-events:none; z-index:2; }
+/* The track's own base/top marks -- not a zone, so muted like .zone-tag-scale,
+   and inset further right (ZO_AXIS_SCALE_INSET_PX in designer.js) so a scale
+   mark never sits flush against a zone edge label at the same height. */
+.zo-axis-label-scale { color:var(--ink-muted); border-color:var(--line); font-weight:400; }
+
+.zo-rows { display:flex; flex-direction:column; gap:var(--sp-2); }
+.zo-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; font-size:12px;
+  padding:var(--sp-2); border:1px solid var(--line); border-radius:var(--radius-sm);
+  background:var(--surface-raised); }
+.zo-row.disabled { opacity:.6; }
+/* The one sentence that makes "this row is that band on the model" legible.
+   --radius-sm, not a circle or a pill -- a swatch is a small square utility
+   chip, the same grammar rung .pm-badge and every other status chip uses. */
+.zo-row-swatch { flex:none; width:10px; height:10px; border-radius:var(--radius-sm); }
+/* A freshly-added zone's row, cleared on the row's next interaction (see
+   designer.js). Left border only -- no glow, no shadow, no animation. */
+.zo-row.is-new { border-left-width:2px; }
+/* Overrides .drow's row layout (label left, control right) with a stacked
+   label-above-control layout sized for the compact zone row -- .drow stays
+   the base class only so the tooltip engine's `.closest('.drow, label.row')`
+   still finds these as rows (see designer.js's helpIdFor/findRow). */
+.zo-row-field { display:flex; flex-direction:column; align-items:stretch;
+  justify-content:flex-start; gap:2px; padding:0; }
+.zo-row-field > span, .zo-row-field label { font-size:10.5px; color:var(--ink-muted); }
+.zo-row-field input, .zo-row-field select { background-color:var(--input-bg); color:var(--ink);
+  border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; }
+.zo-row-field input:focus, .zo-row-field select:focus { border-color:var(--zone); outline:none; }
+.zo-row-field input[data-unit=mm] { width:68px; font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.zo-row-field input[data-unit=turns] { width:58px; font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.zo-row-remove { margin-left:auto; background:none; border:1px solid var(--line); color:var(--ink-muted);
+  border-radius:var(--radius-sm); padding:4px 8px; font-size:11px; cursor:pointer; font-family:var(--font-ui); }
+.zo-row-remove:hover { color:var(--danger); border-color:var(--danger); }
+.zo-row-remove:active { transform:scale(0.95); }
+
+/* Floating right-click context menu on the 3-D canvas. Distinct radius rung
+   (--radius-md, matching every other floating popover -- dropdown lists,
+   the search palette) from the modal's --radius-lg. */
+.ctx-menu { position:fixed; z-index:60; min-width:180px; background:rgba(30,33,36,.94);
+  border:1px solid var(--line); border-radius:var(--radius-md); backdrop-filter:blur(20px) saturate(180%);
+  box-shadow:var(--shadow-float); padding:4px; }
+.ctx-item { display:flex; align-items:center; width:100%; background:none; border:none;
+  color:var(--ink); font-size:12px; font-family:var(--font-ui); text-align:left; cursor:pointer;
+  padding:7px 10px; border-radius:var(--radius-sm); }
+.ctx-item:hover { background:var(--surface-raised); }
+.ctx-item .zo-dot { margin-right:8px; }
+/* "Edit zone N textures..." carries that zone's own swatch, not the generic
+   --zone dot -- same 10x10 --radius-sm chip .zo-row-swatch already is. */
+.ctx-item .zo-row-swatch { margin-right:8px; }
+/* "Add zone here (max 8)" once ZONE_MAX is reached -- visible, not a dead
+   click. Muted like every other disabled control in this file, no hover. */
+.ctx-item:disabled { color:var(--ink-muted); cursor:default; }
+.ctx-item:disabled:hover { background:none; }
+.ctx-sep { height:1px; margin:4px 6px; background:var(--line); }
 
 /* =========================================================================
    Custom printer import/edit -- sidebar meta row + review modal. Ordinary

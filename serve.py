@@ -45,7 +45,7 @@ from trident_gcode import printer_store
 from trident_gcode.printer_import import parse as parse_printer_config, PrinterImportError
 from trident_gcode.printer_validate import validate_raw, validate_profile_dict
 from trident_gcode.blobs import LoopSpec
-from trident_gcode.paths import SpiralSpec, circle, star, superellipse
+from trident_gcode.paths import SpiralSpec, circle, star, superellipse, ZoneOverride
 from trident_gcode.generators import build_continuous_spiral, build_profile_spiral, build_surface_spiral
 from trident_gcode.generators.surface_spiral import _archimedean
 from trident_gcode.generators.loop_fabric import build_loop_fabric
@@ -58,6 +58,7 @@ from trident_gcode.point_edit import (MaskSpec, ProtectionSpec, FFDSpec, SmoothS
                                        apply_point_edits)
 from trident_gcode.paths import PathPoint
 from trident_gcode.paths import _R_PATTERNS, _fade_envelope, R_PATTERN_NAMES, cage_scale
+from trident_gcode.paths import zone_weight, zone_twist_integral, _r_pattern_fn, _r_coords
 from trident_gcode.stl_export import contours_to_mesh, write_binary_stl
 
 DEFAULT_PRINTER_KEY = "trident"
@@ -638,6 +639,144 @@ def _point_edit_active(body) -> bool:
     return any(x is not None for x in _parse_point_edit_specs(body))
 
 
+# --------------------------------------------------------------------------
+# Zone Overrides: height-band regions that generate with a different texture
+# pattern/depth/twist and/or xy-twist than the rest of the print. Distinct
+# from, and generated BEFORE, the Point Edit Modifier stack above -- see
+# trident_gcode/paths.py's ZoneOverride docstring. Never affects loop fabric.
+# Zones may overlap; spiral_path() harmonizes them via weighted
+# normalization (max(1, sum-of-weights)) rather than this parser resolving
+# overlap by trimming.
+# --------------------------------------------------------------------------
+ZONE_MAX = 8   # a compute/UI budget, not affected by overlap
+
+
+def _parse_zone_overrides(raw, layer_height, height) -> tuple[list[ZoneOverride], list[str]]:
+    """Parse the ``zone_overrides`` request array into validated ZoneOverride
+    objects, plus a list of human-readable notes for anything dropped or
+    adjusted. Returns ``([], [])`` for absent/malformed/empty input -- the
+    byte-identical no-op case. Zones may overlap in the returned list; the
+    generator (spiral_path()) is what harmonizes overlapping weights.
+
+    Every numeric field is clamped or dropped here; nothing here trusts the
+    client. Non-finite numbers cannot actually reach this function (the
+    request body is rejected wholesale by ``_reject_nonfinite_tree`` before
+    ``generate_design`` runs at all), but each field is still guarded
+    individually -- the same defense-in-depth the point-edit parsers use --
+    so a change to that boundary check can never quietly reopen this one.
+    """
+    if not isinstance(raw, list) or not raw:
+        return [], []
+
+    min_span = max(2.0 * layer_height / max(height, 1e-6), 1e-4)
+    notes: list[str] = []
+    zones: list[ZoneOverride] = []
+
+    def _finite_float(v, default=None):
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            return default
+        f = float(v)
+        return f if math.isfinite(f) else default
+
+    for entry in raw[:ZONE_MAX * 4]:  # cap work even before the ZONE_MAX truncation note
+        if not isinstance(entry, dict):
+            notes.append("a zone override entry was not an object - skipped.")
+            continue
+        t_lo = _finite_float(entry.get("t_lo"))
+        t_hi = _finite_float(entry.get("t_hi"))
+        if t_lo is None or t_hi is None:
+            notes.append("a zone override was missing a finite t_lo/t_hi - skipped.")
+            continue
+        t_lo = max(0.0, min(t_lo, 1.0))
+        t_hi = max(0.0, min(t_hi, 1.0))
+        if t_lo > t_hi:
+            t_lo, t_hi = t_hi, t_lo
+        if t_hi - t_lo < min_span:
+            notes.append(
+                "a zone override spanned less than two layers (%.3f-%.3f of "
+                "height) - skipped." % (t_lo, t_hi))
+            continue
+
+        blend = _finite_float(entry.get("blend"), 0.02)
+        blend = max(0.0, min(blend, 0.25))
+        blend = min(blend, (t_hi - t_lo) / 2.0)
+
+        r_pattern = entry.get("pattern", None)
+        if r_pattern is not None:
+            if not isinstance(r_pattern, str):
+                r_pattern = None
+                notes.append("a zone override's pattern was not a name - inheriting the global pattern.")
+            elif r_pattern == "":
+                pass  # explicit "no texture in this band"
+            elif r_pattern in _SITE_TEXTURE_PATTERNS:
+                notes.append(
+                    "zone overrides cannot use '%s' (a site-based texture, not "
+                    "a radial one) - inheriting the global pattern instead." % r_pattern)
+                r_pattern = None
+            elif r_pattern not in _R_PATTERNS:
+                notes.append(
+                    "a zone override named an unknown pattern '%s' - inheriting "
+                    "the global pattern instead." % r_pattern)
+                r_pattern = None
+
+        r_amp = None
+        if "pattern_amp" in entry:
+            r_amp = _finite_float(entry.get("pattern_amp"))
+            if r_amp is not None:
+                r_amp = max(0.0, min(r_amp, 4.0))
+
+        r_twist_turns = None
+        if "pattern_twist" in entry:
+            r_twist_turns = _finite_float(entry.get("pattern_twist"))
+            # No clamp: the GLOBAL pattern_twist is itself unclamped
+            # (see the plain float(...) reads below), so clamping only the
+            # per-zone override would make a zone stricter than the global
+            # control for no reason, and any millimetre/turns ceiling here
+            # would be a bare constant, which CLAUDE.md forbids. The real
+            # risk (NaN/Inf) is already closed by _finite_float above and by
+            # _reject_nonfinite_tree at the request-body door.
+
+        xy_twist_turns = None
+        if "xy_twist" in entry:
+            xy_twist_turns = _finite_float(entry.get("xy_twist"))
+
+        if (r_pattern is None and r_amp is None
+                and r_twist_turns is None and xy_twist_turns is None):
+            notes.append(
+                "a zone override at %.3f-%.3f of height set no override "
+                "(pattern/depth/twist all inherited) - skipped." % (t_lo, t_hi))
+            continue
+
+        zones.append(ZoneOverride(
+            t_lo=t_lo, t_hi=t_hi, blend=blend,
+            r_pattern=r_pattern, r_amp=r_amp, r_twist_turns=r_twist_turns,
+            xy_twist_turns=xy_twist_turns,
+        ))
+
+    if len(raw) > ZONE_MAX and len(zones) >= ZONE_MAX:
+        notes.append(
+            "only the first %d zone overrides are used (%d were sent)."
+            % (ZONE_MAX, len(raw)))
+    zones = zones[:ZONE_MAX]
+
+    # Zones MAY overlap (v2) -- trident_gcode/paths.py's spiral_path()
+    # rescales overlapping weights (max(1, sum-of-weights)) so the combined
+    # displacement can never exceed the deepest single zone's own r_amp, and
+    # the same normalization runs in _export_contours_parametric() below and
+    # in viewer/preview_math.js's mirror. This function no longer trims
+    # overlap; it only sorts.
+    #
+    # Floating-point summation is not associative, so the order active_zones
+    # is walked in spiral_path() determines the last bits of every blended
+    # radius. Sorting by t_lo (Python's sort is stable, so equal t_lo keeps
+    # request order) makes the generated G-code independent of the order the
+    # client happened to serialize the array in -- regression_ref/
+    # ref_zone_overlap.gcode depends on this ordering being deterministic.
+    zones.sort(key=lambda z: z.t_lo)
+
+    return zones, notes
+
+
 def _parse_overhang_fan(body):
     """Fan min/max bounds (0..1 fractions) -- always concrete, never None. The
     fan runs between these two speeds, selected by wall lean (see
@@ -961,6 +1100,13 @@ def generate_design(body):
         _progress["total"] = 240 * math.ceil(height / max(layer_height, 1e-6)) + 27623
         _progress["stage"] = "toolpath"
 
+    # Zone Overrides: height-band regions that generate with a different
+    # texture/xy-twist than the rest of the print. Parsed before SpiralSpec
+    # so its `zones=` can be filled in directly; scope/emptiness issues are
+    # raised alongside the other issues_extra below, once loop_spec is known.
+    zone_specs, zone_notes = _parse_zone_overrides(
+        body.get("zone_overrides"), layer_height, height)
+
     # z_amp=1.0 so the envelope's return value IS the absolute mm of amplitude
     # (exactly how calibrate.py's z-amp ladder drives it). z_amp_ramp=0 so the
     # user's own amp curve (which defaults to 0 at the base) controls ramp-in.
@@ -988,6 +1134,7 @@ def generate_design(body):
         spine_offset=spine_offset,
         ovality=ovality,
         cage=cage,
+        zones=zone_specs or None,
     )
     shape = _make_shape(shape_name, radius, star_points, star_depth)
 
@@ -1002,6 +1149,12 @@ def generate_design(body):
     point_edit_issue = None
     fan_overhang_issue = None
     loop_base_issue = None
+    zone_scope_issue = None
+    zone_empty_issue = None
+    if body.get("zone_overrides") and not zone_specs:
+        zone_empty_issue = (
+            "zone overrides were requested but none were valid or active - "
+            "the wall was generated unchanged.")
     # Point Mask and Point Protection are GATES, not deformations: they scale
     # how strongly FFD / Smooth / Radial Push act at each point (see
     # point_edit.py). On their own there is nothing to scale, so
@@ -1030,6 +1183,10 @@ def generate_design(body):
             point_edit_issue = (
                 "point edit modifiers only apply to the parametric wall "
                 "(not loop fabric) - ignored for this design.")
+        if zone_specs:
+            zone_scope_issue = (
+                "zone overrides only apply to the parametric wall (not loop "
+                "fabric) - ignored for this design.")
         if fan_overhang_min != fan_overhang_max:
             fan_overhang_issue = (
                 "fan min/max only ramp on the parametric wall (loop fabric has "
@@ -1117,6 +1274,12 @@ def generate_design(body):
         issues_extra.append(fan_overhang_issue)
     if loop_base_issue:
         issues_extra.append(loop_base_issue)
+    if zone_scope_issue:
+        issues_extra.append(zone_scope_issue)
+    if zone_empty_issue:
+        issues_extra.append(zone_empty_issue)
+    for note in zone_notes:
+        issues_extra.append("zone override: " + note)
     stats = {
         "wave_slope": round(peak_slope, 3),
         "moves": analysis.moves,
@@ -1132,6 +1295,7 @@ def generate_design(body):
         "top_z_mm": report.get("top_z_mm"),
         "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
         "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
+        "zones": len(zone_specs) if loop_spec is None else 0,
     }
 
     filename = "design_%s_%dmm.gcode" % (_clean_shape(shape_name), int(round(height)))
@@ -1737,6 +1901,16 @@ def generate_mesh_texture_design(body):
         issues_extra.append(
             "STL mode cannot vary the base fill or lay a skirt - "
             + ", ".join(_mesh_dropped) + " was not printed.")
+    # build_profile_spiral takes r_pattern/xy_twist_turns as flat kwargs, not
+    # a SpiralSpec, so it has no `zones=` to accept -- a mesh-derived contour
+    # stack has no single spiral_path() call to hook the crossfade/twist
+    # integral into. Report it the same way the point-edit gates and the
+    # dropped base-style/skirt controls are reported above, rather than
+    # silently accepting and ignoring the field.
+    if body.get("zone_overrides"):
+        issues_extra.append(
+            "zone overrides only apply to the parametric wall (not an "
+            "uploaded mesh) - ignored for this design.")
 
     stats = {
         "wave_slope": round(peak_slope, 3),
@@ -1753,6 +1927,7 @@ def generate_mesh_texture_design(body):
         "top_z_mm": report.get("top_z_mm"),
         "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
         "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
+        "zones": 0,
     }
 
     filename = "design_mesh_%s_%dmm.gcode" % (_clean_shape(mesh_id), int(round(max(heights) if heights else 0)))
@@ -1902,6 +2077,11 @@ def _export_contours_parametric(body):
 
     shape = _make_shape(shape_name, radius, star_points, star_depth)
 
+    # Zone Overrides: same parser generate_design() uses, so the exported
+    # solid can never differ from the printed wall just because one path
+    # validated the request harder (see this function's own docstring).
+    zone_specs, _zone_notes = _parse_zone_overrides(body.get("zone_overrides"), layer_height, height)
+
     # Budget-check BEFORE building anything -- stack_from_shape would otherwise
     # allocate the whole oversized stack before we could reject it.
     if layer_height <= 0:
@@ -1926,21 +2106,81 @@ def _export_contours_parametric(body):
     for i in range(n_layers):
         t = i / max(n_layers - 1, 1)
         r_env = radius_fn(t)
-        env = _fade_envelope(t, pattern_fade_in, pattern_fade_out) if fn is not None else 0.0
+        env = _fade_envelope(t, pattern_fade_in, pattern_fade_out)
         b = 2.0 * math.pi * pattern_bands * t
         dx = t * spine_mm * spine_cos
         dy = t * spine_mm * spine_sin
+        # Zone Overrides: same twist-integral + texture-crossfade math as
+        # spiral_path() (paths.py) -- see ZoneOverride's docstring for why an
+        # abrupt switch is unsafe, and spiral_path()'s texture block for why
+        # overlapping weights are rescaled by max(1, sum-of-weights). Twist
+        # correction and the normalization are per-ring (depend only on t);
+        # active zones are filtered per-ring too, points_per_turn never
+        # changes which zones are live within one ring.
+        zone_extra_twist = 0.0
+        active_zones = []
+        zone_norm = 1.0
+        if zone_specs:
+            for z in zone_specs:
+                if z.xy_twist_turns is not None:
+                    zone_extra_twist += (z.xy_twist_turns - xy_twist) * zone_twist_integral(z, t)
+            active_zones = [(z, zone_weight(z, t)) for z in zone_specs]
+            active_zones = [(z, w) for z, w in active_zones
+                             if w > 0.0 and (z.r_pattern is not None
+                                             or z.r_amp is not None
+                                             or z.r_twist_turns is not None)]
+            if active_zones:
+                wsum = 0.0
+                for _z, w in active_zones:
+                    wsum += w
+                if wsum > 1.0:
+                    zone_norm = wsum
+        # Per-zone texture-angle offset, hoisted per ring (depends only on t,
+        # not on theta) -- mirrors _r_coords()'s tw*t + phase term for each
+        # active zone's own r_twist_turns (None = inherit pattern_twist).
+        zone_a_offs = [
+            2.0 * math.pi * ((z.r_twist_turns if z.r_twist_turns is not None
+                              else pattern_twist) * t + pattern_phase)
+            for z, _w in active_zones
+        ]
+        a_off = 2.0 * math.pi * (pattern_twist * t + pattern_phase)
         ring = []
         for j in range(n):
             theta = 2.0 * math.pi * j / n
-            r = shape(theta - xy_twist * 2.0 * math.pi * t) * r_env
+            shape_angle = theta - xy_twist * 2.0 * math.pi * t
+            if zone_extra_twist != 0.0:
+                shape_angle -= zone_extra_twist * 2.0 * math.pi
+            r = shape(shape_angle) * r_env
             if cage is not None:
                 r *= cage_scale(cage, theta, t)
-            if fn is not None:
-                a = pattern_waves * theta + 2.0 * math.pi * (pattern_twist * t + pattern_phase)
+            if not active_zones:
+                if fn is not None:
+                    a = pattern_waves * theta + a_off
+                    if pattern_alternate and i % 2 == 1:
+                        a += math.pi
+                    r += pattern_amp * env * fn(a, b)
+            else:
+                a = pattern_waves * theta + a_off
                 if pattern_alternate and i % 2 == 1:
                     a += math.pi
-                r += pattern_amp * env * fn(a, b)
+                base_w = 1.0
+                add = 0.0
+                for (z, w), a_off_z in zip(active_zones, zone_a_offs):
+                    wn = w / zone_norm
+                    base_w -= wn
+                    name = z.r_pattern if z.r_pattern is not None else pattern
+                    amp = z.r_amp if z.r_amp is not None else pattern_amp
+                    if z.r_twist_turns is None or z.r_twist_turns == pattern_twist:
+                        a_z = a
+                    else:
+                        a_z = pattern_waves * theta + a_off_z
+                        if pattern_alternate and i % 2 == 1:
+                            a_z += math.pi
+                    if name:
+                        add += amp * env * _r_pattern_fn(name)(a_z, b) * wn
+                if fn is not None and base_w > 0.0:
+                    add += pattern_amp * env * fn(a, b) * base_w
+                r += add
             x = r * math.cos(theta)
             y = r * math.sin(theta)
             if ovality != 0.0:

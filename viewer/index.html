@@ -118,6 +118,13 @@
         <span id="tl-read" class="tl-read">100%</span>
       </div>
     </div>
+    <!-- Right-click context menu for the 3-D model (viewer.js populates and
+         positions this at the cursor; empty/hidden until a right-click on
+         the model or the empty bed fires). Context-aware: right-clicking a
+         zone's own band leads with editing/removing that zone; right-
+         clicking bare model offers to add one there (never opens
+         #zone-modal); "Zone Overrides..." (all zones) is always present. -->
+    <div id="canvas-ctx-menu" class="ctx-menu" style="display:none"></div>
   </div>
   <div id="splitter" class="splitter" title="Drag to resize"></div>
   <div id="panel" class="panel">
@@ -393,6 +400,18 @@
             Loop height and hooks the row below &#8212; loop height must exceed row height to
             interlock. No solid wall; fully open fabric. Slow + max cooling.</div>
         </div>
+
+        <hr>
+        <button id="zone-btn" class="btn btn-block zo-entry-btn" type="button">
+          <span id="zo-active-dot" class="zo-dot"></span>Zone Overrides&#8230;
+        </button>
+        <div class="hint zo-caution" id="zo-scope-note" style="display:none">Zone overrides only
+          apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
+        <div class="hint" style="margin-top:4px">Changes how the wall is <b>generated</b> inside a
+          height band you pick &#8212; a different texture pattern/depth or xy-twist just for that
+          band. Not Point Edit Modifiers (purple) above, which deform the already-sliced path instead.
+          Right-click the model to add a zone directly &#8212; it appears on the model with its
+          heights labelled, no dialog. Right-click a zone's band to open this panel for it.</div>
         </div>
 
         <hr>
@@ -682,6 +701,52 @@
     <div class="pe-modal-footer">
       <button id="pe-reset-all" class="btn">Reset all</button>
       <button id="pe-modal-done" class="btn btn-primary">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<!-- Zone Overrides modal -- height-band regions generated with a   -->
+<!-- different texture pattern/depth and/or xy-twist than the rest  -->
+<!-- of the print. Distinct subsystem from Point Edit Modifiers      -->
+<!-- above: zones change how the wall is GENERATED, Point Edit       -->
+<!-- deforms it AFTER slicing (continuous_spiral.py's call order).   -->
+<!-- --zone (magenta), never --accent-purple, which CLAUDE.md and    -->
+<!-- TASTES.md reserve for Point Edit alone. Entry points: #zone-btn -->
+<!-- above, and right-clicking the model in the 3-D view (viewer.js  -->
+<!-- builds #canvas-ctx-menu, defined further down this file).       -->
+<!-- ============================================================= -->
+<div id="zone-modal" class="zo-modal" style="display:none">
+  <div class="zo-modal-backdrop"></div>
+  <div class="zo-modal-card" role="dialog" aria-modal="true" aria-labelledby="zo-modal-title">
+    <div class="zo-modal-header">
+      <h2 id="zo-modal-title">Zone Overrides</h2>
+      <button id="zo-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
+    </div>
+    <div class="zo-modal-body">
+      <div class="zo-caution">Changes how the wall is <b>generated</b> inside each band below.
+        Point Edit Modifiers (purple, elsewhere in this step) deform the already-sliced path instead
+        &#8212; a different subsystem, not this one.</div>
+      <div class="zo-axis-wrap">
+        <div class="zo-axis" id="zo-axis"></div>
+        <div class="hint" style="margin:0">On the model, drag a ring to reshape one edge, or drag
+          between the two rings to slide the whole band (Shift+drag does the same here). Each ring's
+          height is labelled in mm right on the model, and on the height axis to the left. Bands may
+          overlap &#8212; where they do, their textures blend in proportion to each band's ramp, shown
+          as a mix of both colours. Values below are mm of wall height (0 = base, top = full height);
+          typing is exact, dragging is fast.</div>
+      </div>
+      <div class="zo-rows" id="zo-rows"></div>
+      <div class="hint" id="zo-empty-hint" style="margin-top:var(--sp-2)">No zones yet. Right-click
+        the model and choose <b>Add zone here</b> &#8212; the zone appears on the model with its
+        heights labelled, ready to drag. Right-click a zone's band to set its texture here.</div>
+    </div>
+    <div class="zo-modal-footer">
+      <div class="btn-row" style="flex:0 0 auto">
+        <button id="zo-add-zone" class="btn" type="button">Add zone</button>
+        <button id="zo-reset-all" class="btn" type="button">Reset all</button>
+      </div>
+      <button id="zo-modal-done" class="btn btn-primary" type="button">Done</button>
     </div>
   </div>
 </div>
