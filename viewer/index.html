@@ -41,6 +41,11 @@
       </div>
 
       <div class="top-bar-spacer"></div>
+      
+      <!-- Moved History and Load buttons -->
+      <button id="load-design" class="btn btn-sm" title="Load a .trident or .json design file" style="margin-right:12px;">Load</button>
+      <button id="history-btn" class="btn btn-icon" type="button" title="Edit history" aria-label="Edit history" aria-haspopup="dialog" style="margin-right:8px; font-size:20px; line-height:1;">&#8801;</button>
+      <input type="file" id="load-design-file" accept=".trident,.json" hidden>
     </div>
 
     <!-- App body: LEFT panel + splitter + 3-D canvas (OrcaSlicer layout) -->
@@ -120,22 +125,12 @@
                 </div>
               </div>
 
-              <!-- ---- Search bar (moved from top bar) ---- -->
+              <!-- Search bar (moved from top bar) -->
               <div id="param-search" class="param-search" style="margin-top:6px; margin-bottom:4px;">
                 <input id="param-search-input" type="text" placeholder="Search controls&#8230;" autocomplete="off"
                   spellcheck="false" aria-label="Search parameters" role="combobox" aria-expanded="false"
                   aria-haspopup="listbox" aria-controls="param-search-results" aria-autocomplete="list">
                 <div id="param-search-results" class="param-search-results" role="listbox"></div>
-              </div>
-              <!-- Hidden JS anchors kept so designer.js doesn't break -->
-              <div id="file-history-bar" style="display:flex; gap:8px; padding:0 12px 12px 12px; align-items:center; border-bottom:1px solid var(--line); margin-bottom:12px;">
-                <button id="undo-btn" class="btn btn-icon" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
-                <button id="redo-btn" class="btn btn-icon" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
-                <div style="flex:1"></div>
-                <button id="history-btn" class="btn btn-icon" type="button" title="Edit history" aria-label="Edit history" aria-haspopup="dialog" style="margin-right:4px;">&#8801;</button>
-                <button id="load-design" class="btn btn-sm" title="Load a .trident or .json design file">Load</button>
-                <button id="save-design" class="btn btn-sm btn-primary" title="Save design as a .trident file">Save</button>
-                <input type="file" id="load-design-file" accept=".trident,.json" hidden>
               </div>
               <div id="preset-bar" style="display:none">
                 <select id="preset-select"><option value="">0.20mm Standard</option></select>
@@ -498,11 +493,10 @@
 
                 <div class="output-divider" aria-hidden="true"></div>
 
-                <!-- Save design as JSON -->
-                <div class="output-card" id="output-save">
-                  <h3 class="section-heading">Save design</h3>
-                  <div class="hint tight-top">Saves all current design parameters (shape, texture, silhouette, print settings) as a <code>.json</code> file you can reload later.</div>
-                  <button id="save-design" class="btn btn-block mt-2" title="Save design as JSON">Save design as JSON</button>
+                <!-- Save design -->
+                <div class="group" id="file-group" style="margin-top:12px;">
+                  <div class="hint tight-top">Saves all current design parameters (shape, texture, silhouette, print settings) as a <code>.trident</code> file you can reload later.</div>
+                  <button id="save-design" class="btn btn-block btn-primary mt-2" title="Save design">Save design (.trident)</button>
                 </div>
 
                 <div class="output-divider" aria-hidden="true"></div>
