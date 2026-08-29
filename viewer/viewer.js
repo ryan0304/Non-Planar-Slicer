@@ -702,12 +702,21 @@ function buildGeometry(d){
   const span=Math.max(1e-6, d.maxz-d.minz);
   // Plain mode carries no data, so it is free to just look like filament: a
   // bright natural PLA cream, lit like everything else in the scene.
-  const PLAIN_RGB = [0xfa/255, 0xeb/255, 0xcd/255];   // bright cream PLA (0xfaebcd)
+  const PLAIN_RGB = [0xff/255, 0xf6/255, 0xe4/255];   // bright cream PLA (0xfff6e4)
   const ext = d.ext;
   const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
   const layerH = (d.meta && d.meta.layerHeight) ? d.meta.layerHeight : 0.3;
 
-  pathMat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.6, metalness:0.05 });
+  // A dim, hue-neutral emissive floor: the old UNLIT renderer showed vertex
+  // colours completely flat, unaffected by angle -- lifting the shadow side
+  // of the real lit geometry closer to that flatness (rather than pushing
+  // albedo brighter again, which only helps the lit side) is what "still too
+  // dark" was actually asking for. Additive, not multiplied by instance
+  // colour, so it lifts every colour mode's shadow floor equally without
+  // shifting anyone's hue.
+  pathMat = new THREE.MeshStandardMaterial({
+    vertexColors:true, roughness:0.6, metalness:0.05,
+    emissive:0x4a4436, emissiveIntensity:1.0 });
   pathObj = new THREE.InstancedMesh(PATH_BOX_GEOM, pathMat, nSeg);
   for(let s=0;s<nSeg;s++){
     const zc = d.extCol[s*2];
