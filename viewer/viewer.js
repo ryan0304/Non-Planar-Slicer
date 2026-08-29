@@ -701,11 +701,8 @@ function buildGeometry(d){
   }
   const span=Math.max(1e-6, d.maxz-d.minz);
   // Plain mode carries no data, so it is free to just look like filament: a
-  // natural / beige PLA (0xe6d5b0), lit like everything else in the scene --
-  // chosen to still sit clear of the canvas and the accent amber once lit.
-  // Banding multiplies alternate turns by 0.55 for a muted shadow-side tone,
-  // same as before.
-  const PLAIN_RGB = [0xe6/255, 0xd5/255, 0xb0/255];   // beige filament (0xe6d5b0)
+  // bright natural PLA cream, lit like everything else in the scene.
+  const PLAIN_RGB = [0xf3/255, 0xe3/255, 0xc3/255];   // bright cream PLA (0xf3e3c3)
   const ext = d.ext;
   const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
   const layerH = (d.meta && d.meta.layerHeight) ? d.meta.layerHeight : 0.3;
@@ -726,9 +723,16 @@ function buildGeometry(d){
       } else {
         rgb = ramp((zc-d.minz)/span);       // height (viridis)
       }
-      if(banding){                          // darken every other turn -> visible ribs,
-                                              // one stripe per real layer_height
-        const b = (segTurn[s] % 2 === 0) ? 1.0 : 0.55;
+      if(banding){
+        // Darken every other turn -> one stripe per real layer_height. 0.55
+        // (chosen for the old UNLIT fat-line renderer, which had zero depth
+        // cues of its own) is too strong now that the toolpath is real lit
+        // geometry: the wavy wall's own highlights/shadows already vary with
+        // view angle, and multiplying a heavy darken on top landed unevenly --
+        // bright on a wave peak, near-black in a trough -- reading as blotchy
+        // patches rather than clean rings. 0.85 adds just enough definition
+        // without fighting the geometry's own shading.
+        const b = (segTurn[s] % 2 === 0) ? 1.0 : 0.85;
         rgb = [rgb[0]*b, rgb[1]*b, rgb[2]*b];
       }
     }
