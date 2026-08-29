@@ -188,6 +188,35 @@ const printerGroup = new THREE.Group(); scene.add(printerGroup);
 
 let pathObj=null, travelObj=null;
 
+// ---- toolpath bead mesh -----------------------------------------------------
+// The real toolpath renders as one box per extrude segment (InstancedMesh,
+// one draw call regardless of segment count), lit like any other object in
+// the scene -- this is the same technique Cura/PrusaSlicer/OrcaSlicer use for
+// their toolpath preview. A single shared unit-cube geometry is scaled/rotated
+// per instance (line_width x layer_height x segment_length) rather than
+// rebuilding geometry per load; only the InstancedMesh + material are rebuilt.
+// Replaces an earlier approach (LineSegments2 "fat lines", vertex-coloured,
+// UNLIT) that read as a noisy/moire scribble on a non-planar wall: camera-
+// facing flat ribbons have no real depth relationship to each other and nothing
+// to shade, so on a wavy surface they overlap in screen space unpredictably.
+// Real boxes with normals pick up the scene's existing ambient+directional
+// lights and read as clean, distinct, slightly-shaded beads instead.
+const PATH_BOX_GEOM = new THREE.BoxGeometry(1, 1, 1);
+// A dummy all-white per-vertex colour attribute. Per-INSTANCE colour
+// (setColorAt/instanceColor below) is what actually varies per segment, but
+// leaving the geometry with no "color" attribute at all made the instance
+// colour multiply against nothing and render solid black -- giving the
+// geometry its own neutral (1,1,1) colour to multiply against fixes it.
+PATH_BOX_GEOM.setAttribute('color', new THREE.Float32BufferAttribute(
+  new Array(PATH_BOX_GEOM.attributes.position.count * 3).fill(1), 3));
+// Scratch objects reused every segment in buildGeometry() -- avoids allocating
+// ~10 objects per segment for a 200k-segment print.
+const _pbStart = new THREE.Vector3(), _pbEnd = new THREE.Vector3();
+const _pbMid = new THREE.Vector3(), _pbDir = new THREE.Vector3();
+const _pbScale = new THREE.Vector3(), _pbQuat = new THREE.Quaternion(), _pbM4 = new THREE.Matrix4();
+const _pbColor = new THREE.Color();
+const _pbUp = new THREE.Vector3(0, 1, 0), _pbAltUp = new THREE.Vector3(1, 0, 0);
+
 // ---- nozzle marker + print-process animation state ------------------------
 const nozzle = (() => {
   const g = new THREE.Group();
@@ -209,8 +238,7 @@ const nozzle = (() => {
 
 let animSeg = 0;        // number of extrude segments in the current path
 let extArr = null;      // raw world-space segment endpoints (for nozzle lookup)
-let lineMat = null;     // fat-line material (for width + resolution updates)
-let lineWidthPx = 2;    // on-screen path thickness (thin enough to see layers)
+let pathMat = null;     // toolpath bead material (for X-ray toggling)
 let progress = 1;       // 0..1 fraction of the print drawn (segment-based; master variable)
 let xrayOn = false;     // X-ray view: transparent path + dimmed bed (see-through)
 let playing = false;
@@ -656,7 +684,7 @@ function updateLegend(colorMode, d){
 }
 
 function buildGeometry(d){
-  if(pathObj){scene.remove(pathObj);pathObj.geometry.dispose();}
+  if(pathObj){scene.remove(pathObj); if(pathMat) pathMat.dispose();}
   if(travelObj){scene.remove(travelObj);travelObj.geometry.dispose();}
 
   const colorMode = document.getElementById('t-colormode').value;   // 'height' | 'overhang' | 'plain'
@@ -671,54 +699,61 @@ function buildGeometry(d){
     let ti=0;
     for(let s=0;s<nSeg;s++){ while(ti+1<cuts.length && s>=cuts[ti+1]) ti++; segTurn[s]=ti; }
   }
-  // Per-vertex colours (one per segment endpoint), then fat-line geometry.
-  const cols=new Float32Array(d.ext.length);
   const span=Math.max(1e-6, d.maxz-d.minz);
-  // Plain mode carries no data, so it is free to just look like filament:
-  // a natural / beige PLA (0xe6d5b0). LineMaterial is UNLIT -- there is no
-  // light term applied to vertex colours -- so this value is exactly what
-  // renders, and it is chosen to sit clear of both the 0x1c1f22 canvas and
-  // the saturated amber used for interactive handles. Banding multiplies
-  // alternate turns by 0.55, which lands on a muted 0x7e7560 -- still clearly
-  // the same material in shadow rather than a different colour.
+  // Plain mode carries no data, so it is free to just look like filament: a
+  // natural / beige PLA (0xe6d5b0), lit like everything else in the scene --
+  // chosen to still sit clear of the canvas and the accent amber once lit.
+  // Banding multiplies alternate turns by 0.55 for a muted shadow-side tone,
+  // same as before.
   const PLAIN_RGB = [0xe6/255, 0xd5/255, 0xb0/255];   // beige filament (0xe6d5b0)
-  for(let i=0;i<d.extCol.length;i++){
-    const segIdx = i >> 1;  // two vertices per segment
-    const zc=d.extCol[i];
+  const ext = d.ext;
+  const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
+  const layerH = (d.meta && d.meta.layerHeight) ? d.meta.layerHeight : 0.3;
+
+  pathMat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85, metalness:0.05 });
+  pathObj = new THREE.InstancedMesh(PATH_BOX_GEOM, pathMat, nSeg);
+  for(let s=0;s<nSeg;s++){
+    const zc = d.extCol[s*2];
     let rgb;
     // Risky segments get bright red override when highlight-risky is enabled.
-    if(showRisk && d.riskFlags && d.riskFlags[segIdx]){
+    if(showRisk && d.riskFlags && d.riskFlags[s]){
       rgb = [1.0, 0.15, 0.1];
     } else {
       if(colorMode==='overhang'){
-        rgb = overhangColor(d.overhang ? d.overhang[segIdx] : 0);
+        rgb = overhangColor(d.overhang ? d.overhang[s] : 0);
       } else if(colorMode==='plain'){
-        rgb = PLAIN_RGB.slice();
+        rgb = PLAIN_RGB;
       } else {
         rgb = ramp((zc-d.minz)/span);       // height (viridis)
       }
       if(banding){                          // darken every other turn -> visible ribs,
                                               // one stripe per real layer_height
-        const b = (segTurn[segIdx] % 2 === 0) ? 1.0 : 0.55;
-        rgb=[rgb[0]*b, rgb[1]*b, rgb[2]*b];
+        const b = (segTurn[s] % 2 === 0) ? 1.0 : 0.55;
+        rgb = [rgb[0]*b, rgb[1]*b, rgb[2]*b];
       }
     }
-    cols[i*3]=rgb[0];cols[i*3+1]=rgb[1];cols[i*3+2]=rgb[2];
+    pathObj.setColorAt(s, _pbColor.setRGB(rgb[0], rgb[1], rgb[2]));
+
+    // One box per segment: scaled to (line_width, layer_height, segment
+    // length) and oriented with lookAt()'s stable up-relative basis (not a
+    // shortest-arc quaternion) so the layer_height edge stays close to
+    // world-up across neighbouring segments instead of twisting -- adjacent
+    // beads would otherwise show visible seams rather than reading as one
+    // continuous corrugated wall.
+    _pbStart.set(ext[s*6], ext[s*6+1], ext[s*6+2]);
+    _pbEnd.set(ext[s*6+3], ext[s*6+4], ext[s*6+5]);
+    _pbMid.addVectors(_pbStart, _pbEnd).multiplyScalar(0.5);
+    _pbDir.subVectors(_pbEnd, _pbStart);
+    const len = Math.max(_pbDir.length(), 1e-4);
+    const up = Math.abs(_pbDir.y/len) > 0.999 ? _pbAltUp : _pbUp;
+    _pbM4.lookAt(_pbStart, _pbEnd, up);
+    _pbQuat.setFromRotationMatrix(_pbM4);
+    _pbScale.set(beadW, layerH, len);
+    _pbM4.compose(_pbMid, _pbQuat, _pbScale);
+    pathObj.setMatrixAt(s, _pbM4);
   }
-  const g=new LineSegmentsGeometry();
-  g.setPositions(d.ext);
-  g.setColors(cols);
-  // "True bead width" renders lines at their physical width in mm (world
-  // units), so zooming in shows individual filament lines exactly as they'll
-  // be laid down. Off = classic constant screen-pixel thickness.
-  const trueWidth = document.getElementById('t-truewidth').checked;
-  const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
-  lineMat = trueWidth
-    ? new LineMaterial({ vertexColors:true, worldUnits:true, linewidth:beadW })
-    : new LineMaterial({ vertexColors:true, worldUnits:false, linewidth:lineWidthPx });
-  lineMat.resolution.set(wrap.clientWidth||1, wrap.clientHeight||1);
-  pathObj=new LineSegments2(g, lineMat);
-  pathObj.computeLineDistances();
+  pathObj.instanceMatrix.needsUpdate = true;
+  if(pathObj.instanceColor) pathObj.instanceColor.needsUpdate = true;
   scene.add(pathObj);
 
   const tg=new THREE.BufferGeometry();
@@ -738,17 +773,17 @@ function buildGeometry(d){
   applyXray();   // (re)apply the current X-ray state to the freshly built material
 }
 
-// Apply the X-ray toggle to the path's fat-line material. On: semi-transparent
+// Apply the X-ray toggle to the path's bead material. On: semi-transparent
 // and depth-test off so the whole toolpath is see-through; the bed is dimmed by
 // render(). Off: fully opaque with normal depth testing. Reads the checkbox so
-// it stays correct after buildGeometry rebuilds lineMat from scratch.
+// it stays correct after buildGeometry rebuilds pathMat from scratch.
 function applyXray(){
   xrayOn = !!document.getElementById('t-xray').checked;
-  if(lineMat){
-    lineMat.transparent = xrayOn;
-    lineMat.opacity = xrayOn ? 0.28 : 1.0;
-    lineMat.depthTest = !xrayOn;
-    lineMat.needsUpdate = true;
+  if(pathMat){
+    pathMat.transparent = xrayOn;
+    pathMat.opacity = xrayOn ? 0.28 : 1.0;
+    pathMat.depthTest = !xrayOn;
+    pathMat.needsUpdate = true;
   }
 }
 
@@ -1140,16 +1175,15 @@ function computeTurns(d){
 window.loadGcode = load;
 window.__camera = camera;   // camera access for automation/tests
 window.__controls = controls;   // OrbitControls access for automation/tests (freeze regression checks)
-window.__segColor = (s) => {           // brightness (sum of rgb) at segment s start
-  if(!pathObj) return null;
-  const a = pathObj.geometry.getAttribute('instanceColorStart');
-  if(!a) return null;
+window.__segColor = (s) => {           // brightness (sum of rgb) of segment s
+  if(!pathObj || !pathObj.instanceColor) return null;
+  const a = pathObj.instanceColor;
   return +(a.getX(s)+a.getY(s)+a.getZ(s)).toFixed(3);
 };
 window.__previewState = () => ({
   animSeg,
   progress: +progress.toFixed(4),
-  drawnSegs: pathObj ? pathObj.geometry.instanceCount : null,
+  drawnSegs: pathObj ? pathObj.count : null,
   nozzleVisible: nozzle.visible,
   nozzlePos: nozzle.visible ? nozzle.position.toArray().map(v=>+v.toFixed(1)) : null,
   // Segment count of the blue DRAFT preview currently on the bed (0 = none).
@@ -1187,7 +1221,7 @@ function setProgress(p, fromClock){
   let k=0;
   if(animSeg>0) k = Math.round(progress*animSeg);
   if(pathObj && animSeg>0){
-    pathObj.geometry.instanceCount = k;             // reveal only printed segments
+    pathObj.count = k;                              // reveal only printed segments
     if(k>0 && progress<1){
       const i=(k-1)*6+3;                            // end of last drawn segment
       nozzle.position.set(extArr[i], extArr[i+1], extArr[i+2]);
@@ -1365,15 +1399,6 @@ document.getElementById('t-risk').addEventListener('change',()=>{if(lastData){bu
 document.getElementById('t-travel').addEventListener('change',e=>{if(travelObj){travelObj.visible=e.target.checked;render();}});
 document.getElementById('t-bed').addEventListener('change',e=>{bedGroup.visible=e.target.checked;render();});
 document.getElementById('t-printer').addEventListener('change',e=>{printerGroup.visible=e.target.checked;render();});
-document.getElementById('t-width').addEventListener('input',e=>{
-  lineWidthPx=parseFloat(e.target.value);
-  // px slider only applies in screen-pixel mode
-  if(lineMat && !document.getElementById('t-truewidth').checked){ lineMat.linewidth=lineWidthPx; render(); }
-});
-document.getElementById('t-truewidth').addEventListener('change',e=>{
-  document.getElementById('t-width').disabled = e.target.checked;
-  if(lastData){ buildGeometry(lastData); setProgress(progress); }
-});
 document.getElementById('fit-view').addEventListener('click',fitView);
 window.addEventListener('keydown',e=>{
   if(typingInField(e)) return;
@@ -1416,7 +1441,6 @@ function render(){
 function resize(){
   const w=wrap.clientWidth, h=wrap.clientHeight;
   renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
-  if(lineMat) lineMat.resolution.set(w,h);     // fat lines need the viewport size
   // Rebuild sparkline if data is loaded (canvas width may have changed).
   if(lastData && sparkOffscreen) requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(progress); });
   render();
@@ -1446,11 +1470,10 @@ window.__viewFlags = function(){
 
 // Debug/test hook: bucket the loaded path's per-segment colours so automated
 // checks can confirm the active colour mode without pixel sampling. Reads the
-// fat-line geometry's instance colours (one RGB triple per segment start).
+// InstancedMesh's per-instance colour attribute (one RGB triple per segment).
 window.__colorStats = function(){
-  if(!pathObj || !pathObj.geometry) return null;
-  const a = pathObj.geometry.getAttribute('instanceColorStart');
-  if(!a) return null;
+  if(!pathObj || !pathObj.instanceColor) return null;
+  const a = pathObj.instanceColor;
   const n = a.count;
   let green=0, yellow=0, red=0, plain=0, other=0;
   for(let i=0;i<n;i++){
@@ -1466,8 +1489,8 @@ window.__colorStats = function(){
     else other++;
   }
   return { mode: document.getElementById('t-colormode').value,
-           xray: !!(lineMat && lineMat.transparent),
-           opacity: lineMat ? +lineMat.opacity.toFixed(2) : null,
+           xray: !!(pathMat && pathMat.transparent),
+           opacity: pathMat ? +pathMat.opacity.toFixed(2) : null,
            n, green, yellow, red, plain, other };
 };
 
@@ -3477,8 +3500,8 @@ function measureBuildGrid(){
 // Design mode has no scrubber -- the whole draft is always on screen.
 function measureDrawnSegs(){
   if(!viewerModeActive()) return previewPositions ? previewPositions.length/6 : 0;
-  if(!pathObj || !pathObj.geometry || !extArr) return 0;
-  const n = pathObj.geometry.instanceCount;
+  if(!pathObj || !extArr) return 0;
+  const n = pathObj.count;
   const all = extArr.length/6;
   return (n == null || !isFinite(n)) ? all : Math.min(n, all);
 }

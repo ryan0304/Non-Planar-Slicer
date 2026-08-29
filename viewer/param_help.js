@@ -429,13 +429,5 @@ window.PARAM_HELP = {
   "t-spin": {
     desc: "Auto-rotates the camera around the model in the preview.",
     param: "viewer display only, not sent to the API", def: "off"
-  },
-  "t-truewidth": {
-    desc: "Draws each path segment at its actual printed line width instead of a fixed pixel thickness.",
-    param: "viewer display only, not sent to the API", def: "on"
-  },
-  "t-width": {
-    desc: "Pixel thickness of the path lines in the preview when True bead width above is off.",
-    param: "viewer display only, not sent to the API", def: "2 px"
   }
 };
