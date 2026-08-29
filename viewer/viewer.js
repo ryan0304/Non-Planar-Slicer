@@ -702,12 +702,12 @@ function buildGeometry(d){
   const span=Math.max(1e-6, d.maxz-d.minz);
   // Plain mode carries no data, so it is free to just look like filament: a
   // bright natural PLA cream, lit like everything else in the scene.
-  const PLAIN_RGB = [0xf3/255, 0xe3/255, 0xc3/255];   // bright cream PLA (0xf3e3c3)
+  const PLAIN_RGB = [0xfa/255, 0xeb/255, 0xcd/255];   // bright cream PLA (0xfaebcd)
   const ext = d.ext;
   const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
   const layerH = (d.meta && d.meta.layerHeight) ? d.meta.layerHeight : 0.3;
 
-  pathMat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85, metalness:0.05 });
+  pathMat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.6, metalness:0.05 });
   pathObj = new THREE.InstancedMesh(PATH_BOX_GEOM, pathMat, nSeg);
   for(let s=0;s<nSeg;s++){
     const zc = d.extCol[s*2];
