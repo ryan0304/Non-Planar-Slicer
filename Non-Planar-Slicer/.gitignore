@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.gcode
+!examples/*.gcode
+!regression_ref/*.gcode
+.venv/
+venv/
+.DS_Store
+custom_printers/
