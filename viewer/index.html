@@ -128,12 +128,17 @@
                 <div id="param-search-results" class="param-search-results" role="listbox"></div>
               </div>
               <!-- Hidden JS anchors kept so designer.js doesn't break -->
-              <div id="preset-bar" style="display:none">
-                <select id="preset-select"><option value="">0.20mm Standard</option></select>
+              <div id="file-history-bar" style="display:flex; gap:8px; padding:0 12px 12px 12px; align-items:center; border-bottom:1px solid var(--line); margin-bottom:12px;">
                 <button id="undo-btn" class="btn btn-icon" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
                 <button id="redo-btn" class="btn btn-icon" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
-                <button id="load-design" class="btn btn-sm" title="Load design from JSON">Load</button>
-                <input type="file" id="load-design-file" accept=".json" hidden>
+                <div style="flex:1"></div>
+                <button id="history-btn" class="btn btn-icon" type="button" title="Edit history" aria-label="Edit history" aria-haspopup="dialog" style="margin-right:4px;">&#8801;</button>
+                <button id="load-design" class="btn btn-sm" title="Load a .trident or .json design file">Load</button>
+                <button id="save-design" class="btn btn-sm btn-primary" title="Save design as a .trident file">Save</button>
+                <input type="file" id="load-design-file" accept=".trident,.json" hidden>
+              </div>
+              <div id="preset-bar" style="display:none">
+                <select id="preset-select"><option value="">0.20mm Standard</option></select>
               </div>
 
 
@@ -392,6 +397,19 @@
                   </div>
                 </div>
 
+                <div class="group" style="padding: 12px; border-top: 1px solid var(--line);">
+                  <button id="zone-btn" class="btn btn-block zo-entry-btn" type="button">
+                    <span id="zo-active-dot" class="zo-dot"></span>Zone Overrides&#8230;
+                  </button>
+                  <div class="hint zo-caution" id="zo-scope-note" style="display:none; margin-top:6px; color:var(--warn)">Zone overrides only
+                    apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
+                  <div class="hint" style="margin-top:4px">Changes how the wall is <b>generated</b> inside a
+                    height band you pick &#8212; a different texture pattern/depth or xy-twist just for that
+                    band. Not Point Edit Modifiers (purple) above, which deform the already-sliced path instead.
+                    Right-click the model to add a zone directly &#8212; it appears on the model with its
+                    own colour.</div>
+                </div>
+
 
 
                 <div class="cv-editor" id="sil-section">
@@ -575,6 +593,7 @@
       </div>
       <div id="splitter" class="splitter" title="Drag to resize"></div>
       <div id="canvas-wrap" class="canvas-wrap">
+        <div id="canvas-ctx-menu" class="ctx-menu" style="display:none"></div>
         <!-- Overlay hidden: OrcaSlicer-style clean empty build plate -->
         <div id="overlay" class="overlay" style="display:none">
           <div class="card">
@@ -759,7 +778,63 @@
     </div>
   </div>
 
-  <!-- ============================================================= -->
+<!-- Zone Overrides modal -- height-band regions generated with a   -->
+<!-- specific texture/depth/twist override. Distinct from PE modal. -->
+<div id="zone-modal" class="zo-modal" style="display:none">
+  <div class="zo-modal-backdrop"></div>
+  <div class="zo-modal-card" role="dialog" aria-modal="true" aria-labelledby="zo-modal-title">
+    <div class="zo-modal-header">
+      <h2 id="zo-modal-title">Zone Overrides</h2>
+      <button id="zo-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
+    </div>
+    <div class="zo-modal-body">
+      <div class="zo-caution">Changes how the wall is <b>generated</b> inside each band below.
+        Point Edit Modifiers (purple, elsewhere in this step) deform the already-sliced path instead
+        &#8212; a different subsystem, not this one.</div>
+      <div class="zo-axis-wrap">
+        <div class="zo-axis" id="zo-axis"></div>
+        <div class="hint" style="margin:0">On the model, drag a ring to reshape one edge, or drag
+          between the two rings to slide the whole band (Shift+drag does the same here). Each ring's
+          height is labelled in mm right on the model, and on the height axis to the left. Bands may
+          overlap &#8212; where they do, their textures blend in proportion to each band's ramp, shown
+          as a mix of both colours. Values below are mm of wall height (0 = base, top = full height);
+          typing is exact, dragging is fast.</div>
+      </div>
+      <div class="zo-rows" id="zo-rows"></div>
+      <div class="hint" id="zo-empty-hint" style="margin-top:var(--sp-2)">No zones yet. Right-click
+        the model and choose <b>Add zone here</b> &#8212; the zone appears on the model with its
+        heights labelled, ready to drag. Right-click a zone's band to set its texture here.</div>
+    </div>
+    <div class="zo-modal-footer">
+      <div class="btn-row" style="flex:0 0 auto">
+        <button id="zo-add-zone" class="btn" type="button">Add zone</button>
+        <button id="zo-reset-all" class="btn" type="button">Reset all</button>
+      </div>
+      <button id="zo-modal-done" class="btn btn-primary" type="button">Done</button>
+    </div>
+  </div>
+</div>
+
+<div id="history-modal" class="eh-modal" style="display:none">
+  <div class="eh-modal-backdrop"></div>
+  <div class="eh-modal-card" role="dialog" aria-modal="true" aria-labelledby="eh-modal-title">
+    <div class="eh-modal-header">
+      <h2 id="eh-modal-title">Edit history</h2>
+      <button id="eh-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
+    </div>
+    <div class="eh-modal-body">
+      <p class="hint" style="margin-top:0">What has been changed in this design, newest
+        first. Saving with <b>Save</b> writes this log into the <code>.trident</code>
+        file, so whoever opens it next sees the same list and keeps adding to it.</p>
+      <ol id="eh-list" class="eh-list"></ol>
+      <p id="eh-empty" class="hint">No edits recorded yet.</p>
+    </div>
+    <div class="eh-modal-footer">
+      <button id="eh-modal-done" class="btn btn-primary" type="button">Done</button>
+    </div>
+  </div>
+</div>
+
   <!-- Custom printer import/edit modal -- parses a Klipper/Orca/Prusa -->
   <!-- config or a previously exported Trident printer JSON, shows the -->
   <!-- safety report + editable field review, and saves it into the    -->
@@ -1156,13 +1231,7 @@
     </div>
   </div>
 
-  <script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-}}
-</script>
-  <script type="module" src="viewer.js"></script>
+
 
   <!-- ============================================================= -->
   <!-- Design-a-vase panel: tabs, curve editors, generate. Plain      -->
@@ -1170,9 +1239,16 @@
   <!-- window.loadGcode.                                              -->
   <!-- ============================================================= -->
   <div id="fm-tooltip" class="fm-tooltip" role="tooltip" style="display:none"></div>
+  <script type="importmap">
+  { "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }}
+  </script>
+  <script type="module" src="viewer.js"></script>
+  
   <script src="preview_math.js"></script>
   <script src="param_help.js"></script>
-  <script src="viewer.js"></script>
   <script src="designer.js"></script>
 
   <!-- ============================================================= -->

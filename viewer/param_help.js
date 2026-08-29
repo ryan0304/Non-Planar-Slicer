@@ -357,6 +357,46 @@ window.PARAM_HELP = {
     param: "point_radial_push.strength", def: "1.0"
   },
 
+  // ---- Zone Overrides modal --------------------------------------------
+  // Distinct subsystem from Point Edit Modifiers above: a zone changes how
+  // the wall is GENERATED inside a height band (texture pattern/depth,
+  // xy-twist), not the already-sliced path. Zone rows are built dynamically
+  // (one per zone the user adds), so their controls carry a data-help-id
+  // attribute instead of a unique element id -- the tooltip engine's
+  // helpIdFor() falls back to that attribute when present. The #zone-btn
+  // entry button itself has no entry here, matching #point-edit-btn's own
+  // precedent above: an entry button's own visible label is self-explanatory,
+  // and it is not wrapped in a .drow so the hover-tooltip engine never
+  // queries it anyway.
+  "zo-from": {
+    desc: "Height (mm of wall height, from the bottom) where this zone's band begins.",
+    param: "zone_overrides[].t_lo (sent as a height fraction 0..1)", def: "-"
+  },
+  "zo-to": {
+    desc: "Height (mm) where this zone's band ends.",
+    param: "zone_overrides[].t_hi (sent as a height fraction 0..1)", def: "-"
+  },
+  "zo-blend": {
+    desc: "Ramp width at each edge of the band, in mm. A wider blend fades the override in and out more gradually, which is gentler on the print -- an abrupt switch would step the wall's radius or rotation between two adjacent turns, printing a bead with nothing underneath it. Also softens where two overlapping bands hand off to each other.",
+    param: "zone_overrides[].blend (sent as a fraction of height)", def: "small (about 2% of height)"
+  },
+  "zo-pattern": {
+    desc: "Texture pattern used inside this band. \"(use global)\" inherits the Texture pattern step's own setting; \"none\" explicitly smooths this band even if a global pattern is set elsewhere.",
+    param: "zone_overrides[].pattern", def: "(use global)"
+  },
+  "zo-depth": {
+    desc: "Radial displacement depth for this band's texture, in millimeters. Blank inherits the global Texture depth. Disabled while Texture is \"(use global)\". Where bands overlap, depths blend proportionally rather than adding up -- two full-depth bands never combine into double depth.",
+    param: "zone_overrides[].pattern_amp", def: "(inherit)"
+  },
+  "zo-ptwist": {
+    desc: "Rotates this band's texture pattern around the wall, in turns over the full height. Blank inherits the global Texture twist. This turns the PATTERN only -- the wall's own cross-section is unaffected, unlike XY twist below.",
+    param: "zone_overrides[].pattern_twist", def: "(inherit)"
+  },
+  "zo-twist": {
+    desc: "Extra xy-twist rate applied only within this band, in turns. Blank inherits the global XY twist. The rotation accumulates smoothly into the band and stays applied above it -- it does not reset back to the global rate once the band ends. Unlike Pattern twist above, this rotates the wall's actual cross-section (its lobes/corners), not just the texture riding on it.",
+    param: "zone_overrides[].xy_twist", def: "(inherit)"
+  },
+
   // ---- G-code Viewer mode: Display (client-side rendering only) ------------
   "t-colormode": {
     desc: "How the loaded G-code path is colored in the 3D preview: by height, by overhang angle, or a single plain color.",
@@ -389,13 +429,5 @@ window.PARAM_HELP = {
   "t-spin": {
     desc: "Auto-rotates the camera around the model in the preview.",
     param: "viewer display only, not sent to the API", def: "off"
-  },
-  "t-truewidth": {
-    desc: "Draws each path segment at its actual printed line width instead of a fixed pixel thickness.",
-    param: "viewer display only, not sent to the API", def: "on"
-  },
-  "t-width": {
-    desc: "Pixel thickness of the path lines in the preview when True bead width above is off.",
-    param: "viewer display only, not sent to the API", def: "2 px"
   }
 };

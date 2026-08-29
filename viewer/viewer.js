@@ -48,7 +48,7 @@ const scene = new THREE.Scene();
 // lighter surround to sit inside instead of matching it. Still unambiguously
 // a dark theme -- --bg and --surface are untouched, so the panel stays
 // darker than the canvas, which is more separation again, not less.
-scene.background = new THREE.Color(0x2b3036);
+scene.background = new THREE.Color(0x121417);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
 camera.position.set(BED_X*0.9, BED_Z*1.1, BED_Y*1.3);
@@ -77,34 +77,146 @@ const bedGroup = new THREE.Group(); scene.add(bedGroup);
   // above): 0x2a2e33 was the previous minor-line colour and is now almost
   // exactly the background colour itself -- the grid would have nearly
   // vanished. Both colours keep the same ~1.6x major/minor ratio as before.
-  const grid = new THREE.GridHelper(BED_X, 23, 0x5b6572, 0x393f47);
+  const grid = new THREE.GridHelper(BED_X, 23, 0x3b434e, 0x21262d);
   bedGroup.add(grid);
-  // Build plate now acts as the full printable area (no blue dashed safe-area outline)
+  // Safe-print-area outline (30-208 x 30-185 from printer.cfg).
+  // (Removed on request)
+  // const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
+  // const c=[[ax[0],ay[0]],[ax[1],ay[0]],[ax[1],ay[1]],[ax[0],ay[1]],[ax[0],ay[0]]];
+  // const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,cy-y));
+  // const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+  //   new THREE.LineDashedMaterial({color:0x2f6bff,dashSize:4,gapSize:3,transparent:true,opacity:.7}));
+  // ln.computeLineDistances(); bedGroup.add(ln);
 }
 
-// ---- Bed plate only (OrcaSlicer-style clean viewport) ----------------------
-// The CoreXY frame, vertical extrusions, rails, gantry beam and toolhead
-// carriage are intentionally omitted -- the viewport shows only the heated
-// bed plate and PEI surface, matching OrcaSlicer's clean build-plate look.
+// ---- Voron Trident build plate ---------------------------------------------
+// The printer frame/gantry cage was removed on request so the model-viewing
+// stage shows just the build plate and the print standing alone.
+// Grey Trident logo baked into the PEI texture: the app's own brand mark
+// (see viewer/brand/README.md, "Concept 06, Constructed Trident") -- same
+// path data as index.html's #brand-mark-header full glyph, in the mark's
+// grey (--ink-muted / #9aa0a6), no busy-highlight or nozzle dot since this
+// is a static plate marking, not the animating header mark.
+const TRIDENT_MARK_D =
+  'M 22.000,78.000 L 22.000,45.127 A 4.200 4.200 0 0 1 28.370,43.720 ' +
+  'L 30.499,48.307 A 4.200 4.200 0 0 0 38.303,47.836 L 44.006,30.290 ' +
+  'A 4.200 4.200 0 0 1 51.994,30.290 L 57.697,47.836 A 4.200 4.200 0 0 0 ' +
+  '65.501,48.307 L 67.630,43.720 A 4.200 4.200 0 0 1 74.000,45.127 ' +
+  'L 74.000,78.000';
+// full glyph's viewBox: "8.22 12.92 80.26 80.26" (see brand/README.md)
+const TRIDENT_MARK_VB = { x: 8.22, y: 12.92, w: 80.26 };
+
+function buildTridentLogoTexture(peiHex){
+  const size = 512;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = peiHex;
+  ctx.fillRect(0, 0, size, size);
+
+  const logoPx = size * 0.30;                        // rendered mark size on the plate
+  const boxTop = size/2 - logoPx/2;
+  const scale = logoPx / TRIDENT_MARK_VB.w;
+  ctx.save();
+  ctx.translate(size/2 - logoPx/2, boxTop);
+  ctx.scale(scale, scale);
+  ctx.translate(-TRIDENT_MARK_VB.x, -TRIDENT_MARK_VB.y);
+  ctx.strokeStyle = '#9aa0a6';   // --ink-muted, same grey as the app's mark
+  ctx.lineWidth = 5;             // matches .brand-mark.full's stroke-width
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke(new Path2D(TRIDENT_MARK_D));
+  ctx.restore();
+
+  // Draws `text` centered at (cx, baselineY) with manual per-character
+  // letter-spacing (portable -- no reliance on ctx.letterSpacing support).
+  function drawSpacedText(text, cx, baselineY, fontPx, weight, spacingFrac, fillStyle){
+    ctx.font = `${weight} ${fontPx}px -apple-system, "Segoe UI", Arial, sans-serif`;
+    ctx.fillStyle = fillStyle;
+    const spacing = fontPx * spacingFrac;
+    const charW = [...text].map(ch => ctx.measureText(ch).width);
+    const totalW = charW.reduce((a,b) => a+b, 0) + spacing*(text.length-1);
+    let x = cx - totalW/2;
+    for (let i = 0; i < text.length; i++) {
+      ctx.fillText(text[i], x + charW[i]/2, baselineY);
+      x += charW[i] + spacing;
+    }
+  }
+
+  // "TRIDENT / NON-PLANAR SLICER" wordmark below the glyph, matching the
+  // naming used on the brand's own social/promo assets. Ink bounds for the
+  // full glyph are y 24.9-81.2 within its own 12.92-93.18 viewBox span (see
+  // brand/README.md), so the ink's bottom edge sits 85.1% down the drawn box
+  // -- used here to clear the glyph regardless of logoPx.
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const inkBottom = boxTop + logoPx * ((81.2 - TRIDENT_MARK_VB.y) / TRIDENT_MARK_VB.w);
+  const titlePx = size * 0.042;
+  const titleY = inkBottom + size*0.035 + titlePx*0.8;
+  drawSpacedText('TRIDENT', size/2, titleY, titlePx, 700, 0.32, '#9aa0a6');
+  const subPx = titlePx * 0.52;
+  const subY = titleY + titlePx*0.6 + subPx*1.3;
+  drawSpacedText('NON-PLANAR SLICER', size/2, subY, subPx, 600, 0.28, 'rgba(154,160,166,0.75)');
+
+  const tex = new THREE.CanvasTexture(c);
+  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 const printerGroup = new THREE.Group(); scene.add(printerGroup);
 {
+  const beam = (x,y,z, sx,sy,sz, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), mat);
+    m.position.set(x,y,z); printerGroup.add(m); return m;
+  };
   // moving bed plate. IMPORTANT: the PEI's TOP surface must sit exactly at
   // world Y=0 (the print's Z=0) or first layers get swallowed inside the
   // plate mesh by the depth buffer. Plate stack is built strictly below Y=0.
   // Plate materials are kept transparent so they can fade out when the camera
-  // dips below the bed.
+  // dips below the bed - otherwise the opaque boxes black out the whole model
+  // when viewing from underneath.
   const plateMat = new THREE.MeshStandardMaterial({ color:0x14181f, metalness:0.2,
     roughness:0.85, transparent:true, opacity:0.95 });
-  const peiMat = new THREE.MeshStandardMaterial({ color:0x2a2f1c, metalness:0.1,
-    roughness:0.95, transparent:true, opacity:0.95 });
+  // color left white: MeshStandardMaterial multiplies map texels by `color`,
+  // and the canvas texture already paints the PEI background itself, so a
+  // tinted base color would darken the grey logo lines toward invisibility.
+  const peiMat = new THREE.MeshStandardMaterial({ color:0xffffff, metalness:0.1,
+    roughness:0.95, transparent:true, opacity:0.95, map: buildTridentLogoTexture('#2a2f1c') });
   window.__bedMats = [plateMat, peiMat];
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(BED_X,8,BED_Y), plateMat);
-  plate.position.set(0,-4.6,0); printerGroup.add(plate);
-  const pei = new THREE.Mesh(new THREE.BoxGeometry(BED_X-6,0.6,BED_Y-6), peiMat);
-  pei.position.set(0,-0.32,0); printerGroup.add(pei);
+  const plate = beam(0,-4.6,0, BED_X,8,BED_Y, plateMat);
+  const pei = beam(0,-0.32,0, BED_X-6,0.6,BED_Y-6, peiMat);
 }
 
 let pathObj=null, travelObj=null;
+
+// ---- toolpath bead mesh -----------------------------------------------------
+// The real toolpath renders as one box per extrude segment (InstancedMesh,
+// one draw call regardless of segment count), lit like any other object in
+// the scene -- this is the same technique Cura/PrusaSlicer/OrcaSlicer use for
+// their toolpath preview. A single shared unit-cube geometry is scaled/rotated
+// per instance (line_width x layer_height x segment_length) rather than
+// rebuilding geometry per load; only the InstancedMesh + material are rebuilt.
+// Replaces an earlier approach (LineSegments2 "fat lines", vertex-coloured,
+// UNLIT) that read as a noisy/moire scribble on a non-planar wall: camera-
+// facing flat ribbons have no real depth relationship to each other and nothing
+// to shade, so on a wavy surface they overlap in screen space unpredictably.
+// Real boxes with normals pick up the scene's existing ambient+directional
+// lights and read as clean, distinct, slightly-shaded beads instead.
+const PATH_BOX_GEOM = new THREE.BoxGeometry(1, 1, 1);
+// A dummy all-white per-vertex colour attribute. Per-INSTANCE colour
+// (setColorAt/instanceColor below) is what actually varies per segment, but
+// leaving the geometry with no "color" attribute at all made the instance
+// colour multiply against nothing and render solid black -- giving the
+// geometry its own neutral (1,1,1) colour to multiply against fixes it.
+PATH_BOX_GEOM.setAttribute('color', new THREE.Float32BufferAttribute(
+  new Array(PATH_BOX_GEOM.attributes.position.count * 3).fill(1), 3));
+// Scratch objects reused every segment in buildGeometry() -- avoids allocating
+// ~10 objects per segment for a 200k-segment print.
+const _pbStart = new THREE.Vector3(), _pbEnd = new THREE.Vector3();
+const _pbMid = new THREE.Vector3(), _pbDir = new THREE.Vector3();
+const _pbScale = new THREE.Vector3(), _pbQuat = new THREE.Quaternion(), _pbM4 = new THREE.Matrix4();
+const _pbColor = new THREE.Color();
+const _pbUp = new THREE.Vector3(0, 1, 0), _pbAltUp = new THREE.Vector3(1, 0, 0);
 
 // ---- nozzle marker + print-process animation state ------------------------
 const nozzle = (() => {
@@ -127,8 +239,7 @@ const nozzle = (() => {
 
 let animSeg = 0;        // number of extrude segments in the current path
 let extArr = null;      // raw world-space segment endpoints (for nozzle lookup)
-let lineMat = null;     // fat-line material (for width + resolution updates)
-let lineWidthPx = 2;    // on-screen path thickness (thin enough to see layers)
+let pathMat = null;     // toolpath bead material (for X-ray toggling)
 let progress = 1;       // 0..1 fraction of the print drawn (segment-based; master variable)
 let xrayOn = false;     // X-ray view: transparent path + dimmed bed (see-through)
 let playing = false;
@@ -574,7 +685,7 @@ function updateLegend(colorMode, d){
 }
 
 function buildGeometry(d){
-  if(pathObj){scene.remove(pathObj);pathObj.geometry.dispose();}
+  if(pathObj){scene.remove(pathObj); if(pathMat) pathMat.dispose();}
   if(travelObj){scene.remove(travelObj);travelObj.geometry.dispose();}
 
   const colorMode = document.getElementById('t-colormode').value;   // 'height' | 'overhang' | 'plain'
@@ -589,54 +700,74 @@ function buildGeometry(d){
     let ti=0;
     for(let s=0;s<nSeg;s++){ while(ti+1<cuts.length && s>=cuts[ti+1]) ti++; segTurn[s]=ti; }
   }
-
-  // Per-vertex colours (one per segment endpoint), then fat-line geometry.
-  const cols=new Float32Array(d.ext.length);
   const span=Math.max(1e-6, d.maxz-d.minz);
-  // Plain mode carries no data, so it is free to just look like filament:
-  // a natural / beige PLA (0xe6d5b0). LineMaterial is UNLIT -- there is no
-  // light term applied to vertex colours -- so this value is exactly what
-  // renders, and it is chosen to sit clear of both the 0x1c1f22 canvas and
-  // the saturated amber used for interactive handles. Banding multiplies
-  // alternate turns by 0.55, which lands on a muted 0x7e7560 -- still clearly
-  // the same material in shadow rather than a different colour.
-  const PLAIN_RGB = [0xe6/255, 0xd5/255, 0xb0/255];   // beige filament (0xe6d5b0)
-  for(let i=0;i<d.extCol.length;i++){
-    const segIdx = i >> 1;  // two vertices per segment
-    const zc=d.extCol[i];
+  // Plain mode carries no data, so it is free to just look like filament: a
+  // bright natural PLA cream, lit like everything else in the scene.
+  const PLAIN_RGB = [0xff/255, 0xf6/255, 0xe4/255];   // bright cream PLA (0xfff6e4)
+  const ext = d.ext;
+  const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
+  const layerH = (d.meta && d.meta.layerHeight) ? d.meta.layerHeight : 0.3;
+
+  // A dim, hue-neutral emissive floor: the old UNLIT renderer showed vertex
+  // colours completely flat, unaffected by angle -- lifting the shadow side
+  // of the real lit geometry closer to that flatness (rather than pushing
+  // albedo brighter again, which only helps the lit side) is what "still too
+  // dark" was actually asking for. Additive, not multiplied by instance
+  // colour, so it lifts every colour mode's shadow floor equally without
+  // shifting anyone's hue.
+  pathMat = new THREE.MeshStandardMaterial({
+    vertexColors:true, roughness:0.6, metalness:0.05,
+    emissive:0x4a4436, emissiveIntensity:1.0 });
+  pathObj = new THREE.InstancedMesh(PATH_BOX_GEOM, pathMat, nSeg);
+  for(let s=0;s<nSeg;s++){
+    const zc = d.extCol[s*2];
     let rgb;
     // Risky segments get bright red override when highlight-risky is enabled.
-    if(showRisk && d.riskFlags && d.riskFlags[segIdx]){
+    if(showRisk && d.riskFlags && d.riskFlags[s]){
       rgb = [1.0, 0.15, 0.1];
     } else {
       if(colorMode==='overhang'){
-        rgb = overhangColor(d.overhang ? d.overhang[segIdx] : 0);
+        rgb = overhangColor(d.overhang ? d.overhang[s] : 0);
       } else if(colorMode==='plain'){
-        rgb = PLAIN_RGB.slice();
+        rgb = PLAIN_RGB;
       } else {
         rgb = ramp((zc-d.minz)/span);       // height (viridis)
       }
-      if(banding){                          // darken every other turn -> visible ribs
-        const b = (segTurn[segIdx] % 2 === 0) ? 1.0 : 0.55;
-        rgb=[rgb[0]*b, rgb[1]*b, rgb[2]*b];
+      if(banding){
+        // Darken every other turn -> one stripe per real layer_height. 0.55
+        // (chosen for the old UNLIT fat-line renderer, which had zero depth
+        // cues of its own) is too strong now that the toolpath is real lit
+        // geometry: the wavy wall's own highlights/shadows already vary with
+        // view angle, and multiplying a heavy darken on top landed unevenly --
+        // bright on a wave peak, near-black in a trough -- reading as blotchy
+        // patches rather than clean rings. 0.85 adds just enough definition
+        // without fighting the geometry's own shading.
+        const b = (segTurn[s] % 2 === 0) ? 1.0 : 0.85;
+        rgb = [rgb[0]*b, rgb[1]*b, rgb[2]*b];
       }
     }
-    cols[i*3]=rgb[0];cols[i*3+1]=rgb[1];cols[i*3+2]=rgb[2];
+    pathObj.setColorAt(s, _pbColor.setRGB(rgb[0], rgb[1], rgb[2]));
+
+    // One box per segment: scaled to (line_width, layer_height, segment
+    // length) and oriented with lookAt()'s stable up-relative basis (not a
+    // shortest-arc quaternion) so the layer_height edge stays close to
+    // world-up across neighbouring segments instead of twisting -- adjacent
+    // beads would otherwise show visible seams rather than reading as one
+    // continuous corrugated wall.
+    _pbStart.set(ext[s*6], ext[s*6+1], ext[s*6+2]);
+    _pbEnd.set(ext[s*6+3], ext[s*6+4], ext[s*6+5]);
+    _pbMid.addVectors(_pbStart, _pbEnd).multiplyScalar(0.5);
+    _pbDir.subVectors(_pbEnd, _pbStart);
+    const len = Math.max(_pbDir.length(), 1e-4);
+    const up = Math.abs(_pbDir.y/len) > 0.999 ? _pbAltUp : _pbUp;
+    _pbM4.lookAt(_pbStart, _pbEnd, up);
+    _pbQuat.setFromRotationMatrix(_pbM4);
+    _pbScale.set(beadW, layerH, len);
+    _pbM4.compose(_pbMid, _pbQuat, _pbScale);
+    pathObj.setMatrixAt(s, _pbM4);
   }
-  const g=new LineSegmentsGeometry();
-  g.setPositions(d.ext);
-  g.setColors(cols);
-  // "True bead width" renders lines at their physical width in mm (world
-  // units), so zooming in shows individual filament lines exactly as they'll
-  // be laid down. Off = classic constant screen-pixel thickness.
-  const trueWidth = document.getElementById('t-truewidth').checked;
-  const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
-  lineMat = trueWidth
-    ? new LineMaterial({ vertexColors:true, worldUnits:true, linewidth:beadW })
-    : new LineMaterial({ vertexColors:true, worldUnits:false, linewidth:lineWidthPx });
-  lineMat.resolution.set(wrap.clientWidth||1, wrap.clientHeight||1);
-  pathObj=new LineSegments2(g, lineMat);
-  pathObj.computeLineDistances();
+  pathObj.instanceMatrix.needsUpdate = true;
+  if(pathObj.instanceColor) pathObj.instanceColor.needsUpdate = true;
   scene.add(pathObj);
 
   const tg=new THREE.BufferGeometry();
@@ -656,17 +787,17 @@ function buildGeometry(d){
   applyXray();   // (re)apply the current X-ray state to the freshly built material
 }
 
-// Apply the X-ray toggle to the path's fat-line material. On: semi-transparent
+// Apply the X-ray toggle to the path's bead material. On: semi-transparent
 // and depth-test off so the whole toolpath is see-through; the bed is dimmed by
 // render(). Off: fully opaque with normal depth testing. Reads the checkbox so
-// it stays correct after buildGeometry rebuilds lineMat from scratch.
+// it stays correct after buildGeometry rebuilds pathMat from scratch.
 function applyXray(){
   xrayOn = !!document.getElementById('t-xray').checked;
-  if(lineMat){
-    lineMat.transparent = xrayOn;
-    lineMat.opacity = xrayOn ? 0.28 : 1.0;
-    lineMat.depthTest = !xrayOn;
-    lineMat.needsUpdate = true;
+  if(pathMat){
+    pathMat.transparent = xrayOn;
+    pathMat.opacity = xrayOn ? 0.28 : 1.0;
+    pathMat.depthTest = !xrayOn;
+    pathMat.needsUpdate = true;
   }
 }
 
@@ -702,7 +833,16 @@ function showGcodeTitle(name){
   if(!gcodeTitleEl){
     gcodeTitleEl = document.createElement('div');
     gcodeTitleEl.id = 'gcode-title';
-    gcodeTitleEl.className = 'gcode-title';
+    // Tokens resolve normally here: this is an ordinary element inside
+    // #canvas-wrap, so var() inherits from :root like anywhere else. (The
+    // literal-hex rule in style.css applies to data-URI SVG XML, which cannot
+    // read custom properties -- not to a plain div.)
+    gcodeTitleEl.style.cssText =
+      'position:absolute;top:8px;left:50%;transform:translateX(-50%);' +
+      'padding:3px 12px;border-radius:var(--radius-sm);background:rgba(30,33,36,0.86);' +
+      'color:var(--ink);font-size:12px;font-weight:600;pointer-events:none;' +
+      'z-index:5;font-family:var(--font-ui);max-width:60%;overflow:hidden;' +
+      'text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--line)';
     wrap.appendChild(gcodeTitleEl);
   }
   gcodeTitleEl.textContent = name;
@@ -919,16 +1059,16 @@ function showLoadOverlay(name){
     loadOverlayEl.id = 'load-overlay';
     loadOverlayEl.style.cssText =
       'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;' +
-      'justify-content:center;gap:6px;background:rgba(20,24,31,0.5);' +
-      'color:#ffffff;font-family:var(--font-ui);z-index:90;pointer-events:none;text-align:center;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);';
+      'justify-content:center;gap:6px;background:rgba(23,25,27,0.82);' +
+      'color:var(--ink);font-family:var(--font-ui);z-index:8;pointer-events:none;text-align:center;';
     loadOverlayStageEl = document.createElement('div');
     loadOverlayStageEl.id = 'load-overlay-stage';
     loadOverlayStageEl.style.cssText = 'font-size:14px;font-weight:600;';
     loadOverlayFileEl = document.createElement('div');
     loadOverlayFileEl.id = 'load-overlay-file';
     loadOverlayFileEl.style.cssText =
-      'font-size:12px;font-weight:400;opacity:0.8;max-width:70%;overflow:hidden;' +
-      'text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);';
+      'font-size:12px;font-weight:400;opacity:0.72;max-width:70%;overflow:hidden;' +
+      'text-overflow:ellipsis;white-space:nowrap;';
     loadOverlayEl.appendChild(loadOverlayStageEl);
     loadOverlayEl.appendChild(loadOverlayFileEl);
     wrap.appendChild(loadOverlayEl);
@@ -994,7 +1134,9 @@ async function load(name,text){
     parsed.riskyCount = riskyCount;
     parsed.overhang = overhang;
     lastData = parsed;
+    window.__lastData = lastData;          // automation/debug hook, same convention as __camera/__controls
     cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
+    window.__cuts = cuts;                  // automation/debug hook, same convention as __camera/__controls
     buildGeometry(lastData); showStats(name,lastData);   // heavy: O(segments)
     measureReload();                       // new model: any old measurement is meaningless
     // A file was loaded (dropped, picked, or generated) - show the viewer mode.
@@ -1017,23 +1159,27 @@ async function load(name,text){
   }
 }
 
-// Detect spiral-turn boundaries by unwrapping the path's angle about its centre.
-// Each full 2*pi revolution = one "layer/turn" for the step controls.
+// Detect spiral-turn boundaries directly from Z height: in vase/spiral mode
+// layer_height IS "mm of Z rise per one XY revolution" by construction, so
+// crossing each layer_height multiple is exactly one turn -- no need to
+// unwrap the path's XY angle about a rotation centre at all.
+//
+// This replaces an earlier angle-unwrap approach (about a bounding-box
+// centroid, offset by the viewer's own hardcoded BED_X/BED_Y since it
+// renders every printer on one generic plate) that quietly assumed the
+// print has a single, stable rotation centre. A leaning or heavily
+// asymmetric print does not: its footprint can sprawl far past its actual
+// cross-section, so the assumed centre landed nowhere near the true axis,
+// the angle stopped winding monotonically, and the whole print collapsed
+// to a single detected "turn" -- exactly the failure that made Emphasize
+// layers render as one flat colour with no visible layer lines. Z always
+// climbs monotonically once per revolution regardless of any XY lean.
 function computeTurns(d){
-  // cz mirrors parseGcode's negated printer-Y -> world-Z mapping (az = cy - y),
-  // as fitView() does. ext[] holds world coords, so deriving the centre with
-  // the un-negated form put it at the reflected position -- harmless for a
-  // bed-centred print (both land near 0) but wrong for an off-centre one,
-  // where the angle unwrap below would be taken about a point outside the
-  // model and hand back garbage turn boundaries.
-  const cx=((d.minx+d.maxx)/2)-BED_X/2, cz=BED_Y/2-((d.miny+d.maxy)/2);
-  const ext=d.ext, nSeg=ext.length/6;
-  const out=[0]; let cum=0, prev=null, last=0;
+  const extCol=d.extCol, nSeg=extCol.length/2;
+  const lh = Math.max((d.meta && d.meta.layerHeight) || 0.3, 1e-6);
+  const out=[0]; let last=0;
   for(let s=0;s<nSeg;s++){
-    const a=Math.atan2(ext[s*6+5]-cz, ext[s*6+3]-cx);
-    if(prev!==null){ let dd=a-prev; if(dd>Math.PI)dd-=2*Math.PI; if(dd<-Math.PI)dd+=2*Math.PI; cum+=dd; }
-    prev=a;
-    const t=Math.floor(Math.abs(cum)/(2*Math.PI));
+    const t=Math.floor((extCol[s*2]-d.minz)/lh);
     if(t>last){ last=t; out.push(s); }
   }
   out.push(nSeg);            // final boundary = end of print
@@ -1043,16 +1189,15 @@ function computeTurns(d){
 window.loadGcode = load;
 window.__camera = camera;   // camera access for automation/tests
 window.__controls = controls;   // OrbitControls access for automation/tests (freeze regression checks)
-window.__segColor = (s) => {           // brightness (sum of rgb) at segment s start
-  if(!pathObj) return null;
-  const a = pathObj.geometry.getAttribute('instanceColorStart');
-  if(!a) return null;
+window.__segColor = (s) => {           // brightness (sum of rgb) of segment s
+  if(!pathObj || !pathObj.instanceColor) return null;
+  const a = pathObj.instanceColor;
   return +(a.getX(s)+a.getY(s)+a.getZ(s)).toFixed(3);
 };
 window.__previewState = () => ({
   animSeg,
   progress: +progress.toFixed(4),
-  drawnSegs: pathObj ? pathObj.geometry.instanceCount : null,
+  drawnSegs: pathObj ? pathObj.count : null,
   nozzleVisible: nozzle.visible,
   nozzlePos: nozzle.visible ? nozzle.position.toArray().map(v=>+v.toFixed(1)) : null,
   // Segment count of the blue DRAFT preview currently on the bed (0 = none).
@@ -1090,7 +1235,7 @@ function setProgress(p, fromClock){
   let k=0;
   if(animSeg>0) k = Math.round(progress*animSeg);
   if(pathObj && animSeg>0){
-    pathObj.geometry.instanceCount = k;             // reveal only printed segments
+    pathObj.count = k;                              // reveal only printed segments
     if(k>0 && progress<1){
       const i=(k-1)*6+3;                            // end of last drawn segment
       nozzle.position.set(extArr[i], extArr[i+1], extArr[i+2]);
@@ -1268,15 +1413,6 @@ document.getElementById('t-risk').addEventListener('change',()=>{if(lastData){bu
 document.getElementById('t-travel').addEventListener('change',e=>{if(travelObj){travelObj.visible=e.target.checked;render();}});
 document.getElementById('t-bed').addEventListener('change',e=>{bedGroup.visible=e.target.checked;render();});
 document.getElementById('t-printer').addEventListener('change',e=>{printerGroup.visible=e.target.checked;render();});
-document.getElementById('t-width').addEventListener('input',e=>{
-  lineWidthPx=parseFloat(e.target.value);
-  // px slider only applies in screen-pixel mode
-  if(lineMat && !document.getElementById('t-truewidth').checked){ lineMat.linewidth=lineWidthPx; render(); }
-});
-document.getElementById('t-truewidth').addEventListener('change',e=>{
-  document.getElementById('t-width').disabled = e.target.checked;
-  if(lastData){ buildGeometry(lastData); setProgress(progress); }
-});
 document.getElementById('fit-view').addEventListener('click',fitView);
 window.addEventListener('keydown',e=>{
   if(typingInField(e)) return;
@@ -1307,6 +1443,9 @@ function render(){
   // so it has to be re-projected whenever the camera moves. Read off `window`
   // for the same TDZ reason as __measureSync above.
   if(window.__cageSync) window.__cageSync();
+  // Zone Overrides' on-model mm height labels -- same DOM-tracks-a-3D-point
+  // reprojection idiom, same TDZ reason (defined further down this file).
+  if(window.__zoneLabelSync) window.__zoneLabelSync();
   // Orientation cube tracks the main camera every frame this renders --
   // see the comment on navSyncCamera() further down for why this is a
   // window.__* hook rather than a direct call (TDZ: that section is defined
@@ -1316,7 +1455,6 @@ function render(){
 function resize(){
   const w=wrap.clientWidth, h=wrap.clientHeight;
   renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
-  if(lineMat) lineMat.resolution.set(w,h);     // fat lines need the viewport size
   // Rebuild sparkline if data is loaded (canvas width may have changed).
   if(lastData && sparkOffscreen) requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(progress); });
   render();
@@ -1346,11 +1484,10 @@ window.__viewFlags = function(){
 
 // Debug/test hook: bucket the loaded path's per-segment colours so automated
 // checks can confirm the active colour mode without pixel sampling. Reads the
-// fat-line geometry's instance colours (one RGB triple per segment start).
+// InstancedMesh's per-instance colour attribute (one RGB triple per segment).
 window.__colorStats = function(){
-  if(!pathObj || !pathObj.geometry) return null;
-  const a = pathObj.geometry.getAttribute('instanceColorStart');
-  if(!a) return null;
+  if(!pathObj || !pathObj.instanceColor) return null;
+  const a = pathObj.instanceColor;
   const n = a.count;
   let green=0, yellow=0, red=0, plain=0, other=0;
   for(let i=0;i<n;i++){
@@ -1366,8 +1503,8 @@ window.__colorStats = function(){
     else other++;
   }
   return { mode: document.getElementById('t-colormode').value,
-           xray: !!(lineMat && lineMat.transparent),
-           opacity: lineMat ? +lineMat.opacity.toFixed(2) : null,
+           xray: !!(pathMat && pathMat.transparent),
+           opacity: pathMat ? +pathMat.opacity.toFixed(2) : null,
            n, green, yellow, red, plain, other };
 };
 
@@ -1457,12 +1594,87 @@ window.showPreview = function(positions){
   }
 
   const nSeg = positions.length / 6;
-  // Uniform colour: semi-transparent accent blue.
+  // Base colour: semi-transparent accent blue, lerped toward each Zone
+  // Override band's OWN colour (window.__zonePreviewBands, published by
+  // preview_math.js's generatePreview in world-Y mm, carries each band's
+  // palette slot `ci`) -- the highlight fades in and out across the same
+  // blend ramp the print itself will use, so the 3-D view shows the ramp,
+  // not just a hard-edged band.
+  //
+  // Overlap (v2): weights are SUMMED across bands, then rescaled by
+  // max(1, sum) -- mirroring spiral_path()'s own texture-crossfade
+  // normalization exactly (paths.py), so what the model shows here is the
+  // same blend the printer will actually make. Two fully-overlapping bands
+  // therefore mix 50/50, not one hiding the other.
   const cols = new Float32Array(nSeg * 6);   // 2 vertices * 3 rgb per segment
+  const zoneBands = window.__zonePreviewBands;
+  const inertBands = window.__zoneInertBands;
+  const paletteRGB = ZONE_PALETTE.map(function(c){
+    return [((c>>16)&0xff)/255, ((c>>8)&0xff)/255, (c&0xff)/255];
+  });
   for(let i = 0; i < nSeg; i++){
     const base = i * 6;
-    cols[base]   = 0.30; cols[base+1] = 0.76; cols[base+2] = 1.00;
-    cols[base+3] = 0.30; cols[base+4] = 0.76; cols[base+5] = 1.00;
+    let r = 0.30, g = 0.76, b = 1.00;
+    let activeHit = false;
+    const needY = (zoneBands && zoneBands.length) || (inertBands && inertBands.length);
+    const ymid = needY ? (positions[base+1] + positions[base+4]) / 2 : 0;
+    if(zoneBands && zoneBands.length){
+      let wsum = 0;
+      const ws = new Array(zoneBands.length);
+      for(let bi = 0; bi < zoneBands.length; bi++){
+        const band = zoneBands[bi];
+        let bw = 0;
+        if(ymid > band.y0 && ymid < band.y1){
+          bw = 1;
+          const bl = band.b;
+          if(bl > 0){
+            if(ymid < band.y0 + bl) bw = (ymid - band.y0) / bl;
+            else if(ymid > band.y1 - bl) bw = (band.y1 - ymid) / bl;
+          }
+        }
+        ws[bi] = bw;
+        wsum += bw;
+      }
+      if(wsum > 0){
+        const norm = Math.max(1, wsum);
+        let zr = 0, zg = 0, zb = 0, wtot = 0;
+        for(let bi = 0; bi < zoneBands.length; bi++){
+          const wn = ws[bi] / norm;
+          if(wn <= 0) continue;
+          const pal = paletteRGB[((zoneBands[bi].ci % paletteRGB.length) + paletteRGB.length) % paletteRGB.length];
+          zr += pal[0] * wn; zg += pal[1] * wn; zb += pal[2] * wn;
+          wtot += wn;
+        }
+        if(wtot > 0){
+          // ZONE_TINT_BOOST only scales how far this segment travels toward
+          // the already-normalized blend colour (zr/wtot etc) -- it never
+          // touches ws[]/wsum/norm, so the max(1,sum) overlap-safety proof
+          // (two fully-overlapping bands mix 50/50, never double-strength)
+          // holds exactly as before. Clamped to 1 so a boosted plateau still
+          // can't overshoot the pure palette colour.
+          const mix = Math.min(1, wtot * ZONE_TINT_BOOST);
+          r += (zr/wtot - r) * mix; g += (zg/wtot - g) * mix; b += (zb/wtot - b) * mix;
+          activeHit = true;
+        }
+      }
+    }
+    // Inert zones (enabled, placed, but overriding nothing) get a flat,
+    // hard-edged, dimmed fill across their whole band -- deliberately NOT
+    // the ramped active-zone look, so a zone that changes nothing about the
+    // print can never be mistaken for one that does. Skipped wherever an
+    // active band already tinted this segment.
+    if(!activeHit && inertBands && inertBands.length){
+      for(let bi = 0; bi < inertBands.length; bi++){
+        const band = inertBands[bi];
+        if(ymid > band.y0 && ymid < band.y1){
+          const pal = paletteRGB[((band.ci % paletteRGB.length) + paletteRGB.length) % paletteRGB.length];
+          r += (pal[0] - r) * ZONE_INERT_DIM; g += (pal[1] - g) * ZONE_INERT_DIM; b += (pal[2] - b) * ZONE_INERT_DIM;
+          break;
+        }
+      }
+    }
+    cols[base]   = r; cols[base+1] = g; cols[base+2] = b;
+    cols[base+3] = r; cols[base+4] = g; cols[base+5] = b;
   }
 
   const g = new LineSegmentsGeometry();
@@ -1883,6 +2095,9 @@ function cageBindListeners(){
     // a click aimed at a measurement point would also land as "clicked empty
     // space" here and silently wipe the cage selection underneath.
     if(measureOn) return;
+    // A Zone Overrides ring drag already owns the pointer -- mutual exclusion
+    // is symmetric with zoneRingPickAt's own "cage wins ties" check below.
+    if(zoneRingActive >= 0) return;
     // Left button only. Right-drag is OrbitControls' pan and middle is its
     // dolly; hijacking either to move a handle would make navigation
     // unpredictable exactly where the dots are densest.
@@ -2324,6 +2539,869 @@ window.hideShapeCage = function(){
   render();
 };
 
+// ---------------------------------------------------------------------------
+// Zone Overrides: in-model drag rings (v2). Two thin rings per zone (its
+// t_lo/t_hi edges), sliced directly out of `previewPositions` using
+// window.__previewWallMeta (published by preview_math.js's generatePreview)
+// -- zero duplicated wall math, so a ring always sits exactly on the drafted
+// wall (texture, cage, ovality, spine, Point Edit all included, since they
+// already shaped the samples being sliced). Design mode only: Zone Overrides
+// is a generation-time parameter of the current design, not a property of
+// whatever G-code happens to be loaded in G-code Viewer mode.
+//
+// A RING rather than a single handle: a zone edge is a HEIGHT, azimuth-
+// independent, so a handle on only one side of the model would misrepresent
+// it as local to that side. A ring stays visible and grabbable at every
+// orbit angle with no per-frame re-derivation, and it lies ON the wall
+// rather than in front of it, so it occludes nothing.
+// ---------------------------------------------------------------------------
+const ZONE_PALETTE = [0xff6fd8, 0x9daa0e, 0xbc57db, 0x92e8a3, 0x6fed26];
+// mirrors --zone-c1..c5 in style.css -- keep the two in step. Lightness, not
+// just hue, now does most of the work separating same-gap colours (a dark
+// olive c2 vs a pale mint c4 vs a bright grass c5, all in the same 117deg
+// green gap) -- see the :root palette comment in style.css for the full
+// reasoning, including the two real-usage cases that made hue-only spacing
+// provably not enough.
+
+// Active-zone tint gets boosted toward the palette colour for contrast (a
+// plateau at wtot=1 used to land only 100% -- of a blend that itself
+// averages several already-translucent line colours -- against the accent-
+// blue base, which read as barely-there). 4.0 (raised from an initial 1.5,
+// which user testing found still too weak) means anything past 25% into a
+// band's ramp is already full palette colour, so only a thin sliver right at
+// each edge actually fades -- the rest of the band reads as a solid block.
+// This ONLY scales the lerp factor in showPreview()'s vertex-colour loop,
+// never the underlying zoneWeight() sum/normalization, so the overlap-safety
+// proof (combined effect bounded by max(1,sum)) is untouched -- see the
+// comment at that call site.
+const ZONE_TINT_BOOST = 4.0;
+// Inert zones (enabled, placed, override nothing yet) get a flat, hard-
+// edged fill dimmed well below active strength, so they read as "present
+// but doing nothing" rather than "actively texturing" -- see showPreview().
+// Raised alongside ZONE_TINT_BOOST so an inert band still reads as clearly
+// coloured, just flat, next to a now much more saturated active band.
+const ZONE_INERT_DIM = 0.85;
+const ZONE_RING_WHITE = new THREE.Color(0xffffff);
+
+const ZONE_RING_PICK_PX = 8;      // tighter than CAGE_PICK_PX (14): a ring is
+                                   // long, a generous radius would sit under
+                                   // the cursor constantly and fight orbit.
+const ZONE_RING_PICK_STRIDE = 5;  // project every 5th sample (~48 per ring)
+
+let zoneRingGroup = null;
+let zoneRings = [];        // [{zoneIdx, edge:'lo'|'hi', line, t}]
+let zoneRingHover = -1;    // index into zoneRings, or -1
+let zoneRingActive = -1;   // index into zoneRings mid-drag, or -1
+window.__zoneRingDragActive = false;
+
+const ZONE_LEFT_BUTTON = controls.mouseButtons.LEFT;   // same original value CAGE_LEFT_BUTTON captured
+const zoneRaycaster = new THREE.Raycaster();
+const zonePointerNDC = new THREE.Vector2();
+const zoneDragPlane = new THREE.Plane();
+const zoneDragPoint = new THREE.Vector3();
+const zoneDragNormal = new THREE.Vector3();
+let zoneDragGrabOffset = 0;
+let zoneDragSlide = false;
+let zoneDragBody = false;    // true when the active drag grabbed the BAND BODY, not an edge ring
+let zoneDragRevert = null;   // {zoneIdx, t_lo, t_hi} snapshot for Escape
+let zoneBandHover = -1;      // zoneIdx of the band body currently hovered, or -1
+
+// On-model mm height labels -- see zoneLabelsRebuild()/zoneLabelsSync()
+// below. Persistent whenever any zone ring exists (not hover-gated): a
+// freshly-added zone gets no colour TINT until a texture is chosen
+// (activeZones() in preview_math.js filters an all-inherit zone out of
+// __zonePreviewBands), so its two rings are the only evidence it exists --
+// these labels are what make that legible without opening the modal.
+const ZONE_LABEL_GAP_PX = 15;   // min vertical spacing between chips before one is culled
+const ZONE_LABEL_OFF_PX = 10;   // chip's horizontal offset from the model silhouette
+let zoneLabelHost = null;       // .zone-tags container, created lazily
+let zoneLabels = [];            // [{el, basis, t, prio, zoneIdx, edge, meta}]
+let zoneLabelEditingEl = null;  // the .zone-tag currently showing its inline edit <input>, or null
+
+// The sample index a ring at height fraction `t` starts from -- exposed
+// separately from zoneRingPositionsAt() below because zoneBandContains()
+// needs it too, to line up the two rings' azimuth sampling (see that
+// function's own comment for why misaligned k0s would build a twisted quad).
+function zoneRingK0(t){
+  const meta = window.__previewWallMeta;
+  if(!meta) return 0;
+  const total = meta.totalSteps, ppt = meta.pointsPerTurn;
+  return Math.max(0, Math.min(Math.round(t * total), total - ppt));
+}
+
+function zoneRingPositionsAt(t){
+  const meta = window.__previewWallMeta;
+  if(!meta || !previewPositions) return null;
+  const bfc = meta.baseFloatCount, total = meta.totalSteps, ppt = meta.pointsPerTurn;
+  if(total < ppt) return null;
+  const k0 = zoneRingK0(t);
+  const arr = new Float32Array(ppt * 3);
+  for(let j = 0; j < ppt; j++){
+    const idx = bfc + (k0 + j) * 6;
+    if(idx + 2 >= previewPositions.length) return null;
+    arr[j*3] = previewPositions[idx];
+    arr[j*3+1] = previewPositions[idx+1];
+    arr[j*3+2] = previewPositions[idx+2];
+  }
+  return arr;
+}
+
+// Horizontal centroid + mean radius of a ring's samples -- the label anchor
+// (zoneLabelsSync below) deliberately does NOT take Y from this: it uses the
+// EXACT wallOff + t*height instead, so a chip's printed number and its
+// on-screen height can never disagree by the fraction of a layer a real
+// spiral turn climbs over one ring's ppt samples.
+function zoneBasisFromPositions(arr){
+  if(!arr || !arr.length) return null;
+  let cx = 0, cz = 0, cr = 0;
+  const n = arr.length / 3;
+  for(let i = 0; i < n; i++){ cx += arr[i*3]; cz += arr[i*3+2]; }
+  cx /= n; cz /= n;
+  for(let i = 0; i < n; i++){ cr += Math.hypot(arr[i*3]-cx, arr[i*3+2]-cz); }
+  return { cx: cx, cz: cz, r: cr / n };
+}
+
+// Sets a ring's height fraction, geometry AND cached azimuth/basis together
+// -- used by showZoneRings, the drag move handler, and the slide's "other
+// ring" branch, replacing three copies of the same three lines. Both rings
+// of a sliding band MUST go through this (not just have .t reassigned), or
+// the stale one's k0/basis desyncs and its label drifts off the ring.
+function zoneRingApplyT(ring, t){
+  ring.t = t;
+  ring.k0 = zoneRingK0(t);
+  ring.pos = zoneRingPositionsAt(t);
+  if(ring.pos) ring.line.geometry.setAttribute('position', new THREE.Float32BufferAttribute(ring.pos, 3));
+  ring.basis = zoneBasisFromPositions(ring.pos);
+  // Only during a live drag: on the initial showZoneRings() build, zoneLabels
+  // doesn't exist yet (zoneLabelsRebuild runs after, and builds each chip
+  // straight from the just-applied ring.t/basis, making this redundant and,
+  // worse, a no-op lookup into a stale/empty array).
+  if(window.__zoneRingDragActive) zoneLabelSyncRing(ring);
+}
+
+// Rings render fully opaque now (contrast pass -- see showPreview()'s
+// ZONE_TINT_BOOST comment for the matching fill-side change), so hover/drag
+// engagement can no longer read as an opacity bump. Instead it lerps the
+// ring's OWN colour toward white -- 0.3125 chosen to land close to
+// --zone-c1 -> --zone-hover in style.css without hardcoding a second colour
+// pair per palette slot.
+const ZONE_RING_HOVER_LERP = 0.3125;
+function zoneRingSetHoverStyle(){
+  zoneRings.forEach(function(r, i){
+    const bandLit = zoneBandHover >= 0 && r.zoneIdx === zoneBandHover;
+    const lit = (i === zoneRingHover || i === zoneRingActive || bandLit);
+    r.line.material.color.copy(r.color);
+    if(lit) r.line.material.color.lerp(ZONE_RING_WHITE, ZONE_RING_HOVER_LERP);
+  });
+}
+
+// Screen-space proximity pick (not a raycast against a 1px line -- same
+// reasoning as cagePickAt's own comment). Ties break toward the sample
+// nearer the camera.
+function zoneRingPickAt(clientX, clientY){
+  if(!zoneRings.length) return -1;
+  const rect = renderer.domElement.getBoundingClientRect();
+  let best = -1, bestDist = Infinity, bestZ = Infinity;
+  const v = new THREE.Vector3();
+  for(let r = 0; r < zoneRings.length; r++){
+    const pos = zoneRings[r].line.geometry.attributes.position;
+    if(!pos) continue;
+    for(let k = 0; k < pos.count; k += ZONE_RING_PICK_STRIDE){
+      v.set(pos.getX(k), pos.getY(k), pos.getZ(k)).project(camera);
+      if(v.z < -1 || v.z > 1) continue;
+      const sx = rect.left + (v.x+1)/2*rect.width;
+      const sy = rect.top + (1-v.y)/2*rect.height;
+      const dx = sx - clientX, dy = sy - clientY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if(dist > ZONE_RING_PICK_PX) continue;
+      if(dist < bestDist || (dist === bestDist && v.z < bestZ)){
+        best = r; bestDist = dist; bestZ = v.z;
+      }
+    }
+  }
+  return best;
+}
+
+const ZONE_BAND_QUAD_STRIDE = 8;   // azimuth step (samples) for the band-body pick quads
+
+function zonePtInTri(px, py, ax, ay, bx, by, cx, cy){
+  const d1 = (px-bx)*(ay-by) - (ax-bx)*(py-by);
+  const d2 = (px-cx)*(by-cy) - (bx-cx)*(py-cy);
+  const d3 = (px-ax)*(cy-ay) - (cx-ax)*(py-ay);
+  const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+  const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+  return !(hasNeg && hasPos);
+}
+
+// Screen-space containment test for ONE zone's band body (the wall surface
+// strictly between its lo and hi rings) -- the third pickable target, for
+// "grab the middle and slide the whole band" without needing Shift.
+//
+// Deliberately NOT a measurePick() raycast: that requires msGrid rebuilding
+// (forced null + a fresh grid over the whole toolpath) to avoid picking
+// stale geometry, which is fine paid once on a right-click but far too
+// costly to pay on every pointermove for a hover cursor. This instead reuses
+// the two rings' OWN vertex buffers, already in memory and already exactly
+// what is drawn -- a screen-space point-in-quad test per azimuth sector.
+function zoneBandContains(zoneIdx, clientX, clientY){
+  let lo = null, hi = null;
+  for(let i = 0; i < zoneRings.length; i++){
+    if(zoneRings[i].zoneIdx !== zoneIdx) continue;
+    if(zoneRings[i].edge === 'lo') lo = zoneRings[i]; else hi = zoneRings[i];
+  }
+  if(!lo || !hi || !lo.pos || !hi.pos) return false;
+  const meta = window.__previewWallMeta;
+  if(!meta) return false;
+  const ppt = meta.pointsPerTurn;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  function screenAt(posArr, j){
+    v.set(posArr[j*3], posArr[j*3+1], posArr[j*3+2]).project(camera);
+    if(v.z < -1 || v.z > 1) return null;
+    return [rect.left + (v.x+1)/2*rect.width, rect.top + (1-v.y)/2*rect.height];
+  }
+  for(let a = 0; a < ppt; a += ZONE_BAND_QUAD_STRIDE){
+    const a2 = (a + ZONE_BAND_QUAD_STRIDE) % ppt;
+    // The two rings were sliced starting at DIFFERENT sample offsets
+    // (each ring's own k0 = zoneRingK0(t)), so azimuth `a` is at vertex
+    // index `a` in lo's own array but a DIFFERENT index in hi's -- this
+    // remaps by the two k0s so a quad's four corners are all actually at
+    // the same azimuth. Skipping this alignment builds a quad that crosses
+    // the model's interior and produces false hits off the wall.
+    const jl0 = ((a  - lo.k0) % ppt + ppt) % ppt;
+    const jl1 = ((a2 - lo.k0) % ppt + ppt) % ppt;
+    const jh0 = ((a  - hi.k0) % ppt + ppt) % ppt;
+    const jh1 = ((a2 - hi.k0) % ppt + ppt) % ppt;
+    const l0 = screenAt(lo.pos, jl0), l1 = screenAt(lo.pos, jl1);
+    const h0 = screenAt(hi.pos, jh0), h1 = screenAt(hi.pos, jh1);
+    if(!l0 || !l1 || !h0 || !h1) continue;   // sector partly behind camera -- skip, not a false hit
+    if(zonePtInTri(clientX, clientY, l0[0], l0[1], l1[0], l1[1], h1[0], h1[1])) return true;
+    if(zonePtInTri(clientX, clientY, l0[0], l0[1], h1[0], h1[1], h0[0], h0[1])) return true;
+  }
+  return false;
+}
+
+// Which zone's band body (if any) contains (clientX, clientY). Only
+// considers zones with a live ring pair (zoneRings holds only ENABLED
+// zones, so a disabled zone is correctly ungrabbable this way). Ties broken
+// by SMALLEST span -- a small band nested inside a larger one would
+// otherwise be permanently ungrabbable, since the large band covers every
+// pixel the small one does. A band too thin to be worth grabbing this way is
+// already covered end-to-end by its own two ring picks, which run first.
+function zoneBandPickAt(clientX, clientY){
+  const seen = {};
+  let best = -1, bestSpan = Infinity;
+  for(let i = 0; i < zoneRings.length; i++){
+    const zi = zoneRings[i].zoneIdx;
+    if(seen[zi]) continue;
+    seen[zi] = true;
+    if(!zoneBandContains(zi, clientX, clientY)) continue;
+    const lo = zoneRings.find(function(r){ return r.zoneIdx === zi && r.edge === 'lo'; });
+    const hi = zoneRings.find(function(r){ return r.zoneIdx === zi && r.edge === 'hi'; });
+    if(!lo || !hi) continue;
+    const span = Math.abs(hi.t - lo.t);
+    if(span < bestSpan || (span === bestSpan && zi > best)){
+      best = zi; bestSpan = span;
+    }
+  }
+  return best;
+}
+
+// Hover-lock: only NULLs controls.mouseButtons.LEFT (wheel zoom and
+// right-drag pan must survive a ring hover), mirroring cageSetHoverLock.
+// Defers to the cage: if a cage handle is active or hovered, the cage
+// already owns the lock and must not be clobbered -- "the cage wins ties",
+// see the mutual-exclusion checks below.
+function zoneSetHoverLock(on){
+  if(cageActive || cageHover >= 0) return;
+  controls.mouseButtons.LEFT = on ? null : ZONE_LEFT_BUTTON;
+}
+
+function zoneRingRebuildPlane(anchor){
+  zoneDragNormal.set(camera.position.x - controls.target.x, 0,
+                     camera.position.z - controls.target.z);
+  if(zoneDragNormal.lengthSq() < 1e-9) zoneDragNormal.set(0, 0, 1);   // top-down guard
+  zoneDragNormal.normalize();
+  zoneDragPlane.setFromNormalAndCoplanarPoint(zoneDragNormal, anchor);
+}
+function zoneUpdatePointerNDC(e){
+  const rect = renderer.domElement.getBoundingClientRect();
+  zonePointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  zonePointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+}
+function zoneRingAnchor(ring){
+  const pos = ring.line.geometry.attributes.position;
+  return new THREE.Vector3(pos.getX(0), pos.getY(0), pos.getZ(0));
+}
+
+function zoneCursorForHover(){
+  if(zoneRingHover >= 0) return 'ns-resize';
+  if(zoneBandHover >= 0) return 'grab';
+  return '';
+}
+
+function zoneEndDrag(){
+  if(zoneRingActive < 0) return;
+  zoneRingActive = -1;
+  zoneDragBody = false;
+  window.__zoneRingDragActive = false;
+  zoneDragRevert = null;
+  controls.enabled = true;
+  zoneSetHoverLock(zoneRingHover >= 0 || zoneBandHover >= 0);
+  renderer.domElement.style.cursor = zoneCursorForHover();
+  zoneRingSetHoverStyle();
+  // setZoneEdge (designer.js) deferred the drag's persist to keep every
+  // pointermove cheap -- flush it now that the gesture is actually over, so
+  // localStorage/undo-history land exactly once per drag. Must run before
+  // the refresh below so a re-synced ring set is never drawn from a design
+  // that hasn't actually been persisted yet.
+  if(window.__zoneEdgeFlush) window.__zoneEdgeFlush();
+  // The refresh suppressed during the drag (designer.js's refreshZoneRings()
+  // checks window.__zoneRingDragActive) runs once now, fully re-syncing ring
+  // count/order/colour with design state.
+  if(window.__refreshZoneRings) window.__refreshZoneRings();
+  render();
+}
+
+(function bindZoneRingListeners(){
+  const canvas = renderer.domElement;
+
+  canvas.addEventListener('pointerdown', function(e){
+    if(zoneRingActive >= 0) return;
+    if(e.button !== 0) return;   // left only -- right-drag is orbit's pan, and a right-press
+                                  // here would otherwise be read by the contextmenu handler's
+                                  // __zoneRingDragActive check as "a drag owns the pointer",
+                                  // suppressing the right-click menu it is trying to open.
+    if(measureOn) return;                                        // measure owns the pointer
+    if(cageActive || cagePickAt(e.clientX, e.clientY) >= 0) return;  // cage wins ties
+    let hit = zoneRingPickAt(e.clientX, e.clientY);
+    let isBody = false;
+    if(hit < 0){
+      const bandIdx = zoneBandPickAt(e.clientX, e.clientY);
+      if(bandIdx < 0) return;
+      hit = zoneRings.findIndex(function(r){ return r.zoneIdx === bandIdx && r.edge === 'lo'; });
+      if(hit < 0) return;
+      isBody = true;
+    }
+    e.preventDefault();
+    const ring = zoneRings[hit];
+    const otherRing = zoneRings.find(function(r){ return r.zoneIdx === ring.zoneIdx && r !== ring; });
+    zoneDragSlide = isBody || e.shiftKey;
+    // Grab offset is measured against the value setZoneEdge's slideBand path
+    // actually treats its `t` argument as -- the BAND MID when sliding, the
+    // ring's own edge otherwise. Measuring against ring.t while sliding would
+    // teleport the band by half its span on the very first move whenever the
+    // grabbed ring is not exactly at the mid (i.e. always).
+    const grabBasis = zoneDragSlide
+      ? (ring.t + (otherRing ? otherRing.t : ring.t)) / 2
+      : ring.t;
+    const anchor = zoneRingAnchor(ring);
+    zoneRingRebuildPlane(anchor);
+
+    zoneUpdatePointerNDC(e);
+    zoneRaycaster.setFromCamera(zonePointerNDC, camera);
+    let grabOffset = 0;
+    if(zoneRaycaster.ray.intersectPlane(zoneDragPlane, zoneDragPoint) && window.__zoneTFromWorldY){
+      grabOffset = window.__zoneTFromWorldY(zoneDragPoint.y) - grabBasis;
+    }
+
+    zoneDragRevert = {
+      zoneIdx: ring.zoneIdx,
+      t_lo: ring.edge === 'lo' ? ring.t : (otherRing ? otherRing.t : ring.t),
+      t_hi: ring.edge === 'hi' ? ring.t : (otherRing ? otherRing.t : ring.t)
+    };
+    zoneRingActive = hit;
+    zoneDragBody = isBody;
+    window.__zoneRingDragActive = true;
+    zoneDragGrabOffset = grabOffset;
+    controls.enabled = false;
+    canvas.style.cursor = isBody ? 'grabbing' : 'ns-resize';
+    zoneRingSetHoverStyle();
+  });
+
+  canvas.addEventListener('pointermove', function(e){
+    if(zoneRingActive >= 0) return;   // mid-drag: the window listener below owns this
+    if(measureOn) return;
+    if(cageActive || cagePickAt(e.clientX, e.clientY) >= 0){
+      if(zoneRingHover >= 0 || zoneBandHover >= 0){
+        zoneRingHover = -1; zoneBandHover = -1;
+        zoneRingSetHoverStyle();
+        zoneSetHoverLock(false);
+        render();
+      }
+      return;
+    }
+    const hit = zoneRingPickAt(e.clientX, e.clientY);
+    // Band-body hover only tried once ring picking misses, same priority as
+    // the pointerdown grab below -- an edge ring always wins near its own
+    // boundary, the body owns the rest of the tinted region.
+    const bandHit = hit < 0 ? zoneBandPickAt(e.clientX, e.clientY) : -1;
+    if(hit === zoneRingHover && bandHit === zoneBandHover) return;
+    zoneRingHover = hit;
+    zoneBandHover = bandHit;
+    zoneRingSetHoverStyle();
+    canvas.style.cursor = zoneCursorForHover();
+    // While the cursor rests on a band, left-drag slides it instead of
+    // orbiting; orbit stays available everywhere else in the viewport, and
+    // the 'grab' cursor marks exactly the region where that trade applies.
+    zoneSetHoverLock(zoneRingHover >= 0 || zoneBandHover >= 0);
+    render();
+  });
+
+  canvas.addEventListener('pointerleave', function(){
+    if(zoneRingActive >= 0) return;
+    if(zoneRingHover < 0 && zoneBandHover < 0) return;
+    zoneRingHover = -1;
+    zoneBandHover = -1;
+    zoneRingSetHoverStyle();
+    zoneSetHoverLock(false);
+    canvas.style.cursor = '';
+    render();
+  });
+
+  // move/up/cancel + blur all live on window, same reasoning as the cage's
+  // own listeners: releasing (or losing focus) outside the canvas can never
+  // leave controls.enabled stuck at false.
+  window.addEventListener('pointermove', function(e){
+    if(zoneRingActive < 0) return;
+    const ring = zoneRings[zoneRingActive];
+    if(!ring || !window.__zoneTFromWorldY || !window.__zoneRingDrag) return;
+
+    // Recomputed every move so an orbit mid-drag cannot strand the plane.
+    zoneRingRebuildPlane(zoneRingAnchor(ring));
+    zoneUpdatePointerNDC(e);
+    zoneRaycaster.setFromCamera(zonePointerNDC, camera);
+    if(!zoneRaycaster.ray.intersectPlane(zoneDragPlane, zoneDragPoint)) return;   // ray near-parallel -- ignore
+
+    const t = window.__zoneTFromWorldY(zoneDragPoint.y) - zoneDragGrabOffset;
+    const result = window.__zoneRingDrag(ring.zoneIdx, ring.edge, t, zoneDragSlide);
+    if(!result) return;
+
+    zoneRingApplyT(ring, ring.edge === 'lo' ? result.t_lo : result.t_hi);
+    if(zoneDragSlide){
+      const other = zoneRings.find(function(r){ return r.zoneIdx === ring.zoneIdx && r !== ring; });
+      if(other) zoneRingApplyT(other, other.edge === 'lo' ? result.t_lo : result.t_hi);
+    }
+    render();
+  });
+
+  window.addEventListener('pointerup', zoneEndDrag);
+  window.addEventListener('pointercancel', zoneEndDrag);
+  window.addEventListener('blur', function(){
+    zoneRingHover = -1;
+    zoneEndDrag();
+    controls.enabled = true;
+    zoneSetHoverLock(false);
+    canvas.style.cursor = '';
+  });
+
+  // Escape mid-drag reverts to the pre-drag t_lo/t_hi (hi first, then lo --
+  // both are the ORIGINAL valid pre-drag values, so restoring hi first
+  // always leaves enough span for lo's own restore to fit under the
+  // minimum-span clamp). Mirrors the cage's own Escape-reverts-a-drag
+  // behaviour exactly.
+  window.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    if(measureOn) return;              // Esc belongs to the measure tool while it is open
+    if(zoneRingActive < 0 || !zoneDragRevert || !window.__zoneRingDrag) return;
+    window.__zoneRingDrag(zoneDragRevert.zoneIdx, 'hi', zoneDragRevert.t_hi, false);
+    window.__zoneRingDrag(zoneDragRevert.zoneIdx, 'lo', zoneDragRevert.t_lo, false);
+    zoneEndDrag();
+  });
+})();
+
+// Builds the on-model mm chips: two per zone ring, plus two "scale" chips
+// marking the wall's own base (t=0) and top (t=1) -- the model's total
+// height, shown right where the user is already looking instead of only in
+// the Model step's own Height field. Called once after every showZoneRings()
+// rebuild (which already runs on every debounced preview regen -- rebuilding
+// <=18 tiny <div>s at that cadence is the same cost class as the rings
+// themselves, so no pooling).
+// Hoisted to module scope (was a zoneLabelsRebuild-local closure) so
+// zoneLabelSyncRing below can reuse the exact same mm-text formatting during
+// a live drag, instead of re-deriving it.
+function zoneLabelSetText(el, mm, metaText){
+  el.textContent = '';
+  el.appendChild(document.createTextNode(mm.toFixed(2) + ' mm'));
+  if(metaText){
+    const meta = document.createElement('span');
+    meta.className = 'zone-tag-meta';
+    meta.textContent = metaText;
+    el.appendChild(meta);
+  }
+}
+
+// Double-click an on-model zone-edge chip to type its mm value directly,
+// instead of only being able to drag it (or go through the modal's row
+// inputs). Not offered on the two scale chips (zoneIdx -1, base/top) -- they
+// show the wall's own fixed extent, not a zone edge, so there is nothing for
+// them to commit. Routes the actual mutation through window.__zoneRingDrag
+// (== designer.js's setZoneEdge) -- the SAME single funnel the in-model ring
+// drag and the modal axis drag already share -- so a typed value can never
+// disagree with what a drag would have clamped it to.
+function zoneLabelBeginEdit(label){
+  if(label.zoneIdx < 0) return;
+  if(label.el.querySelector('input')) return;   // already editing this chip
+  const el = label.el;
+  const mm = window.__zoneMmFromT ? window.__zoneMmFromT(label.t) : 0;
+  el.textContent = '';
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.inputMode = 'decimal';
+  inp.className = 'zone-tag-input';
+  inp.value = mm.toFixed(2);
+  el.appendChild(inp);
+  zoneLabelEditingEl = el;   // zoneLabelsSync's collision-cull skips this element -- see its own comment
+
+  let settled = false;
+  function settle(commit){
+    if(settled) return;   // Enter settles directly; the blur it triggers must not settle twice
+    settled = true;
+    if(zoneLabelEditingEl === el) zoneLabelEditingEl = null;
+    if(commit){
+      const v = parseFloat(inp.value);
+      // Reject, never clamp, anything that isn't a real finite number --
+      // the same rule the modal row's own From/To (mm) inputs already
+      // follow (designer.js's numField handlers: bad input is refused, not
+      // silently coerced into something that then flows onward).
+      if(!Number.isNaN(v) && Number.isFinite(v) && window.__zoneTFromMm && window.__zoneRingDrag){
+        window.__zoneRingDrag(label.zoneIdx, label.edge, window.__zoneTFromMm(v), false);
+        // setZoneEdge (designer.js) just persisted, re-armed the debounced
+        // preview, and -- since neither drag flag is set here -- ran its
+        // OWN full refreshZoneRings(), which already tore down and rebuilt
+        // every ring and every label chip. This element is already gone
+        // from the DOM; nothing left to restore.
+        return;
+      }
+    }
+    // Cancelled, or the typed value didn't parse: put the chip's own text
+    // back exactly as zoneLabelsRebuild would have. No mutation happened,
+    // so no rebuild is coming to do this for us.
+    zoneLabelSetText(el, window.__zoneMmFromT ? window.__zoneMmFromT(label.t) : 0, null);
+  }
+  inp.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); settle(true); }
+    else if(e.key === 'Escape'){ e.preventDefault(); settle(false); }
+    e.stopPropagation();   // never let Enter/Escape reach a global shortcut
+                            // (undo, the ring-drag Escape-revert, etc.)
+  });
+  inp.addEventListener('blur', function(){ settle(true); });   // click-away commits, like a normal inline edit
+  inp.focus();
+  inp.select();
+}
+
+function zoneLabelsRebuild(){
+  if(!zoneRings.length){ zoneLabels = []; if(zoneLabelHost) zoneLabelHost.innerHTML = ''; return; }
+  if(!zoneLabelHost){
+    zoneLabelHost = document.createElement('div');
+    zoneLabelHost.className = 'zone-tags';
+    wrap.appendChild(zoneLabelHost);
+  }
+  zoneLabelHost.innerHTML = '';
+  zoneLabels = [];
+
+  function makeChip(cls, color){
+    const el = document.createElement('div');
+    el.className = cls;
+    if(color) el.style.color = color;
+    zoneLabelHost.appendChild(el);
+    return el;
+  }
+  zoneRings.forEach(function(ring, i){
+    if(!ring.basis) return;
+    const el = makeChip('zone-tag', ring.colorHex);
+    const mm = window.__zoneMmFromT ? window.__zoneMmFromT(ring.t) : 0;
+    zoneLabelSetText(el, mm, null);
+    const entry = {
+      el: el, basis: ring.basis, t: ring.t,
+      zoneIdx: ring.zoneIdx, edge: ring.edge, ringIdx: i,
+      // Beats a scale chip's prio 2 on collision (see that push below) --
+      // a zone edge is the actionable, double-click-editable one of the
+      // two, and a zone parked at t=0/1 would otherwise sit exactly on top
+      // of "0.00 mm base"/"...top" and lose every tie to it, making that
+      // edge permanently unreachable (can't hover/double-click what's
+      // hidden). Also reprioritised to 0 in zoneLabelsSync() for whichever
+      // zone is hovered/dragged/being edited, ahead of every other zone.
+      prio: 1
+    };
+    zoneLabels.push(entry);
+    el.addEventListener('dblclick', function(e){
+      e.stopPropagation();   // never let it reach the canvas underneath (ring pick/orbit)
+      zoneLabelBeginEdit(entry);
+    });
+  });
+
+  const baseArr = zoneRingPositionsAt(0), topArr = zoneRingPositionsAt(1);
+  const baseBasis = zoneBasisFromPositions(baseArr), topBasis = zoneBasisFromPositions(topArr);
+  if(baseBasis){
+    const el = makeChip('zone-tag zone-tag-scale', null);
+    zoneLabelSetText(el, window.__zoneMmFromT ? window.__zoneMmFromT(0) : 0, 'base');
+    // prio 2, below a zone chip's prio 1 (see that push above): the wall's
+    // own extent mark is informational only, not editable, and the mm value
+    // it shows is redundant with a zone edge parked at the same height --
+    // it should be the one to yield a collision, not the one blocking a
+    // real edge from ever being reachable.
+    zoneLabels.push({ el: el, basis: baseBasis, t: 0, zoneIdx: -1, edge: null, prio: 2 });
+  }
+  if(topBasis){
+    const el = makeChip('zone-tag zone-tag-scale', null);
+    zoneLabelSetText(el, window.__zoneMmFromT ? window.__zoneMmFromT(1) : 0, 'top');
+    zoneLabels.push({ el: el, basis: topBasis, t: 1, zoneIdx: -1, edge: null, prio: 2 });
+  }
+
+  zoneLabelsSync();
+}
+
+// Keeps a single ring's chip (text + reprojection basis) in step with the
+// ring during a live drag, without a full zoneLabelsRebuild() (which would
+// tear down and recreate every chip's DOM element every drag frame). Matched
+// by (zoneIdx, edge) rather than array index -- same reasoning as the
+// hover re-resolve in showZoneRings -- so it can't silently update the wrong
+// chip if array ordering ever changes. Called from zoneRingApplyT, which
+// every drag path (axis-drag, in-model edge-drag, in-model band-slide)
+// already funnels through, so this needs no new call sites of its own.
+function zoneLabelSyncRing(ring){
+  // A ring's basis can legitimately come back null near an edge (t->0/1,
+  // zoneRingPositionsAt running off the sampled wall buffer) -- mirrors the
+  // guard zoneLabelsRebuild already has for the same reason (its own
+  // "if(!ring.basis) return;" a few lines up). Skipping here leaves the
+  // label showing its last good position/text for one frame rather than
+  // poisoning it with a null basis, which zoneLabelsSync's per-frame
+  // reprojection (render(), via l.basis.cx/.cz/.r) would then dereference
+  // and crash on -- exactly what __zoneRingsMoveZone's new call into this
+  // function (the modal axis drag path) started hitting at extreme t.
+  if(!ring.basis) return;
+  const l = zoneLabels.find(function(o){ return o.zoneIdx === ring.zoneIdx && o.edge === ring.edge; });
+  if(!l) return;
+  l.t = ring.t;
+  l.basis = ring.basis;
+  const mm = window.__zoneMmFromT ? window.__zoneMmFromT(ring.t) : 0;
+  zoneLabelSetText(l.el, mm, null);
+}
+
+// Reprojects every label to the current camera, every render() -- same
+// per-frame DOM-tracks-a-3D-point idiom as the measure tag / cage tag.
+// Exposed as window.__zoneLabelSync for the same TDZ reason those use.
+function zoneLabelsSync(){
+  if(!zoneLabelHost) return;
+  if(!zoneLabels.length){ zoneLabelHost.style.display = 'none'; return; }
+  zoneLabelHost.style.display = '';
+
+  const meta = window.__previewWallMeta;
+  if(!meta){ zoneLabels.forEach(function(l){ l.el.style.display = 'none'; }); return; }
+
+  // Screen-right direction in world XZ, once per sync -- every chip anchors
+  // to its ring's silhouette edge along this same direction, so the whole
+  // column of chips lines up vertically rather than scattering around the
+  // model.
+  let fx = camera.position.x - controls.target.x, fz = camera.position.z - controls.target.z;
+  const flen = Math.hypot(fx, fz);
+  if(flen < 1e-6){ fx = 0; fz = 1; } else { fx /= flen; fz /= flen; }
+  const rightX = fz, rightZ = -fx;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  const placed = [];   // {sy} of chips already placed, for the collision cull
+
+  const hoveredZone = zoneRingActive >= 0 ? zoneRings[zoneRingActive].zoneIdx
+                     : (zoneRingHover >= 0 ? zoneRings[zoneRingHover].zoneIdx : zoneBandHover);
+
+  const ordered = zoneLabels.slice().sort(function(a, b){
+    const pa = (hoveredZone >= 0 && a.zoneIdx === hoveredZone) ? 0 : a.prio;
+    const pb = (hoveredZone >= 0 && b.zoneIdx === hoveredZone) ? 0 : b.prio;
+    return pa - pb;
+  });
+
+  ordered.forEach(function(l){
+    const y = meta.wallOff + l.t * meta.height;   // EXACT -- not the ring's own sampled Y,
+                                                   // so the printed number and the chip's
+                                                   // height can never disagree.
+    v.set(l.basis.cx + rightX*l.basis.r, y, l.basis.cz + rightZ*l.basis.r).project(camera);
+    if(v.z < -1 || v.z > 1){ l.el.style.display = 'none'; return; }
+    const sx = rect.left + (v.x+1)/2*rect.width;
+    const sy = rect.top + (1-v.y)/2*rect.height;
+
+    // Also immune to the collision cull below while its inline edit <input>
+    // is open -- getting hidden mid-edit would strand a focused, invisible
+    // input the user is actively typing into.
+    const isHovered = (hoveredZone >= 0 && l.zoneIdx === hoveredZone) || l.el === zoneLabelEditingEl;
+    for(let i = 0; i < placed.length; i++){
+      if(!isHovered && Math.abs(placed[i] - sy) < ZONE_LABEL_GAP_PX){
+        l.el.style.display = 'none';
+        return;
+      }
+    }
+    placed.push(sy);
+
+    l.el.style.display = '';
+    l.el.style.top = Math.round(sy) + 'px';
+    let left = sx + ZONE_LABEL_OFF_PX;
+    const w = l.el.offsetWidth;
+    if(left + w > rect.left + rect.width - 6) left = sx - w - ZONE_LABEL_OFF_PX;
+    left = Math.max(rect.left + 6, left);
+    l.el.style.left = Math.round(left - rect.left) + 'px';
+
+    if(l.el === zoneLabelEditingEl) return;   // its only child is the <input> -- nothing below to sync
+    // Derived facts (span, zone number) only on the HOVERED/DRAGGED zone's
+    // HI chip -- present on engagement, never competing with the mm.
+    const metaSpan = l.el.querySelector('.zone-tag-meta');
+    if(metaSpan && l.zoneIdx === -1) return;   // scale chip keeps its own fixed meta text
+    if(isHovered && l.edge === 'hi'){
+      const lo = zoneLabels.find(function(o){ return o.zoneIdx === l.zoneIdx && o.edge === 'lo'; });
+      const span = lo ? Math.abs(l.t - lo.t) * meta.height : 0;
+      const text = 'span ' + span.toFixed(2) + ' mm, zone ' + (l.zoneIdx + 1);
+      if(metaSpan) metaSpan.textContent = text;
+      else {
+        const s = document.createElement('span');
+        s.className = 'zone-tag-meta';
+        s.textContent = text;
+        l.el.appendChild(s);
+      }
+    } else if(metaSpan){
+      metaSpan.remove();
+    }
+  });
+}
+window.__zoneLabelSync = zoneLabelsSync;
+
+window.showZoneRings = function(zonesList){
+  if(!zonesList || !zonesList.length || (typeof viewerModeActive === 'function' && viewerModeActive())){
+    window.hideZoneRings();
+    return;
+  }
+  // Rebuild wholesale -- cheap (at most 2*ZONE_MAX = 16 rings), and simpler
+  // than diffing against the previous set. Guarded against a concurrent drag
+  // by the caller (designer.js's refreshZoneRings checks
+  // window.__zoneRingDragActive before ever calling this).
+  const wasHoverIdx = zoneRingHover >= 0 ? zoneRings[zoneRingHover] : null;
+  const wasBandHover = zoneBandHover;
+  if(zoneRingGroup){
+    zoneRings.forEach(function(r){ r.line.geometry.dispose(); r.line.material.dispose(); });
+    scene.remove(zoneRingGroup);
+  }
+  zoneRingGroup = new THREE.Group();
+  zoneRings = [];
+  zonesList.forEach(function(zi){
+    const color = new THREE.Color(zi.color);
+    [['lo', zi.t_lo], ['hi', zi.t_hi]].forEach(function(pair){
+      const edge = pair[0], t = pair[1];
+      const posArr = zoneRingPositionsAt(t);
+      if(!posArr) return;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+      const mat = new THREE.LineBasicMaterial({
+        color: color, depthTest: false, depthWrite: false,
+        transparent: true, opacity: 1.0
+      });
+      const line = new THREE.LineLoop(geo, mat);
+      line.renderOrder = 21;   // one above the cage dots' 20 -- a ring is a
+                                // coarser target and must not hide behind
+                                // the semi-transparent draft.
+      zoneRingGroup.add(line);
+      // ring.color is the ring's OWN, un-lerped colour -- zoneRingSetHoverStyle
+      // below lerps material.color toward white and must always have this to
+      // lerp FROM, never the (possibly already-lit) current material.color.
+      const ring = { zoneIdx: zi.idx, edge: edge, line: line, t: t, colorHex: zi.color, color: color };
+      zoneRingApplyT(ring, t);   // fills in k0/basis (pos/geometry already set above)
+      zoneRings.push(ring);
+    });
+  });
+  scene.add(zoneRingGroup);
+  // Re-resolve hover by (zoneIdx, edge)/(zoneIdx) rather than array index --
+  // the rebuild may have changed ordering/count.
+  zoneRingHover = -1;
+  if(wasHoverIdx){
+    for(let i = 0; i < zoneRings.length; i++){
+      if(zoneRings[i].zoneIdx === wasHoverIdx.zoneIdx && zoneRings[i].edge === wasHoverIdx.edge){
+        zoneRingHover = i; break;
+      }
+    }
+  }
+  zoneBandHover = -1;
+  if(wasBandHover >= 0 && zoneRings.some(function(r){ return r.zoneIdx === wasBandHover; })){
+    zoneBandHover = wasBandHover;
+  }
+  zoneRingSetHoverStyle();
+  zoneLabelsRebuild();
+  render();
+};
+
+// Moves one zone's two existing rings to new edge heights IN PLACE, instead
+// of showZoneRings()'s wholesale dispose-and-rebuild of every ring and every
+// label chip -- that rebuild is fine paid once per debounced preview regen
+// (its caller, refreshZoneRings), not once per pointermove. Used only by the
+// modal axis-handle drag (designer.js's setZoneEdge), which -- unlike the
+// in-model ring drag -- has no live ring object of its own to update
+// directly. Returns false (do nothing else) when this zone currently has no
+// live rings to move, e.g. the design is out of zone-overrides scope, the
+// zone is disabled, or the modal just opened and showZoneRings() hasn't run
+// yet -- the caller falls back to the full refresh in that case.
+window.__zoneRingsMoveZone = function(zoneIdx, tLo, tHi){
+  if(!zoneRings.length) return false;
+  let matched = false;
+  zoneRings.forEach(function(r){
+    if(r.zoneIdx !== zoneIdx) return;
+    matched = true;
+    zoneRingApplyT(r, r.edge === 'lo' ? tLo : tHi);
+    // zoneRingApplyT's OWN call to zoneLabelSyncRing is gated on
+    // window.__zoneRingDragActive (false here -- this is the modal path,
+    // not the in-model one), because during showZoneRings()'s rebuild
+    // zoneLabels still holds the previous build's about-to-be-discarded
+    // elements (see that gate's own comment). Call it explicitly instead --
+    // no double call, since the in-model path never reaches this function.
+    zoneLabelSyncRing(r);
+  });
+  if(matched) render();
+  return matched;
+};
+
+window.hideZoneRings = function(){
+  if(zoneRingGroup){
+    zoneRings.forEach(function(r){ r.line.geometry.dispose(); r.line.material.dispose(); });
+    scene.remove(zoneRingGroup);
+    zoneRingGroup = null;
+  }
+  zoneRings = [];
+  zoneRingHover = -1;
+  zoneBandHover = -1;
+  zoneRingActive = -1;
+  zoneDragBody = false;
+  window.__zoneRingDragActive = false;
+  zoneSetHoverLock(false);
+  zoneLabels = [];
+  if(zoneLabelHost) zoneLabelHost.innerHTML = '';
+  render();
+};
+
+// Test/debug hook, mirroring window.__cageDebug's shape and purpose.
+window.__zoneDebug = function(){
+  const rect = renderer.domElement.getBoundingClientRect();
+  function screenOf(ring){
+    if(!ring.pos) return null;
+    const v = new THREE.Vector3(ring.pos[0], ring.pos[1], ring.pos[2]).project(camera);
+    if(v.z < -1 || v.z > 1) return null;
+    return [rect.left + (v.x+1)/2*rect.width, rect.top + (1-v.y)/2*rect.height];
+  }
+  return {
+    canvas: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+    ringCount: zoneRings.length,
+    hover: zoneRingHover, bandHover: zoneBandHover,
+    dragActive: zoneRingActive >= 0, dragBody: zoneDragBody, dragSlide: zoneDragSlide,
+    controlsEnabled: controls.enabled,
+    hoverLocked: controls.mouseButtons.LEFT === null,
+    rings: zoneRings.map(function(r){
+      return { zoneIdx: r.zoneIdx, edge: r.edge, t: r.t, k0: r.k0, screen: screenOf(r) };
+    }),
+    labels: zoneLabels.map(function(l){
+      return {
+        text: l.el.textContent, visible: l.el.style.display !== 'none',
+        color: l.el.style.color, screen: [parseFloat(l.el.style.left)||0, parseFloat(l.el.style.top)||0]
+      };
+    }),
+    bandPickAt: function(x, y){ return zoneBandPickAt(x, y); }
+  };
+};
+
 // ---- measure tool -----------------------------------------------------------
 // A read-only instrument. It reports distances read off whatever is already
 // on screen -- the loaded G-code's toolpath in G-code Viewer mode, or the
@@ -2436,8 +3514,8 @@ function measureBuildGrid(){
 // Design mode has no scrubber -- the whole draft is always on screen.
 function measureDrawnSegs(){
   if(!viewerModeActive()) return previewPositions ? previewPositions.length/6 : 0;
-  if(!pathObj || !pathObj.geometry || !extArr) return 0;
-  const n = pathObj.geometry.instanceCount;
+  if(!pathObj || !extArr) return 0;
+  const n = pathObj.count;
   const all = extArr.length/6;
   return (n == null || !isFinite(n)) ? all : Math.min(n, all);
 }
@@ -2571,6 +3649,158 @@ function measurePick(clientX, clientY){
   // is the toolpath itself and not the sampling lattice.
   measureClosestOnSeg(msSeg[best], ray, msPoint);
   return { point: msPoint.clone(), seg: msSeg[best] };
+}
+
+// ---------------------------------------------------------------------------
+// Right-click context menu on the 3-D model: Zone Overrides entry point.
+// "Right-click model on the build plate" per the feature brief -- the other
+// entry point is #zone-btn in the Texture step (designer.js), for anyone who
+// never discovers the right-click. Design mode only: Zone Overrides is a
+// generation-time parameter of the CURRENT design, not a property of
+// whatever G-code happens to be loaded in G-code Viewer mode, so the native
+// browser menu is left alone there.
+// ---------------------------------------------------------------------------
+// Chrome colour (subsystem identity: entry button, modal, context-menu dot)
+// stays --zone / ZONE_PALETTE[0] -- see ZONE_PALETTE's own definition below
+// for the per-zone identity palette this feature actually paints bands with.
+const CTX_DRAG_PX = 4;       // pointer travel past which a right-press counts as a pan, not a click
+
+let ctxDownX = 0, ctxDownY = 0, ctxDownButton = -1;
+renderer.domElement.addEventListener('pointerdown', function(e){
+  ctxDownButton = e.button;
+  ctxDownX = e.clientX; ctxDownY = e.clientY;
+}, true);
+
+const ctxMenuEl = document.getElementById('canvas-ctx-menu');
+
+function hideCtxMenu(){
+  if(ctxMenuEl) ctxMenuEl.style.display = 'none';
+}
+
+// Context-aware: right-clicking a spot already inside a zone's band leads
+// with editing/removing THAT zone; right-clicking bare model offers to add
+// one there; "Zone Overrides..." (the all-zones form) is always present.
+// "Add zone here" never opens the modal -- the zone appears with its rings
+// and mm labels immediately, ready to drag; the modal is reached only when
+// the user actually wants to set a texture (see openModal's own comment in
+// designer.js for why every add used to force it open, and the friction
+// that caused).
+function openCtxMenu(clientX, clientY){
+  if(!ctxMenuEl || !window.__openZoneModal) return;
+  // Force a fresh pick grid: msGrid only rebuilds itself when null (see
+  // measurePick's own comment), so a right-click right after editing a
+  // slider would otherwise pick against the PREVIOUS draft's geometry.
+  msGrid = null;
+  const hit = measurePick(clientX, clientY);
+  const seedT = (hit && hit.point && window.__zoneTFromWorldY)
+    ? window.__zoneTFromWorldY(hit.point.y) : null;
+  const bandIdx = zoneBandPickAt(clientX, clientY);
+
+  if (seedT == null && bandIdx < 0) {
+    if (window.__openPresetMenu) {
+      window.__openPresetMenu(clientX, clientY);
+      return;
+    }
+  }
+
+  ctxMenuEl.innerHTML = '';
+
+  function addItem(label, swatchColor, onClick, disabled){
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'ctx-item';
+    if(disabled) item.disabled = true;
+    const dot = document.createElement('span');
+    dot.className = swatchColor ? 'zo-row-swatch' : 'zo-dot active';
+    if(swatchColor) dot.style.background = swatchColor;
+    item.appendChild(dot);
+    item.appendChild(document.createTextNode(label));
+    if(!disabled) item.addEventListener('click', function(){ hideCtxMenu(); onClick(); });
+    ctxMenuEl.appendChild(item);
+    return item;
+  }
+  function addSep(){
+    const sep = document.createElement('div');
+    sep.className = 'ctx-sep';
+    ctxMenuEl.appendChild(sep);
+  }
+
+  if(bandIdx >= 0){
+    const ring = zoneRings.find(function(r){ return r.zoneIdx === bandIdx; });
+    const color = ring ? ring.colorHex : ZONE_PALETTE[0];
+    addItem('Edit zone ' + (bandIdx+1) + ' textures...', color, function(){
+      window.__zoneOpenModalAt(bandIdx);
+    });
+    if(window.__zoneRemove){
+      addItem('Remove zone ' + (bandIdx+1), color, function(){
+        window.__zoneRemove(bandIdx);
+      });
+    }
+    addSep();
+  }
+
+  if(seedT != null && window.__zoneAddAt){
+    const canAdd = !window.__zoneCanAdd || window.__zoneCanAdd();
+    addItem(canAdd ? 'Add zone here' : 'Add zone here (max 8)', null, function(){
+      window.__zoneAddAt(seedT);
+    }, !canAdd);
+  }
+
+  addItem('Zone Overrides…', null, function(){
+    window.__openZoneModal(null);
+  });
+
+  // Clamp inside the viewport, same idea as the parameter tooltip's own
+  // position() -- a menu opened near the right/bottom edge must not overflow.
+  ctxMenuEl.style.left = '0px'; ctxMenuEl.style.top = '0px';
+  ctxMenuEl.style.display = 'block';
+  const mw = ctxMenuEl.offsetWidth, mh = ctxMenuEl.offsetHeight;
+  const margin = 8;
+  let x = clientX, y = clientY;
+  if(x + mw + margin > window.innerWidth) x = window.innerWidth - mw - margin;
+  if(y + mh + margin > window.innerHeight) y = window.innerHeight - mh - margin;
+  ctxMenuEl.style.left = Math.max(margin, Math.round(x)) + 'px';
+  ctxMenuEl.style.top = Math.max(margin, Math.round(y)) + 'px';
+}
+
+if(ctxMenuEl){
+  renderer.domElement.addEventListener('contextmenu', function(e){
+    e.preventDefault();
+    if(viewerModeActive()) return;                    // Design-mode tool only
+    if(measureOn) return;                              // measure tool owns the pointer
+    // Test the explicit drag flags, NOT controls.mouseButtons.LEFT -- that
+    // also goes null on a mere HOVER (cageSetHoverLock/zoneSetHoverLock), so
+    // testing it here would suppress the menu just because the pointer rests
+    // on a cage handle or a Zone Overrides ring, not only during a real drag.
+    if(window.__silDragActive || window.__zoneRingDragActive) return;
+    const moved = Math.abs(e.clientX - ctxDownX) > CTX_DRAG_PX ||
+                  Math.abs(e.clientY - ctxDownY) > CTX_DRAG_PX;
+    if(ctxDownButton === 2 && moved) return;            // right-drag pan, not a click
+    openCtxMenu(e.clientX, e.clientY);
+  });
+  document.addEventListener('pointerdown', function(e){
+    if(ctxMenuEl.style.display !== 'none' && !ctxMenuEl.contains(e.target)) hideCtxMenu();
+    if(window.__closePresetMenu) {
+      const presetMenu = document.getElementById('preset-context-menu');
+      if (presetMenu && presetMenu.style.display !== 'none' && !presetMenu.contains(e.target)) {
+        window.__closePresetMenu();
+      }
+    }
+  }, true);
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') {
+      hideCtxMenu();
+      if(window.__closePresetMenu) window.__closePresetMenu();
+    }
+  });
+  renderer.domElement.addEventListener('wheel', function(){
+    hideCtxMenu();
+    if(window.__closePresetMenu) window.__closePresetMenu();
+  }, { passive: true });
+  controls.addEventListener('change', function(){
+    hideCtxMenu();
+    if(window.__closePresetMenu) window.__closePresetMenu();
+  });
 }
 
 // One horizontal cross-section through `p`, using samples within +/-`band` of
@@ -3103,6 +4333,17 @@ function measureReload(){
 // viewer so the card's own collapsed/expanded state survives.
 function syncCanvasChromeForMode(){
   const show = viewerModeActive() && !!extArr;
+
+  // Zone Overrides' interactive on-model rings + mm chips are a Design-mode
+  // tool (viewer.js's showZoneRings() already refuses to (re)build them in
+  // viewer mode -- see its own guard), but that guard is only checked the
+  // NEXT time a zone edit calls it. Switching modes with no further edit
+  // left whatever rings/chips were already built sitting in `scene` forever
+  // -- depthTest:false, so they render fully on top of the loaded G-code,
+  // geometrically stale (built from the Designer's own draft wall sample,
+  // not the real toolpath) and visibly detached from it. Same "ownership
+  // belongs to the mode switch" rule as the toolpath visibility below.
+  if(viewerModeActive() && window.hideZoneRings) window.hideZoneRings();
 
   // The measure rail is an instrument of BOTH modes now -- G-code Viewer
   // measures the loaded toolpath, Design measures the live draft -- so it is

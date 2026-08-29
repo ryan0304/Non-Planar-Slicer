@@ -1,125 +1,99 @@
 /* =========================================================================
-   Trident Non-Planar Viewer -- OrcaSlicer-inspired light theme
-   Clean, professional light interface matching Bambu Studio / OrcaSlicer
-   aesthetics. Instrument-grade panel with a light canvas, white cards, and
-   dark 3-D viewport. The --ok/--warn/--danger trio is reserved for safety
-   states (probe limits, melt-ceiling, risk flags, clamp events) -- nothing
-   else may use them. Values are darkened for WCAG 4.5:1+ on the light panel
-   background (verified via sRGB relative-luminance formula).
-   Canvas-floating overlays (telemetry, machine readout, measure card, tool
-   rail) keep their hardcoded dark rgba backgrounds from their own rules
-   below -- they sit over the dark 3-D scene, not the light panel.
+   Trident Non-Planar Viewer -- Instrument Dark Theme
+   Precision-instrument / CNC-metrology aesthetic. Deep slate-black dark palette
+   (lifted off near-black so long sessions are easier on the eyes), systematic
+   spacing, monospaced data readouts. The --ok/--warn/--danger trio is reserved
+   for safety states (probe limits, melt-ceiling, risk flags, clamp events) --
+   nothing else may use them. All foreground inks pass WCAG AA/AAA standards.
    ========================================================================= */
 :root {
-  /* OrcaSlicer light canvas: muted blue-grey, matching Bambu Studio's
-     sidebar background. Not pure white -- the slight grey keeps it distinct
-     from the white panel cards stacked on top of it. */
-  --bg:#eef0f4;
-  /* Panel/card surface: white. Every group card and control row sits on
-     white so it pops off the grey shell. */
-  --surface:#ffffff;
-  /* Border/divider: a calm light grey. Hairline on inputs, card borders. */
-  --line:#d1d5db;
-  /* Primary text: near-black, same as DESIGN.md's {colors.ink} #1d1d1f.
-     High contrast on white (21:1) and on the panel bg (~14:1). */
-  --ink:#1d1d1f;
-  /* Muted text: medium grey. 4.7:1 on white -- passes WCAG AA. */
-  --ink-muted:#6b7280;
+  /* Instrument dark canvas: deep slate-black base */
+  --bg:#121417;
+  /* Panel and modal card surface */
+  --surface:#181b20;
+  /* Raised interactive surface: group cards, buttons, popovers */
+  --surface-raised:#21262d;
+  /* Hairline border/divider: subtle and crisp */
+  --line:#2d333b;
 
-  /* Action Blue -- DESIGN.md's primary-focus #0071e3, which measures 4.7:1
-     against white: passes WCAG AA for large text, and 5.8:1 for the hover
-     step. Used for accent text, borders, focus rings and unfilled active
-     indicators. On this light panel --accent works directly (no
-     sky-link-blue needed -- that was the dark-surface variant). */
-  --accent:#0071e3;
-  /* Filled primary button: same #0071e3 (4.7:1 against white text). */
+  /* Primary text: high-contrast clean ink (15.4:1 on --bg, 14.2:1 on --surface) */
+  --ink:#e6edf3;
+  /* Muted text: secondary labels and captions (5.9:1 on --bg, passes AA) */
+  --ink-muted:#8b949e;
+
+  /* Sky Link Blue -- interactive accent for links, borders, focus rings
+     and unfilled active-tab indicators. */
+  --accent:#2997ff;
+  /* Filled Action Blue: solid button fill with white text (4.7:1 on white) */
   --accent-fill:#0071e3;
-  /* Hover step: 5.8:1 against white -- passes WCAG AA for normal text. */
+  /* Hover step for filled action buttons */
   --accent-fill-hover:#0b5ed7;
 
-  /* Safety tokens -- darkened from their dark-theme values so they reach
-     WCAG's >=5.8:1 floor for safety copy on the white panel background.
-       --ok   #147a45  : 5.6:1 on white (dark green, readable + distinct)
-       --warn #a16207  : 5.2:1 on white (amber/brown, not confused with --ok)
-       --danger #c0392b: 5.9:1 on white (strong red)
-     The canvas-floating overlays that use these tokens (e.g. stale-badge
-     with rgba(255,180,84,.14) background) still read the darker values --
-     dark amber on a translucent amber tint is legible and the token comment
-     at line 5 is the authority for what these mean. */
-  --ok:#147a45;
-  --warn:#a16207;
-  --danger:#c0392b;
+  /* Safety tokens -- reserved strictly for machine/print safety states:
+       --ok   #3fdca0 : 10.6:1 on --bg (emerald green)
+       --warn #ffb454 : 9.7:1 on --bg (distinct amber)
+       --danger #ff5d5d : 6.1:1 on --bg (coral red) */
+  --ok:#3fdca0;
+  --warn:#ffb454;
+  --danger:#ff5d5d;
 
-  /* Raised interactive surface: very light grey, one step above --surface.
-     Used for mode-bar pill background, hover states, machine bar. */
-  --surface-raised:#f3f4f6;
-  /* Accent hover: slightly darker blue for hover text/border states. */
-  --accent-hover:#0b5ed7;
-  /* Text on filled accent: always white. */
+  /* Interactive accent hover */
+  --accent-hover:#58a6ff;
+  /* Text on filled accent */
   --ink-on-accent:#ffffff;
 
-  /* Inputs read as slightly recessed vs white panel cards. A very pale grey
-     distinguishes them from a flat white field that looks like dead space. */
-  --input-bg:#f9fafb;
+  /* Recessed-well surface for inputs and textareas */
+  --input-bg:#0d0f12;
 
-  /* "Purple modifiers" accent -- reserved exclusively for the Point Edit
-     Modifiers subsystem. Darkened from #a78bfa (3:1 on white, FAILS) to
-     #6d28d9 (6.2:1 on white, PASSES WCAG AA). JS does not read this token
-     directly (no JS mirror) so the value can be adjusted for light-mode
-     contrast freely. Do not reuse elsewhere. */
-  --accent-purple:#6d28d9;
-  --accent-purple-hover:#7c3aed;
-  --ink-on-purple:#f5f3ff;
+  /* "Purple modifiers" accent -- reserved exclusively for Point Edit Modifiers */
+  --accent-purple:#a78bfa;
+  --accent-purple-hover:#c4b5fd;
+  --ink-on-purple:#160b2b;
 
-  /* Instrument cyan -- reserved for the measure tool. The JS mirror is
-     MEASURE_COL in viewer.js (keep the two in step). On the dark canvas
-     overlay this cyan reads well; in the panel, it only appears as a border
-     and text on the measure card which has its own dark hardcoded background
-     (rgba 30,33,36,.94 -- see .measure-card below), so the value is
-     unchanged. Do not reuse elsewhere. */
+  /* Instrument cyan -- reserved for the measure tool */
   --measure:#22d3ee;
   --measure-hover:#67e8f9;
   --measure-dim:rgba(34,211,238,.14);
 
-  /* Shape-cage amber -- reserved for the Freeform (3D) cage. JS mirror is
-     0xffc24c in cageRestyle() (viewer.js), keep in step. Value unchanged --
-     only used in the dark canvas overlay (.cage-tag). Do not reuse elsewhere. */
+  /* Zone overrides reserved color */
+  --zone:#ff6fd8;
+  --zone-hover:#ff9aeb;
+  --zone-dim:rgba(255,111,216,0.15);
+  --zone-c1:#ff6fd8;
+  --zone-c2:#9daa0e;
+  --zone-c3:#bc57db;
+  --zone-c4:#92e8a3;
+  --zone-c5:#6fed26;
+
+  /* Reserved colors for tools/cages */
   --cage:#ffc24c;
 
-  /* Busy-state: blue to match --accent. Track uses the raised surface. */
+  /* Busy-state system */
   --busy: var(--accent);
-  --busy-track: var(--line);
+  --busy-track: var(--surface-raised);
 
-  /* Font stack: same as before -- Apple platforms get real SF Pro, others
-     get Inter per DESIGN.md's font-substitute note. */
+  /* Font stack */
   --font-ui: -apple-system, BlinkMacSystemFont, "Inter", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 
-  /* 4px spacing base -- unchanged. */
+  /* 4px spacing base */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-6:24px; --sp-8:32px; --sp-12:48px;
 
-  /* Radius grammar -- unchanged. */
+  /* Radius grammar */
   --radius-sm:8px;
   --radius-md:11px;
   --radius-lg:18px;
   --radius-pill:9999px;
   --radius: var(--radius-sm);
 
-  /* Shadow: slightly heavier opacity to lift modals off the light background.
-     Canvas overlays use this too -- it still separates them from the dark
-     3-D scene. */
-  --shadow-float: 0 8px 24px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.08);
+  /* Elevation shadow for floating cards and dialogs */
+  --shadow-float: 0 8px 24px rgba(0,0,0,.45), 0 2px 6px rgba(0,0,0,.25);
 
-  /* Legacy aliases read by designer.js's curve-editor canvas via
-     getComputedStyle (css('--panel'), css('--accent'), css('--muted'),
-     css('--warn')). --panel must equal --surface so label chips drawn on
-     the white cv-editor canvas blend into the white card background.
-     --accent (#0071e3) on the blue curve line reads well against the white
-     cv-editor canvas. --warn (#a16207) gives a visible amber band on white. */
+  /* Legacy aliases read by designer.js curve editor */
   --muted: var(--ink-muted);
   --panel: var(--surface);
 
-  /* Top bar height -- used by .top-bar and .app-body to keep in sync. */
+  /* Top bar height */
   --top-bar-h: 44px;
 }
 
@@ -211,18 +185,17 @@ select {
   appearance:none; -webkit-appearance:none; -moz-appearance:none;
   background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:var(--radius-sm); font-size:12px; padding:3px 24px 3px 5px;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23989898' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%238b949e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
   background-repeat:no-repeat; background-position:right 8px center;
   transition:border-color .15s;
 }
-/* Hover/focus chevron is plain %23e8eaed, the literal value of --ink: a
-   data-URI SVG's XML text can't reference a CSS custom property. */
+/* Hover/focus chevron is plain %23e6edf3, the literal value of --ink */
 select:hover {
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23e8eaed' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23e6edf3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 2l5 5 5-5'/></svg>");
 }
 select:focus {
   border-color:var(--accent); outline:none;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23e8eaed' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 6l5 -5 5 5'/></svg>");
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path fill='none' stroke='%23e6edf3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 6l5 -5 5 5'/></svg>");
 }
 
 html,body {
@@ -230,9 +203,15 @@ html,body {
   background:var(--bg); color:var(--ink);
   font-family:var(--font-ui);
   overflow:hidden;
-  /* OrcaSlicer-style light theme background */
   background-color:var(--bg);
 }
+
+/* Custom dark scrollbar discipline */
+::-webkit-scrollbar { width:7px; height:7px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--line); border-radius:var(--radius-pill); }
+::-webkit-scrollbar-thumb:hover { background:var(--ink-muted); }
+* { scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
 
 /* Tabular, monospaced treatment for read-only machine/measured output only. */
 .tm, .gen-report, .tl-read {
@@ -257,10 +236,8 @@ input, select, textarea {
 }
 
 /* =========================================================================
-   OrcaSlicer-style app layout: a persistent top bar spanning the full
-   width, below which the canvas + splitter + panel sit in a horizontal row.
-   The top bar holds the brand mark, mode tabs and search -- always visible,
-   never inside the scrolling panel.
+   App layout: a persistent top bar spanning the full width, below which
+   the canvas + splitter + panel sit in a horizontal row.
    ========================================================================= */
 .app-shell { display:flex; flex-direction:column; height:100%; }
 
@@ -269,9 +246,9 @@ input, select, textarea {
   flex:0 0 var(--top-bar-h);
   display:flex; align-items:center; gap:var(--sp-3);
   padding:0 var(--sp-4);
-  background:#1c1c1e;  /* OrcaSlicer's dark title bar */
-  border-bottom:1px solid #111;
-  box-shadow:0 1px 3px rgba(0,0,0,.25);
+  background:var(--surface);
+  border-bottom:1px solid var(--line);
+  box-shadow:0 1px 4px rgba(0,0,0,.35);
   z-index:10; flex-shrink:0;
 }
 .top-bar-brand {
@@ -279,31 +256,31 @@ input, select, textarea {
   flex:0 0 auto;
 }
 .top-bar-title {
-  font-size:13px; font-weight:600; color:#e8eaed;
+  font-size:13px; font-weight:600; color:var(--ink);
   letter-spacing:-0.01em; white-space:nowrap;
   font-feature-settings:"ss03";
 }
-/* Mode bar inside top bar: same pill-segment style but on dark bg */
+/* Mode bar inside top bar: pill-segment style on dark bg */
 .top-bar .mode-bar {
   margin:0; flex:0 0 auto;
-  background:rgba(255,255,255,.08);
-  border-color:rgba(255,255,255,.12);
+  background:var(--surface-raised);
+  border:1px solid var(--line);
 }
 .top-bar .mode-btn {
-  color:rgba(255,255,255,.55); font-size:12px;
+  color:var(--ink-muted); font-size:12px;
 }
-.top-bar .mode-btn:hover { color:rgba(255,255,255,.9); }
-.top-bar .mode-btn.active { color:#fff; background:rgba(255,255,255,.18); }
+.top-bar .mode-btn:hover { color:var(--ink); }
+.top-bar .mode-btn.active { color:var(--ink-on-accent); background:var(--accent-fill); }
 /* Param search inside top bar */
 .top-bar .param-search { flex:1 1 auto; max-width:280px; margin:0; }
 .top-bar .param-search input {
-  background-color:rgba(255,255,255,.10); color:#e8eaed;
-  border-color:rgba(255,255,255,.15); font-size:12px;
+  background-color:var(--input-bg); color:var(--ink);
+  border-color:var(--line); font-size:12px;
   padding:5px 10px 5px 28px;
 }
-.top-bar .param-search input::placeholder { color:rgba(255,255,255,.4); }
+.top-bar .param-search input::placeholder { color:var(--ink-muted); }
 .top-bar .param-search input:focus {
-  background-color:rgba(255,255,255,.16); border-color:var(--accent);
+  background-color:var(--input-bg); border-color:var(--accent);
 }
 .top-bar-spacer { flex:1 1 auto; }
 
@@ -316,12 +293,10 @@ canvas { display:block; }
 .splitter { width:5px; flex:0 0 5px; background:var(--line); cursor:col-resize; transition:background .15s; }
 .splitter:hover, .splitter.dragging { background:var(--accent); }
 
-/* OrcaSlicer-width panel on the LEFT: 300px default, border-right separates from canvas */
+/* Sidebar panel on the LEFT */
 .panel { width:300px; flex:0 0 300px; background:var(--surface);
   border-right:1px solid var(--line);
-  padding:0; overflow-y:auto; display:flex; flex-direction:column; height:100%;
-  box-shadow:2px 0 8px rgba(0,0,0,.06); }
-/* Compact OrcaSlicer sidebar: tighter padding, no wasted whitespace */
+  padding:0; overflow-y:auto; display:flex; flex-direction:column; height:100%; }
 .panel-scroll { padding:8px 10px; overflow-y:auto; flex:1 1 auto; min-height:0; }
 /* 600, not 700 -- DESIGN.md's headline weight, with 700 held back for rare
    assertion (see .tl-read .turn-count and .cv-readout-mm below, the two
@@ -499,12 +474,12 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 
 .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   pointer-events:none; }
-/* Drop-a-gcode card: always over the dark 3-D scene -- keep dark bg */
-.overlay .card { pointer-events:auto; background:rgba(28,28,30,.94); border:1px solid rgba(255,255,255,.12);
+/* Drop-a-gcode card: floating over 3-D scene */
+.overlay .card { pointer-events:auto; background:rgba(24,27,32,.94); border:1px solid var(--line);
   border-radius:var(--radius-md); padding:28px 34px; text-align:center;
-  backdrop-filter:blur(20px) saturate(180%); box-shadow:0 8px 32px rgba(0,0,0,.5); }
-.card-title { font-size:14px; margin-bottom:6px; color:#e8eaed; }
-.overlay .card .sub { color:rgba(255,255,255,.5); }
+  backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
+.card-title { font-size:14px; margin-bottom:6px; color:var(--ink); }
+.overlay .card .sub { color:var(--ink-muted); }
 
 /* =========================================================================
    Machine readout strip -- the timeline scrubber (sparkline + scrub bar)
@@ -513,24 +488,16 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
    interaction. Live telemetry lives in the floating card below instead.
    ========================================================================= */
 .machine-readout { position:absolute; left:var(--sp-4); right:var(--sp-4); bottom:var(--sp-3);
-  background:rgba(30,33,36,.94); border:1px solid var(--line); border-radius:var(--radius-md);
+  background:rgba(24,27,32,.94); border:1px solid var(--line); border-radius:var(--radius-md);
   overflow:hidden; backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
 
 .spark { display:block; width:100%; height:26px; background:transparent; cursor:pointer; }
 
 .timeline { height:42px; display:flex; align-items:center; gap:var(--sp-2); padding:0 var(--sp-3);
   border-top:1px solid var(--line); }
-/* background is --accent-fill, not --accent: this is a solid chip with
-   white text on top, same contrast reasoning as .btn-primary (see the
-   --accent-fill token comment). font-weight 600, not 700 -- DESIGN.md's
-   ladder reserves 700 for rare assertion; a transport glyph doesn't need it
-   (contrast with .tl-read .turn-count below, which keeps 700 on purpose). */
 .timeline button { width:30px; height:26px; border:none; border-radius:var(--radius-sm); cursor:pointer;
   background:var(--accent-fill); color:var(--ink-on-accent); font-size:14px; font-weight:600;
   transition:background .15s, transform .1s; }
-/* No lift, no shadow bloom -- DESIGN.md's system-wide micro-interaction is a
-   press-scale, not a hover-elevate. Hover still moves colour so the row of
-   buttons stays legible as clickable without any motion. */
 .timeline button:hover { background:var(--accent-fill-hover); }
 .timeline button:active { transform:scale(0.95); }
 .timeline input[type=range] { flex:1; cursor:pointer; }
@@ -540,26 +507,23 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .tl-read .turn-count { color:var(--ink); font-weight:700; font-size:13px; }
 
 /* =========================================================================
-   Telemetry card -- Orca-style floating overlay, anchored top-right of the
-   canvas (mirrors .overlay .card's translucent-surface idiom). Collapsible
-   via #telemetry-toggle; state persisted in localStorage.
+   Telemetry card -- floating overlay, anchored top-right of the canvas.
+   Collapsible via #telemetry-toggle; state persisted in localStorage.
    ========================================================================= */
-/* Draft-preview badge -- top-left corner, so it never collides with the
-   telemetry card (which owns top-right at any collapsed/expanded height). */
 .draft-preview-label { position:absolute; top:16px; left:16px; z-index:5;
   padding:2px 8px; border-radius:var(--radius-pill); background:rgba(41,151,255,.18);
   backdrop-filter:blur(20px) saturate(180%);
   color:var(--accent-hover); font-size:11px; font-family:var(--font-ui); pointer-events:none; }
 
 .gcode-title { position:absolute; top:8px; left:50%; transform:translateX(-50%);
-  padding:3px 12px; border-radius:var(--radius-sm); background:rgba(30,33,36,0.86);
+  padding:3px 12px; border-radius:var(--radius-sm); background:rgba(24,27,32,0.88);
   color:var(--ink-muted); font-size:9.5px; font-weight:600; pointer-events:none;
   text-transform:uppercase; letter-spacing:.08em;
   z-index:5; font-family:var(--font-mono); max-width:60%; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; border:1px solid var(--line); }
 
 .telemetry-card { position:absolute; top:16px; right:16px; width:190px; z-index:5;
-  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius-md);
+  background:rgba(24,27,32,.92); border:1px solid var(--line); border-radius:var(--radius-md);
   overflow:hidden; backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
 .telemetry-header { display:flex; align-items:center; justify-content:space-between;
   padding:6px 8px; border-bottom:1px solid var(--line); }
@@ -571,10 +535,6 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .telemetry-toggle:hover { opacity:1; color:var(--ink); background:var(--surface-raised); }
 .telemetry-toggle:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
 .telemetry-card.collapsed .telemetry-toggle { transform:rotate(-90deg); }
-/* The collapsed rotation is (0,3,0) and outranks the shared
-   `.telemetry-toggle:active` press-scale at (0,2,0), so without this the
-   press feedback silently disappears in the collapsed state only. Both
-   transforms have to be composed in one declaration; they cannot cascade. */
 .telemetry-card.collapsed .telemetry-toggle:active { transform:rotate(-90deg) scale(0.95); }
 .telemetry-card.collapsed .readout-telemetry { display:none; }
 
@@ -587,66 +547,17 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 
 /* =========================================================================
    Tool rail + measure card -- canvas-side instruments.
-
-   Placement is the point: the rail is docked to the right edge of the canvas,
-   immediately beside the panel. The panel is where you change what gets
-   printed; the rail is where you inspect what is already there. Keeping the
-   two apart means nothing in the rail can be mistaken for a print parameter.
-
-   The rail is vertically centred; the card opens to its LEFT (never over the
-   panel, so the rail stays the visible anchor for "a tool is active") and is
-   anchored UP from just above the machine-readout strip. Centring the card on
-   the rail was the obvious thing and it was wrong: at full height it reached
-   up into the telemetry card and covered the nozzle rows. Bottom-anchoring
-   pins it between the two overlays that already own top-right and bottom, and
-   max-height keeps that true on a short viewport instead of trading the
-   collision for a taller card.
-
-   Colour is --measure (see the token comment for why it is not --accent).
    ========================================================================= */
-/* Right-hand overlay stack. The telemetry card owns the top-right corner
-   (16px inset, ~266px tall expanded) and the machine-readout strip owns the
-   bottom, so everything else on that side has to begin below the one and end
-   above the other. Declared once, here, because the rail and the measure card
-   were each calibrated by eye against whatever window happened to be open at
-   the time -- and both silently slid over the telemetry card's lower rows as
-   soon as the window got shorter. One shared free zone cannot drift apart. */
-/* --overlay-bottom defaults to 16px (nothing to clear yet) and only widens to
-   92px once .has-timeline is set -- i.e. once #tl-wrap (the machine-readout
-   strip) is actually on screen. Without this, the nav cube reserved 92px of
-   clearance for a strip that does not exist until a file is loaded, leaving
-   it floating over empty canvas. See load() in viewer.js for where the class
-   is added. */
 .canvas-wrap { --overlay-top:290px; --overlay-bottom:16px; }
 .canvas-wrap.has-timeline { --overlay-bottom:92px; }
-/* Collapsed telemetry frees the whole corner; reclaim it. Progressive
-   enhancement -- without :has() support the zone just stays at its expanded
-   value, which is correct, only less generous. */
 .canvas-wrap:has(#telemetry-card.collapsed) { --overlay-top:60px; }
 
 .tool-rail { position:absolute; right:12px; z-index:6;
-  /* Centred when there is room, pushed clear of the telemetry card when there
-     is not, and never allowed to reach the readout strip. This is only the
-     RESTING default -- the rail is dragged by its own button (see the "tool
-     rail: drag" IIFE in viewer.js, which tells a click from a drag by a few
-     px of travel), which switches it to an explicit left/top the same way
-     .measure-card's drag already does, and this CSS default stops applying
-     once it has. There is no separate grip or lock strip: the rail is one
-     button, and the drag affordance is the cursor alone.
-     touch-action:none so the same drag works on touch instead of being eaten
-     by the browser's scroll gesture; user-select:none so a drag across the
-     button's "MEASURE" label cannot start a text selection (viewer.js
-     deliberately does not preventDefault() the pointerdown, which would also
-     cost the button its focus). */
   top:min(max(50%, var(--overlay-top)), calc(100% - var(--overlay-bottom) - 64px));
   display:flex; flex-direction:column; gap:6px; padding:6px;
-  background:rgba(30,33,36,.92); border:1px solid var(--line); border-radius:var(--radius-md);
+  background:rgba(24,27,32,.92); border:1px solid var(--line); border-radius:var(--radius-md);
   backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float);
   cursor:grab; touch-action:none; user-select:none; }
-/* Only while a drag is actually running -- viewer.js adds the class once the
-   pointer crosses the movement threshold. .tool-btn keeps its own
-   cursor:pointer, so hovering the button reads as "click me" (its primary
-   action) and only the rail's 6px padding advertises the grab. */
 .tool-rail.rail-dragging, .tool-rail.rail-dragging .tool-btn { cursor:grabbing; }
 
 .tool-btn { display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -661,16 +572,10 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .tool-btn[aria-pressed="true"] { color:var(--measure); background:var(--measure-dim);
   border-color:var(--measure); }
 
-/* right:76px is only a defensive pre-JS fallback. In practice viewer.js
-   positions the card the instant it opens -- directly below the rail's
-   CURRENT spot, wherever the rail has been dragged to -- rather than at a
-   fixed canvas corner that has no relationship to where the Measure button
-   actually is once the rail moves. See the "tool rail" / "measure card:
-   drag / lock / reset" IIFEs in viewer.js. */
 .measure-card { position:absolute; right:76px; width:246px; z-index:6;
   bottom:var(--overlay-bottom);
   max-height:calc(100% - var(--overlay-top) - var(--overlay-bottom)); overflow-y:auto;
-  background:rgba(30,33,36,.94); border:1px solid var(--measure); border-radius:var(--radius-md);
+  background:rgba(24,27,32,.94); border:1px solid var(--measure); border-radius:var(--radius-md);
   backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); }
 .measure-head { display:flex; align-items:center; justify-content:space-between;
   padding:6px 8px; border-bottom:1px solid var(--line); }
@@ -682,32 +587,6 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
   transition:color .15s, background-color .15s, opacity .15s; }
 .measure-close:hover { opacity:1; color:var(--ink); background:var(--surface-raised); }
 
-/* =========================================================================
-   Orientation cube -- floating gizmo, bottom-left of the canvas. It is a
-   SEPARATE canvas element from the main renderer (see the comment above its
-   setup in viewer.js), so it sits on top of the main canvas in z-order and
-   simply intercepts every pointer event inside its own 132x132 box -- nothing
-   here can be mistaken for an OrbitControls drag on the model underneath,
-   even though dragging the cube itself now also orbits that same camera
-   (see the pointerdown/pointermove handlers in viewer.js).
-
-   left:16px keeps it clear of the panel/splitter on the left edge.
-   bottom:var(--overlay-bottom) sits flush at 16px with no file loaded, and
-   lifts to clear .machine-readout (bottom:12px, ~70px tall) once .has-timeline
-   is set on .canvas-wrap -- same anchor .measure-card uses. It never collides
-   with .measure-card (right:76px) or .tool-rail (right edge) because it lives
-   on the opposite side of the canvas, nor with .telemetry-card / #gcode-title
-   which own the top of the canvas.
-   ========================================================================= */
-/* 132px, not 112: adding the axis triad (viewer.js) pushed the camera back
-   (NAV_CAM_DIST 5.8 -> 6.9) to keep it framed, which shrank the projected
-   face and its baked label. 132px + the larger distance puts the label back
-   at ~13.4 CSS px, close to the ~13.5 CSS px floor the original 112px/5.8
-   pairing was calibrated to -- see the NAV_CAM_DIST comment in viewer.js for
-   the full derivation. Keep this in step with navRenderer.setSize() and the
-   label font in viewer.js; the three together decide legibility.
-   cursor:grab is the default affordance -- viewer.js's pointer handlers
-   override it to 'pointer' over a face and 'grabbing' mid-drag. */
 #navcube { position:absolute; left:16px; bottom:var(--overlay-bottom); width:132px; height:132px;
   z-index:6; touch-action:none; cursor:grab; }
 
@@ -721,8 +600,6 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
   border-color:var(--measure); font-weight:600; }
 
 .measure-read { padding:6px 8px 2px; min-height:64px; }
-/* Label left, value right -- same rhythm as .readout-telemetry, so the card
-   reads as a sibling of the telemetry card rather than a new dialect. */
 .mrow { display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-2);
   padding:3px 0; font-size:11px; color:var(--ink-muted); }
 .mrow b { font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--ink); }
@@ -736,20 +613,17 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
   padding:6px 8px; border-top:1px solid var(--line); }
 .measure-hint { font-size:10px; line-height:1.35; color:var(--ink-muted); }
 
-/* Floating value tag pinned to the measured span in the viewport. Positioned
-   from render() by projecting the span midpoint, so it tracks the orbit. */
+/* Floating value tag pinned to the measured span in the viewport */
 .measure-tag { position:absolute; z-index:6; pointer-events:none;
   transform:translate(-50%,-50%); padding:2px 7px; border-radius:var(--radius-sm);
-  background:rgba(30,33,36,.92); border:1px solid var(--measure);
+  background:rgba(24,27,32,.92); border:1px solid var(--measure);
   color:var(--measure); font-family:var(--font-mono); font-size:11.5px; font-weight:600;
   white-space:nowrap; }
 
-/* Shape-cage drag readout: how far this handle sits from its ORIGINAL
-   (undeformed) position. Sits above the dot rather than centred on it, so the
-   dot, the cursor and the ring stay visible while it is being dragged. */
+/* Shape-cage drag readout */
 .cage-tag { position:absolute; z-index:6; pointer-events:none;
   transform:translate(-50%,-100%); margin-top:-14px; padding:3px 8px; border-radius:var(--radius-sm);
-  background:rgba(30,33,36,.94); border:1px solid var(--cage);
+  background:rgba(24,27,32,.94); border:1px solid var(--cage);
   color:var(--cage); font-family:var(--font-mono); font-size:11.5px; font-weight:600;
   white-space:nowrap; text-align:center; line-height:1.45; }
 /* Secondary facts (the multiplier, the range end, the count of points moving
@@ -877,7 +751,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 }
 
 /* ---- silhouette mode bar (Symmetrical / Unsymmetrical) ---- */
-.sil-mode-bar { display:flex; gap:2px; padding:3px; background:var(--bg);
+.sil-mode-bar { display:flex; gap:2px; padding:3px; background:var(--surface-raised);
   border:1px solid var(--line); border-radius:var(--radius-sm); margin:6px 0; }
 .sil-mode-btn { flex:1; background:none; border:none; border-radius:var(--radius-sm); color:var(--ink-muted);
   font-size:11px; font-weight:600; padding:5px 2px; cursor:pointer;
@@ -1000,7 +874,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
    ========================================================================= */
 .sr-modal { position:fixed; inset:0; z-index:60; display:flex; align-items:center;
   justify-content:center; }
-.sr-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.62); }
+.sr-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.75); backdrop-filter:blur(4px); }
 .sr-modal-card { position:relative; width:min(440px, 92vw); max-height:88vh;
   display:flex; flex-direction:column; background:var(--surface);
   border:1px solid var(--line); border-radius:var(--radius-lg);
@@ -1158,13 +1032,9 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .pe-dot.active { background:var(--accent-purple); box-shadow:0 0 0 3px rgba(167,139,250,.22); }
 
 .pe-modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; }
-.pe-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
+.pe-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.75); backdrop-filter:blur(4px); }
 .pe-modal-card { position:relative; width:min(640px, 92vw); max-height:86vh; display:flex; flex-direction:column;
   background:var(--surface); border:1px solid var(--accent-purple); border-radius:var(--radius-lg);
-  /* --shadow-float, the one shared depth value used across every floating
-     surface in the app now -- was its own one-off 0 20px 60px rgba(0,0,0,.4)
-     tuned separately from .pm-modal-card's identical rule and .sr-modal-card's
-     different one; consolidated per the redesign brief. */
   box-shadow:var(--shadow-float); overflow:hidden; }
 .pe-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4);
   border-bottom:1px solid var(--line); flex:none; }
@@ -1194,9 +1064,6 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 /* =========================================================================
    Custom printer import/edit -- sidebar meta row + review modal. Ordinary
    --accent blue chrome (--accent-purple stays reserved for Point Edit).
-   --ok/--warn/--danger are used here only for the safety report and the
-   parsed/default/clamped source tags, which is exactly their reserved
-   purpose (see :root comment above).
    ========================================================================= */
 .pm-meta { margin-top:var(--sp-2); padding-top:var(--sp-2); border-top:1px solid var(--line); }
 .pm-meta-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -1210,24 +1077,16 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .pm-link-confirm { color:var(--danger); }
 
 .pm-modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; }
-.pm-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); }
+.pm-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.75); backdrop-filter:blur(4px); }
 .pm-modal-card { position:relative; width:min(760px, 94vw); max-height:88vh; display:flex; flex-direction:column;
   background:var(--surface); border:1px solid var(--accent); border-radius:var(--radius-lg);
-  /* --shadow-float, same reasoning as .pe-modal-card above. */
   box-shadow:var(--shadow-float); overflow:hidden; }
-/* Horizontal padding is --sp-6 (24px), not --sp-4: this card is up to 760px
-   wide and prose runs the full width, so 16px left the text visibly crowding
-   the border. Header, body and footer share the inset so everything lines up
-   on one vertical edge. Narrow viewports drop back to 16px below. */
 .pm-modal-header { display:flex; align-items:center; justify-content:space-between;
   padding:var(--sp-3) var(--sp-6); border-bottom:1px solid var(--line); flex:none; }
 .pm-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
 .pm-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4) var(--sp-6); }
 .pm-modal-footer { display:flex; align-items:center; justify-content:flex-end; gap:8px;
   padding:var(--sp-3) var(--sp-6); border-top:1px solid var(--line); flex:none; }
-/* Save's busy-line lives in the same flex row as Cancel/Back/Save -- push
-   it to the far left so it reads as "what's happening" beside the buttons
-   that are momentarily disabled, not squeezed between them. */
 .pm-modal-footer .busy-line { margin-right:auto; }
 @media (max-width: 560px) {
   .pm-modal-header, .pm-modal-footer { padding-left:var(--sp-4); padding-right:var(--sp-4); }
@@ -1236,10 +1095,6 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 
 .pm-drop { margin-bottom:0; }
 #pm-drop-status { margin-top:var(--sp-2); }
-/* .hint.tight-top pulls a caption up by 2px, which is right under a form row
-   but wrong under the drop zone: that has a visible dashed border, and the
-   -2px dragged the text into it (measured gap: -2px, i.e. overlapping).
-   Later in the file than .hint.tight-top and equal specificity, so this wins. */
 .pm-drop + .hint { margin-top:var(--sp-3); }
 .pm-error { margin-top:var(--sp-3); font-size:12px; color:var(--danger); }
 
@@ -1254,16 +1109,11 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .pm-report { margin-bottom:var(--sp-4); border:1px solid var(--line); border-radius:var(--radius-md);
   padding:var(--sp-3); background:var(--surface-raised); }
 .pm-report-ok { font-size:12px; color:var(--ok); }
-/* 600, not 700 -- matches every other uppercase section label in the app
-   (.group h2, .section-heading); 700 stays reserved for the two genuine
-   numeric-emphasis readouts (see the h1 comment above). */
 .pm-report-head { font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
   color:var(--ink-muted); margin:var(--sp-2) 0 4px; }
 .pm-report-head:first-child { margin-top:0; }
 .pm-report-head-error { color:var(--danger); }
 .pm-report-head-warn { color:var(--warn); }
-/* Copies the whole report as plain text. Sits at the end of the list rather
-   than in the heading: the heading is per-severity, the report is one thing. */
 .pm-report-copy { margin-top:var(--sp-3); background:none; border:1px solid var(--line);
   color:var(--ink-muted); font-family:var(--font-ui); font-size:11px; padding:4px 10px;
   border-radius:var(--radius-pill); cursor:pointer; transition:color .15s, border-color .15s; }
@@ -1280,7 +1130,7 @@ button.pm-issue-msg:hover { text-decoration:underline; }
 .pm-issue-warn { border-left-color:var(--warn); }
 .pm-quickfix { flex:0 0 auto; border:1px solid var(--accent); color:var(--accent-hover); background:none;
   border-radius:var(--radius-sm); padding:2px 8px; font-size:10.5px; font-weight:600; cursor:pointer; font-family:var(--font-ui); }
-.pm-quickfix:hover { background:rgba(0,113,227,.10); }
+.pm-quickfix:hover { background:rgba(41,151,255,.14); }
 
 .pm-group-head { font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
   color:var(--ink-muted); font-family:var(--font-mono); margin:var(--sp-3) 0 2px; }
@@ -1289,10 +1139,6 @@ button.pm-issue-msg:hover { text-decoration:underline; }
   font-size:12px; padding:5px 0; border-bottom:1px solid var(--line); }
 .pm-field-label { color:var(--ink-muted); flex:1 1 140px; min-width:0; }
 .pm-field-control { display:flex; align-items:center; gap:6px; flex:0 0 auto; }
-/* background-COLOR, never the `background` shorthand: this class is also worn
-   by <select> (see select.pm-field-input below), and the shorthand resets
-   background-repeat/position to their initials -- which tiled the chevron SVG
-   across the whole control as a sawtooth pattern behind the value. */
 .pm-field-input { background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line);
   border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; width:92px; }
 .pm-field-input:focus { border-color:var(--accent); outline:none; }
@@ -1300,11 +1146,9 @@ select.pm-field-input { width:116px; padding-right:24px; }
 .pm-tag { flex:0 0 auto; font-size:10px; font-family:var(--font-mono); text-transform:uppercase;
   letter-spacing:.04em; padding:2px 6px; border-radius:var(--radius-pill); color:var(--ink-muted);
   background:var(--surface-raised); border:1px solid var(--line); cursor:default; }
-.pm-tag-default, .pm-tag-clamped { color:var(--warn); border-color:rgba(161,98,7,.3); }
-.pm-tag-warn { color:var(--warn); border-color:rgba(161,98,7,.3); }
-/* An override the user typed themselves: neither imported nor invented, so it
-   reads in the neutral accent rather than the amber "we chose this" state. */
-.pm-tag-edited { color:var(--accent); border-color:rgba(0,113,227,.35); }
+.pm-tag-default, .pm-tag-clamped { color:var(--warn); border-color:rgba(255,180,84,.3); }
+.pm-tag-warn { color:var(--warn); border-color:rgba(255,180,84,.3); }
+.pm-tag-edited { color:var(--accent); border-color:rgba(41,151,255,.35); }
 
 .pm-gcode-block { margin-top:var(--sp-3); }
 .pm-gcode-label { font-size:11px; color:var(--ink-muted); margin-bottom:4px; }
@@ -1510,7 +1354,7 @@ body.hints-hidden .hint { display:none; }
    the ~640px-tall window this app is normally run in.
    ========================================================================= */
 .guide-modal { position:fixed; inset:0; z-index:65; display:flex; align-items:center; justify-content:center; }
-.guide-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.62); }
+.guide-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.75); backdrop-filter:blur(4px); }
 .guide-modal-card { position:relative; width:min(480px, 92vw); max-height:min(560px, 90vh);
   display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--line);
   border-radius:var(--radius-lg); box-shadow:var(--shadow-float); overflow:hidden; }
@@ -1596,34 +1440,14 @@ body.hints-hidden .hint { display:none; }
   opacity:0; transition:opacity 140ms linear;
 }
 .guide-shot.gf-on { opacity:1; }
-/* 140 ms, not 260. These frames are screenshots of TEXT, and a long crossfade
-   between two different panels superimposes both sets of it -- "SHAPE" ghosted
-   over "Z WAVES" for a quarter of a second reads as the figure glitching, not
-   as one state becoming another. Short enough to pass as a soft cut, long
-   enough that nothing snaps. The step in guide.js must stay well clear of it. */
-/* The "Read this first" slide ships a single still and no data-frames, so
-   nothing ever adds .gf-on to it -- keep a lone image visible. */
 .guide-fig:not([data-frames]) .guide-shot { opacity:1; }
-/* Rearranging the stack must never animate. guide.js adds .gf-rewind, sets the
-   classes it wants, forces a reflow and drops it again -- so starting a figure
-   cuts to frame 0, and the loop restart can collapse six lit layers down to
-   two (frame 0 under the top frame, which looks identical) before dissolving
-   just those two. Without this, un-lighting the stack fades every layer out
-   together and the blend on the way down is a smear, not a dissolve. */
 .guide-fig.gf-rewind .guide-shot { transition:none; }
-/* Only promote the layers while something is actually moving. Six full-bleed
-   images held on the compositor for the life of the modal is a lot of VRAM
-   for a figure that spends most of its time frozen on its last frame. */
 .guide-fig.gf-running .guide-shot { will-change:opacity; }
-/* The caption sits ON the frame, so it needs its own ground -- a text-shadow
-   alone left it fighting whatever the screenshot happened to put behind it
-   (on the first slide, the step-tab row). A scrim fading up from the bottom
-   edge reads as part of the figure and keeps both legible. */
 .gf-caption {
   position:absolute; left:0; right:0; bottom:0; z-index:2;
   padding:16px 12px 7px; font-size:10px; line-height:1.35;
   color:var(--ink-muted); text-align:center;
-  background:linear-gradient(to bottom, rgba(238,240,244,0), rgba(238,240,244,.9) 55%);
+  background:linear-gradient(to bottom, rgba(18,20,23,0), rgba(18,20,23,.92) 55%);
 }
 
 /* There is deliberately no Replay control. The sequence loops on its own --
@@ -1691,3 +1515,67 @@ body.hints-hidden .hint { display:none; }
   opacity: .75;
 }
 .preset-ctx-item:hover .pci-icon { opacity: 1; }
+
+/* =========================================================================
+   Zone Overrides & Edit History Modals
+   ========================================================================= */
+
+.zo-entry-btn { border-color:var(--zone); color:var(--zone); margin-bottom:0; }
+.zo-entry-btn:hover:not(:disabled) { border-color:var(--zone-hover); color:var(--zone-hover); background:var(--zone-dim); }
+.zo-entry-btn.zo-out-of-scope { opacity:.85; }
+.zo-dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:transparent; margin-right:6px; transition:background .15s, box-shadow .15s; vertical-align:middle; }
+.zo-dot.active { background:var(--zone); box-shadow:0 0 0 3px rgba(255,111,216,.22); }
+.zo-caution { border-left:2px solid var(--zone); color:var(--ink); font-size:11px; line-height:1.5; padding:4px 0 4px 8px; margin-top:var(--sp-2); }
+
+.zo-modal, .eh-modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; }
+.zo-modal-backdrop, .eh-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.75); backdrop-filter:blur(4px); }
+.zo-modal-card, .eh-modal-card { position:relative; width:min(720px, 94vw); max-height:86vh; display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--zone); border-radius:var(--radius-lg); box-shadow:var(--shadow-float); overflow:hidden; }
+.eh-modal-card { width:min(520px, 92vw); border-color:var(--line); }
+
+.zo-modal-header, .eh-modal-header { display:flex; align-items:center; justify-content:space-between; padding:var(--sp-3) var(--sp-4); border-bottom:1px solid var(--line); flex:none; }
+.zo-modal-header h2, .eh-modal-header h2 { font-size:14px; margin:0; color:var(--ink); font-weight:600; }
+.zo-modal-body, .eh-modal-body { flex:1 1 auto; min-height:0; overflow-y:auto; padding:var(--sp-4); }
+.zo-modal-footer, .eh-modal-footer { display:flex; justify-content:space-between; gap:8px; padding:var(--sp-3) var(--sp-4); border-top:1px solid var(--line); flex:none; }
+.eh-modal-footer { justify-content:flex-end; }
+
+.zo-axis-wrap { display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-4); }
+.zo-axis { position:relative; width:28px; height:260px; flex:none; background:var(--input-bg); border:1px solid var(--line); border-radius:var(--radius-sm); margin-right:84px; }
+.zo-axis-band { position:absolute; left:1px; right:1px; border-top:1px solid; border-bottom:1px solid; }
+.zo-axis-ramp { position:absolute; left:1px; right:1px; background:var(--zone-dim); opacity:.5; }
+.zo-axis-handle { position:absolute; left:-3px; right:-3px; height:4px; border-radius:2px; cursor:ns-resize; }
+.zo-axis-handle:hover, .zo-axis-handle.dragging { filter:brightness(1.2); }
+.zo-axis-readout { font-size:11px; }
+.zo-axis-label { position:absolute; left:32px; transform:translate(0,-50%); padding:1px 6px; border-radius:var(--radius-sm); background:var(--input-bg); border:1px solid currentColor; font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:11px; font-weight:600; white-space:nowrap; line-height:1.45; pointer-events:none; z-index:2; }
+.zo-axis-label-scale { color:var(--ink-muted); border-color:var(--line); font-weight:400; }
+
+.zo-rows { display:flex; flex-direction:column; gap:var(--sp-2); }
+.zo-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; font-size:12px; padding:var(--sp-2); border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--surface-raised); }
+.zo-row.disabled { opacity:.6; }
+.zo-row-swatch { flex:none; width:10px; height:10px; border-radius:var(--radius-sm); }
+.zo-row.is-new { border-left-width:2px; }
+.zo-row-field { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; gap:2px; padding:0; }
+.zo-row-field > span, .zo-row-field label { font-size:10.5px; color:var(--ink-muted); }
+.zo-row-field input, .zo-row-field select { background-color:var(--input-bg); color:var(--ink); border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 5px; font-size:12px; }
+.zo-row-field input:focus, .zo-row-field select:focus { border-color:var(--zone); outline:none; }
+.zo-row-field input[data-unit=mm] { width:68px; font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.zo-row-field input[data-unit=turns] { width:58px; font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.zo-row-remove { margin-left:auto; background:none; border:1px solid var(--line); color:var(--ink-muted); border-radius:var(--radius-sm); padding:4px 8px; font-size:11px; cursor:pointer; font-family:var(--font-ui); }
+.zo-row-remove:hover { color:var(--danger); border-color:var(--danger); }
+.zo-row-remove:active { transform:scale(0.95); }
+
+.ctx-menu { position:fixed; z-index:60; min-width:180px; background:rgba(24,27,32,.94); border:1px solid var(--line); border-radius:var(--radius-md); backdrop-filter:blur(20px) saturate(180%); box-shadow:var(--shadow-float); padding:4px; }
+.ctx-item { display:flex; align-items:center; width:100%; background:none; border:none; color:var(--ink); font-size:12px; font-family:var(--font-ui); text-align:left; cursor:pointer; padding:7px 10px; border-radius:var(--radius-sm); }
+.ctx-item:hover { background:var(--surface-raised); }
+.ctx-item .zo-dot { margin-right:8px; }
+.ctx-item .zo-row-swatch { margin-right:8px; }
+.ctx-item:disabled { color:var(--ink-muted); cursor:default; }
+.ctx-item:disabled:hover { background:none; }
+.ctx-sep { height:1px; margin:4px 6px; background:var(--line); }
+
+.eh-list { list-style:none; margin:var(--sp-3) 0 0; padding:0; display:flex; flex-direction:column; gap:var(--sp-2); }
+.eh-item { display:flex; gap:var(--sp-3); align-items:baseline; padding-top:var(--sp-2); border-top:1px solid var(--line); }
+.eh-item:first-child { border-top:none; }
+.eh-when { flex:none; width:96px; font-family:var(--font-mono); font-size:11px; color:var(--ink-muted); white-space:pre; }
+.eh-what { flex:1 1 auto; min-width:0; font-size:12px; color:var(--ink); line-height:1.45; }
+.eh-list:empty { display:none; }
+
