@@ -48,7 +48,7 @@ const scene = new THREE.Scene();
 // lighter surround to sit inside instead of matching it. Still unambiguously
 // a dark theme -- --bg and --surface are untouched, so the panel stays
 // darker than the canvas, which is more separation again, not less.
-scene.background = new THREE.Color(0x2b3036);
+scene.background = new THREE.Color(0x121417);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
 camera.position.set(BED_X*0.9, BED_Z*1.1, BED_Y*1.3);
@@ -77,15 +77,16 @@ const bedGroup = new THREE.Group(); scene.add(bedGroup);
   // above): 0x2a2e33 was the previous minor-line colour and is now almost
   // exactly the background colour itself -- the grid would have nearly
   // vanished. Both colours keep the same ~1.6x major/minor ratio as before.
-  const grid = new THREE.GridHelper(BED_X, 23, 0x5b6572, 0x393f47);
+  const grid = new THREE.GridHelper(BED_X, 23, 0x3b434e, 0x21262d);
   bedGroup.add(grid);
   // Safe-print-area outline (30-208 x 30-185 from printer.cfg).
-  const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
-  const c=[[ax[0],ay[0]],[ax[1],ay[0]],[ax[1],ay[1]],[ax[0],ay[1]],[ax[0],ay[0]]];
-  const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,cy-y));
-  const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineDashedMaterial({color:0x2f6bff,dashSize:4,gapSize:3,transparent:true,opacity:.7}));
-  ln.computeLineDistances(); bedGroup.add(ln);
+  // (Removed on request)
+  // const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
+  // const c=[[ax[0],ay[0]],[ax[1],ay[0]],[ax[1],ay[1]],[ax[0],ay[1]],[ax[0],ay[0]]];
+  // const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,cy-y));
+  // const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+  //   new THREE.LineDashedMaterial({color:0x2f6bff,dashSize:4,gapSize:3,transparent:true,opacity:.7}));
+  // ln.computeLineDistances(); bedGroup.add(ln);
 }
 
 // ---- Voron Trident build plate ---------------------------------------------
@@ -3695,6 +3696,13 @@ function openCtxMenu(clientX, clientY){
     ? window.__zoneTFromWorldY(hit.point.y) : null;
   const bandIdx = zoneBandPickAt(clientX, clientY);
 
+  if (seedT == null && bandIdx < 0) {
+    if (window.__openPresetMenu) {
+      window.__openPresetMenu(clientX, clientY);
+      return;
+    }
+  }
+
   ctxMenuEl.innerHTML = '';
 
   function addItem(label, swatchColor, onClick, disabled){
@@ -3772,12 +3780,27 @@ if(ctxMenuEl){
   });
   document.addEventListener('pointerdown', function(e){
     if(ctxMenuEl.style.display !== 'none' && !ctxMenuEl.contains(e.target)) hideCtxMenu();
+    if(window.__closePresetMenu) {
+      const presetMenu = document.getElementById('preset-context-menu');
+      if (presetMenu && presetMenu.style.display !== 'none' && !presetMenu.contains(e.target)) {
+        window.__closePresetMenu();
+      }
+    }
   }, true);
   document.addEventListener('keydown', function(e){
-    if(e.key === 'Escape') hideCtxMenu();
+    if(e.key === 'Escape') {
+      hideCtxMenu();
+      if(window.__closePresetMenu) window.__closePresetMenu();
+    }
   });
-  renderer.domElement.addEventListener('wheel', hideCtxMenu, { passive: true });
-  controls.addEventListener('change', hideCtxMenu);
+  renderer.domElement.addEventListener('wheel', function(){
+    hideCtxMenu();
+    if(window.__closePresetMenu) window.__closePresetMenu();
+  }, { passive: true });
+  controls.addEventListener('change', function(){
+    hideCtxMenu();
+    if(window.__closePresetMenu) window.__closePresetMenu();
+  });
 }
 
 // One horizontal cross-section through `p`, using samples within +/-`band` of
