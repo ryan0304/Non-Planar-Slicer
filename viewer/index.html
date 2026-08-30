@@ -19,14 +19,10 @@
 <body>
   <div id="app" class="app-shell">
 
-    <!-- ============================================================= -->
-    <!-- Persistent top bar: brand + full app name, then Undo/Redo/     -->
-    <!-- Load/Edit-history, always visible above both the sidebar and   -->
-    <!-- the canvas. All IDs preserved for designer.js.                 -->
-    <!-- ============================================================= -->
-    <div class="top-bar">
+    <!-- Top application bar -->
+    <div class="top-bar" role="banner">
       <div class="top-bar-brand">
-        <svg id="brand-mark-header" class="brand-mark simple" width="20" height="20" viewBox="0 0 96 96"
+        <svg id="brand-mark-topbar" class="brand-mark simple" width="30" height="30" viewBox="0 0 96 96"
           aria-hidden="true">
           <path class="mark-base"
             d="M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000" />
@@ -35,22 +31,31 @@
         </svg>
         <span class="top-bar-title">Trident Non-Planar Designer &amp; Slicer</span>
       </div>
-
-      <div class="top-bar-divider"></div>
-
+      <div class="top-bar-spacer"></div>
       <div class="top-bar-actions">
         <div class="top-bar-action-group">
           <button id="undo-btn" class="btn btn-icon" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
           <button id="redo-btn" class="btn btn-icon" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
+          <div class="top-bar-divider"></div>
+          <button id="load-design" class="btn btn-icon" title="Import a .trident or .stl file">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </button>
+          <button id="history-btn" class="btn btn-icon" type="button" title="Edit history" aria-label="Edit history"
+            aria-haspopup="dialog">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </button>
+          <input type="file" id="load-design-file" accept=".trident,.stl" hidden>
         </div>
-        <div class="top-bar-action-group">
-          <button id="load-design" class="btn btn-sm" title="Load a .trident or .json design file">Load</button>
-          <button id="history-btn" class="btn btn-icon" type="button" title="Edit history" aria-label="Edit history" aria-haspopup="dialog">&#8801;</button>
-        </div>
-        <input type="file" id="load-design-file" accept=".trident,.json" hidden>
       </div>
-
-      <div class="top-bar-spacer"></div>
     </div>
 
     <!-- App body: LEFT panel + splitter + 3-D canvas -->
@@ -72,7 +77,7 @@
               <!-- ---- Persistent machine bar (Printer) ---- -->
               <div id="machine-bar" class="mb-bar">
                 <div class="mb-row1" style="flex-direction:column; align-items:flex-start; gap:4px;">
-                  <span class="mb-bar-label">3D printer:</span>
+                  <span class="mb-bar-label">Printer:</span>
                   <div style="display:flex; width:100%; align-items:center; gap:6px;">
                     <div class="mb-combo" id="printer-combo">
                       <button id="printer-combo-btn" class="mb-combo-btn" type="button" role="combobox"
@@ -101,7 +106,6 @@
                 <div id="mb-summary" class="mb-summary">&#8211;</div>
                 <div id="printer-meta" class="pm-meta" style="display:none">
                   <div class="pm-meta-row">
-                    <span id="printer-meta-source" class="pm-meta-source"></span>
                     <span id="printer-meta-warn" class="pm-tag pm-tag-warn" style="display:none"></span>
                   </div>
                   <div id="printer-meta-status" class="busy-line" style="display:none"></div>
@@ -149,7 +153,9 @@
               </div>
 
               <div id="preset-bar" style="display:none">
-                <select id="preset-select"><option value="">0.20mm Standard</option></select>
+                <select id="preset-select">
+                  <option value="">0.20mm Standard</option>
+                </select>
               </div>
 
 
@@ -239,17 +245,12 @@
                     </span>
                     <input type="number" id="d-flh" min="0.1" max="0.6" step="0.05" placeholder="auto">
                   </div>
-                  <div class="drow" id="row-spacing"><span>Base line spacing &times;</span><input type="number"
-                      id="d-spacing" min="0.9" max="1.5" step="0.05"></div>
+                  <div class="drow" id="row-spacing"><span>Base line spacing</span><input type="number" id="d-spacing"
+                      min="0.9" max="1.5" step="0.05"></div>
                 </div>
 
-                <hr>
-                <h3 class="section-heading" id="sec-head-importstl">Or import an STL</h3>
-                <div id="import-panel" style="display:none">
-                  <div class="import-drop" id="stl-drop" tabindex="0" role="button">
-                    Drop an STL file here<br>or click to browse
-                    <input type="file" id="stl-file" accept=".stl" hidden>
-                  </div>
+                <div id="import-panel">
+                  <!-- STL drop zone removed per request. Files are now uploaded via the main Load button. -->
                   <div id="stl-status" class="busy-line" style="display:none"></div>
 
                   <div id="mesh-info" class="mesh-info" style="display:none">
@@ -277,11 +278,55 @@
 
               <!-- ---- Step 2: Texture (Z waves + surface texture) ---- -->
               <div class="step-panel" id="step-texture">
-                <button id="point-edit-btn" class="btn btn-block pe-entry-btn" type="button">
-                  <span id="pe-active-dot" class="pe-dot"></span>Point Edit Modifiers&#8230;
-                </button>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <button id="point-edit-btn" class="btn btn-block pe-entry-btn" type="button"
+                    style="flex:1; margin:0;">
+                     <span id="pe-active-dot" class="pe-dot"></span>Point Edit Modifiers<span class="info-icon">i</span>&#8230;
+                  </button>
+                  <span class="fm-info-btn"
+                    data-tip-html="Physically deform and sculpt the final 3D toolpath.<br><br>Includes tools for Point Mask, Protection, Free-Form Deformation, Smooth, and Radial Push.">&#9432;</span>
+                </div>
                 <div class="hint" id="pe-scope-note" style="display:none;margin-top:4px">Point edit modifiers only
                   apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
+
+                <hr>
+                <h3 class="section-heading" id="sec-head-silhouette">Silhouette Setting</h3>
+                <div id="sec-body-silhouette" style="display:none">
+                  <div class="cv-editor" id="sil-section">
+                    <div class="cv-head"><b>Silhouette</b><button type="button" class="cv-reset"
+                        id="sil-reset">reset</button></div>
+                    <div id="sil-mode-bar" class="sil-mode-bar">
+                      <button class="sil-mode-btn" data-silmode="sym" aria-pressed="false">Symmetrical</button>
+                      <button class="sil-mode-btn" data-silmode="asym" aria-pressed="false">Freeform (3D)</button>
+                    </div>
+                    <div id="sil-sym-panel">
+                      <canvas id="sil-curve" width="360" height="100"></canvas>
+                      <div id="sil-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span
+                          class="cv-readout-sub">hover or drag a point</span></div>
+                      <div class="hint" style="margin-top:2px">Scales the whole outline at each height. Double-click to
+                        add a point, right-click to remove, drag to shape. Shift = fine.</div>
+                    </div>
+                    <div id="sil-asym-panel" style="display:none">
+                      <div class="hint" style="margin-top:2px">Points appear ON THE MODEL (left) when this mode is
+                        active and a draft preview is visible. Hover a point to highlight it (orange), then drag to
+                        bulge or dent that local region. A point you have moved turns red.</div>
+                      <div class="hint" style="margin-top:4px"><b>Shift+click</b> (or Ctrl+click) each point to select
+                        several - selected points get a white ring. Drag any one of them to move the whole selection
+                        together, rigidly. A plain click with no modifier selects just that one point. Esc cancels a
+                        drag in progress, or clears the selection.</div>
+                      <div id="cage-selcount" class="sel-count">No points selected</div>
+                      <div class="btn-row mt-2">
+                        <button id="cage-clear-sel" class="btn" disabled>Clear selection</button>
+                        <button id="cage-reset-sel" class="btn" disabled>Reset selected</button>
+                      </div>
+                      <button id="cage-reset" class="btn btn-block mt-2">Reset all points</button>
+                      <div class="hint" id="cage-note" style="margin-top:4px">Applies to parametric designs (not loop
+                        fabric or STL mode).</div>
+                    </div>
+                  </div>
+                  <label class="row" style="margin-top:6px"><span>Smooth silhouette curvature</span><input
+                      type="checkbox" id="sil-smooth"></label>
+                </div>
 
                 <hr>
                 <h3 class="section-heading" id="sec-head-zwaves">Z waves</h3>
@@ -409,56 +454,21 @@
                 </div>
 
                 <div class="group" style="padding: 12px; border-top: 1px solid var(--line);">
-                  <button id="zone-btn" class="btn btn-block zo-entry-btn" type="button">
-                    <span id="zo-active-dot" class="zo-dot"></span>Zone Overrides&#8230;
-                  </button>
-                  <div class="hint zo-caution" id="zo-scope-note" style="display:none; margin-top:6px; color:var(--warn)">Zone overrides only
-                    apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
-                  <div class="hint" style="margin-top:4px">Changes how the wall is <b>generated</b> inside a
-                    height band you pick &#8212; a different texture pattern/depth or xy-twist just for that
-                    band. Not Point Edit Modifiers (purple) above, which deform the already-sliced path instead.
-                    Right-click the model to add a zone directly &#8212; it appears on the model with its
-                    own colour.</div>
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <button id="zone-btn" class="btn btn-block zo-entry-btn" type="button" style="flex:1; margin:0;">
+                      <span id="zo-active-dot" class="zo-dot"></span>Zone Overrides&#8230;
+                    </button>
+                    <span class="fm-info-btn"
+                      data-tip-html="Changes wall <b>generation</b> within a selected height band. Set a different texture, depth, or XY twist. Unlike purple Point Edit Modifiers, which deform sliced paths.<br>Right-click the model to add a zone.">&#9432;</span>
+                  </div>
+                  <div class="hint zo-caution" id="zo-scope-note"
+                    style="display:none; margin-top:6px; color:var(--warn)">Zone overrides only apply to the parametric
+                    wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
                 </div>
 
 
 
-                <div class="cv-editor" id="sil-section">
-                  <div class="cv-head"><b>Silhouette</b><button type="button" class="cv-reset"
-                      id="sil-reset">reset</button></div>
-                  <div id="sil-mode-bar" class="sil-mode-bar">
-                    <button class="sil-mode-btn" data-silmode="sym" aria-pressed="false">Symmetrical</button>
-                    <button class="sil-mode-btn" data-silmode="asym" aria-pressed="false">Freeform (3D)</button>
-                  </div>
-                  <div id="sil-sym-panel">
-                    <canvas id="sil-curve" width="360" height="100"></canvas>
-                    <div id="sil-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span
-                        class="cv-readout-sub">hover or drag a point</span></div>
-                    <div class="hint" style="margin-top:2px">Scales the whole outline at each height.
-                      Double-click to add a point, right-click to remove, drag to shape. Shift = fine.</div>
-                  </div>
-                  <div id="sil-asym-panel" style="display:none">
-                    <div class="hint" style="margin-top:2px">Points appear ON THE MODEL (left) when this mode is
-                      active and a draft preview is visible. Hover a point to highlight it (orange), then drag to
-                      bulge or dent that local region. A point you have moved turns red.</div>
-                    <div class="hint" style="margin-top:4px"><b>Shift+click</b> (or Ctrl+click) each point to
-                      select several - selected points get a white ring. Drag any one of them to move the whole
-                      selection together, rigidly. A plain click with no modifier selects just that one point.
-                      Esc cancels a drag in progress, or clears the selection.</div>
-                    <!-- NOT a .hint: the hint-density toggle hides those, and the
-                 selection count is live state, not explanatory text. -->
-                    <div id="cage-selcount" class="sel-count">No points selected</div>
-                    <div class="btn-row mt-2">
-                      <button id="cage-clear-sel" class="btn" disabled>Clear selection</button>
-                      <button id="cage-reset-sel" class="btn" disabled>Reset selected</button>
-                    </div>
-                    <button id="cage-reset" class="btn btn-block mt-2">Reset all points</button>
-                    <div class="hint" id="cage-note" style="margin-top:4px">Applies to parametric designs
-                      (not loop fabric or STL mode).</div>
-                  </div>
-                </div>
-                <label class="row" style="margin-top:6px"><span>Smooth silhouette curvature</span><input type="checkbox"
-                    id="sil-smooth"></label>
+
               </div>
 
               <!-- ---- Step 3: Print ---- -->
@@ -494,10 +504,10 @@
               <!-- ---- Step 4: Generate (generate/download only; printer lives in the ---- -->
               <!-- ---- persistent machine bar above the step wizard now).            ---- -->
               <div class="step-panel" id="step-generate">
-                <div class="output-card" id="output-print">
-                  <h3 class="section-heading">Print it</h3>
-                  <div class="hint tight-top">Produces the single-wall non-planar G-code this app prints
-                    directly.</div>
+                <div class="group" id="output-print" style="margin-top: 12px;">
+                  <h3 class="section-heading" style="margin-bottom: 4px;">Print it</h3>
+                  <div class="hint tight-top">Produces the specialized single-wall, non-planar G-code toolpath that this
+                    slicer creates. This is ready to be sent straight to your 3D printer.</div>
                   <button id="gen-btn" class="btn btn-primary btn-block mt-2">Generate &amp; preview</button>
                   <div id="gen-status" class="gen-status" role="status"></div>
                   <div id="gen-progress" class="gen-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
@@ -509,23 +519,23 @@
 
                 <div class="output-divider" aria-hidden="true"></div>
 
-                <!-- Save design -->
                 <div class="group" id="file-group" style="margin-top:12px;">
-                  <div class="hint tight-top">Saves all current design parameters (shape, texture, silhouette, print settings) as a <code>.trident</code> file you can reload later.</div>
-                  <button id="save-design" class="btn btn-block btn-primary mt-2" title="Save design">Save design (.trident)</button>
+                  <h3 class="section-heading" style="margin-bottom: 4px;">Save design</h3>
+                  <div class="hint tight-top">Saves all your current design parameters (shape, texture, silhouette, and
+                    print settings) as a native <code>.trident</code> file so you can safely reload and edit it later.
+                  </div>
+                  <button id="save-design" class="btn btn-primary btn-block mt-2" title="Save design">Save design
+                    (.trident)</button>
                 </div>
 
                 <div class="output-divider" aria-hidden="true"></div>
 
-                <div class="output-card" id="output-stl">
-                  <h3 class="section-heading">Export as solid</h3>
-                  <div class="hint tight-top">Exports the sculpted surface as a watertight STL to slice as a
-                    SOLID part in another slicer (Orca/ideaMaker) &#8212; because this app only prints
-                    single-wall vase mode.</div>
-                  <button id="export-stl-btn" class="btn btn-block mt-2">Export STL</button>
-                  <div class="hint">Exports the sculpted surface (shape, silhouette, asymmetric cage, surface
-                    pattern) for slicing solid in another slicer. Z-waves and loop textures are toolpath-only
-                    and are not included.</div>
+                <div class="group" id="output-stl" style="margin-top: 12px;">
+                  <h3 class="section-heading" style="margin-bottom: 4px;">Export as solid</h3>
+                  <div class="hint tight-top">Exports the sculpted surface as a watertight 3D model (STL). Use this if
+                    you want to slice the design as a thick, SOLID part in a standard slicer (like Orca or PrusaSlicer)
+                    instead of printing it in vase mode.</div>
+                  <button id="export-stl-btn" class="btn btn-primary btn-block mt-2">Export STL</button>
                 </div>
               </div>
             </div>
@@ -794,62 +804,58 @@
     </div>
   </div>
 
-<!-- Zone Overrides modal -- height-band regions generated with a   -->
-<!-- specific texture/depth/twist override. Distinct from PE modal. -->
-<div id="zone-modal" class="zo-modal" style="display:none">
-  <div class="zo-modal-backdrop"></div>
-  <div class="zo-modal-card" role="dialog" aria-modal="true" aria-labelledby="zo-modal-title">
-    <div class="zo-modal-header">
-      <h2 id="zo-modal-title">Zone Overrides</h2>
-      <button id="zo-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
-    </div>
-    <div class="zo-modal-body">
-      <div class="zo-caution">Changes how the wall is <b>generated</b> inside each band below.
-        Point Edit Modifiers (purple, elsewhere in this step) deform the already-sliced path instead
-        &#8212; a different subsystem, not this one.</div>
-      <div class="zo-axis-wrap">
-        <div class="zo-axis" id="zo-axis"></div>
-        <div class="hint" style="margin:0">On the model, drag a ring to reshape one edge, or drag
-          between the two rings to slide the whole band (Shift+drag does the same here). Each ring's
-          height is labelled in mm right on the model, and on the height axis to the left. Bands may
-          overlap &#8212; where they do, their textures blend in proportion to each band's ramp, shown
-          as a mix of both colours. Values below are mm of wall height (0 = base, top = full height);
-          typing is exact, dragging is fast.</div>
+  <!-- Zone Overrides modal -- height-band regions generated with a   -->
+  <!-- specific texture/depth/twist override. Distinct from PE modal. -->
+  <div id="zone-modal" class="zo-modal" style="display:none">
+    <div class="zo-modal-backdrop"></div>
+    <div class="zo-modal-card" role="dialog" aria-modal="true" aria-labelledby="zo-modal-title">
+      <div class="zo-modal-header">
+        <h2 id="zo-modal-title">Zone Overrides</h2>
+        <button id="zo-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
       </div>
-      <div class="zo-rows" id="zo-rows"></div>
-      <div class="hint" id="zo-empty-hint" style="margin-top:var(--sp-2)">No zones yet. Right-click
-        the model and choose <b>Add zone here</b> &#8212; the zone appears on the model with its
-        heights labelled, ready to drag. Right-click a zone's band to set its texture here.</div>
-    </div>
-    <div class="zo-modal-footer">
-      <div class="btn-row" style="flex:0 0 auto">
-        <button id="zo-add-zone" class="btn" type="button">Add zone</button>
-        <button id="zo-reset-all" class="btn" type="button">Reset all</button>
+      <div class="zo-modal-body">
+        <div class="zo-caution" style="margin-bottom: 12px;">Changes how the wall is <b>generated</b> within a selected
+          height band, allowing a different texture, depth, or XY twist. Unlike Point Edit Modifiers (purple), which
+          physically deform the already-sliced path.</div>
+        <div class="zo-axis-wrap">
+          <div class="zo-axis" id="zo-axis"></div>
+          <div class="hint" style="margin:0">Drag the colored rings directly on the 3D model to adjust the zone's
+            height. Drag between the rings to move the entire band. If zones overlap, their textures will smoothly blend
+            together!</div>
+        </div>
+        <div class="zo-rows" id="zo-rows"></div>
+        <div class="hint" id="zo-empty-hint" style="margin-top:var(--sp-2)">No zones yet. Right-click the 3D model and
+          choose <b>Add zone here</b> to get started (each zone appears with its own color).</div>
       </div>
-      <button id="zo-modal-done" class="btn btn-primary" type="button">Done</button>
+      <div class="zo-modal-footer">
+        <div class="btn-row" style="flex:0 0 auto">
+          <button id="zo-add-zone" class="btn" type="button">Add zone</button>
+          <button id="zo-reset-all" class="btn" type="button">Reset all</button>
+        </div>
+        <button id="zo-modal-done" class="btn btn-primary" type="button">Done</button>
+      </div>
     </div>
   </div>
-</div>
 
-<div id="history-modal" class="eh-modal" style="display:none">
-  <div class="eh-modal-backdrop"></div>
-  <div class="eh-modal-card" role="dialog" aria-modal="true" aria-labelledby="eh-modal-title">
-    <div class="eh-modal-header">
-      <h2 id="eh-modal-title">Edit history</h2>
-      <button id="eh-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
-    </div>
-    <div class="eh-modal-body">
-      <p class="hint" style="margin-top:0">What has been changed in this design, newest
-        first. Saving with <b>Save</b> writes this log into the <code>.trident</code>
-        file, so whoever opens it next sees the same list and keeps adding to it.</p>
-      <ol id="eh-list" class="eh-list"></ol>
-      <p id="eh-empty" class="hint">No edits recorded yet.</p>
-    </div>
-    <div class="eh-modal-footer">
-      <button id="eh-modal-done" class="btn btn-primary" type="button">Done</button>
+  <div id="history-modal" class="eh-modal" style="display:none">
+    <div class="eh-modal-backdrop"></div>
+    <div class="eh-modal-card" role="dialog" aria-modal="true" aria-labelledby="eh-modal-title">
+      <div class="eh-modal-header">
+        <h2 id="eh-modal-title">Edit history</h2>
+        <button id="eh-modal-close" class="btn btn-icon" type="button" title="Close">&times;</button>
+      </div>
+      <div class="eh-modal-body">
+        <p class="hint" style="margin-top:0">What has been changed in this design, newest
+          first. Saving with <b>Save</b> writes this log into the <code>.trident</code>
+          file, so whoever opens it next sees the same list and keeps adding to it.</p>
+        <ol id="eh-list" class="eh-list"></ol>
+        <p id="eh-empty" class="hint">No edits recorded yet.</p>
+      </div>
+      <div class="eh-modal-footer">
+        <button id="eh-modal-done" class="btn btn-primary" type="button">Done</button>
+      </div>
     </div>
   </div>
-</div>
 
   <!-- Custom printer import/edit modal -- parses a Klipper/Orca/Prusa -->
   <!-- config or a previously exported Trident printer JSON, shows the -->
@@ -961,7 +967,8 @@
         </div>
         <div class="pm-field-row">
           <span class="pm-field-label fm-hover-target" style="cursor:help;"
-            data-tip-html="Part-cooling fan speed on a vertical wall. The fan ramps from this toward Fan max as the wall leans further outward.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_min</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Fan min</span>
+            data-tip-html="Part-cooling fan speed on a vertical wall. The fan ramps from this toward Fan max as the wall leans further outward.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_min</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Fan
+            min</span>
           <span class="pm-field-control">
             <input type="range" id="d-fan-min" min="0" max="100" step="5" style="width:100px">
             <span id="fan-min-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
@@ -969,7 +976,8 @@
         </div>
         <div class="pm-field-row">
           <span class="pm-field-label fm-hover-target" style="cursor:help;"
-            data-tip-html="Part-cooling fan speed where the wall leans 45 degrees or more outward. Set equal to Fan min for a constant fan speed.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_max</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Fan max</span>
+            data-tip-html="Part-cooling fan speed where the wall leans 45 degrees or more outward. Set equal to Fan min for a constant fan speed.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_max</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Fan
+            max</span>
           <span class="pm-field-control">
             <input type="range" id="d-fan-max" min="0" max="100" step="5" style="width:100px">
             <span id="fan-max-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
@@ -1003,9 +1011,18 @@
             <input type="file" id="pm-file" accept=".cfg,.json,.ini,.txt" hidden>
           </div>
           <div id="pm-drop-status" class="busy-line" style="display:none"></div>
-          <div class="hint tight-top">Supported formats: Klipper <code>printer.cfg</code>,
+          <!-- <div class="hint tight-top">Supported formats: Klipper <code>printer.cfg</code>,
             OrcaSlicer / Bambu Studio machine <code>.json</code>, PrusaSlicer / SuperSlicer
             <code>.ini</code>, or a previously exported Trident printer <code>.json</code>.
+          </div> -->
+          <div class="hint tight-top">
+            Supported formats:
+            <ul>
+              <li>Klipper <code>printer.cfg</code></li>
+              <li>OrcaSlicer / Bambu Studio machine <code>.json</code></li>
+              <li>PrusaSlicer / SuperSlicer <code>.ini</code></li>
+              <li>Previously exported Trident printer <code>.json</code></li>
+            </ul>
           </div>
           <div id="pm-parse-error" class="pm-error" style="display:none"></div>
         </div>
@@ -1260,7 +1277,7 @@
   }}
   </script>
   <script type="module" src="viewer.js"></script>
-  
+
   <script src="preview_math.js"></script>
   <script src="param_help.js"></script>
   <script src="designer.js"></script>
