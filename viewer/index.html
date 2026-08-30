@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Cache-Control" content="no-store" />
-  <title>Trident Non-Planar G-code Generator &amp; Viewer</title>
+  <title>Trident Non-Planar Designer &amp; Slicer</title>
   <link rel="icon" type="image/svg+xml"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cpath d='M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000' fill='none' stroke='%239aa0a6' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -20,9 +20,9 @@
   <div id="app" class="app-shell">
 
     <!-- ============================================================= -->
-    <!-- OrcaSlicer-style top application bar: dark strip with brand,  -->
-    <!-- mode tabs and parameter search -- always visible, never in the -->
-    <!-- scrollable panel. All IDs preserved for designer.js.          -->
+    <!-- Persistent top bar: brand + full app name, then Undo/Redo/     -->
+    <!-- Load/Edit-history, always visible above both the sidebar and   -->
+    <!-- the canvas. All IDs preserved for designer.js.                 -->
     <!-- ============================================================= -->
     <div class="top-bar">
       <div class="top-bar-brand">
@@ -33,24 +33,27 @@
           <path class="mark-highlight"
             d="M 22.000,78.000 L 22.000,30.000 L 35.000,58.000 L 48.000,18.000 L 61.000,58.000 L 74.000,30.000 L 74.000,78.000" />
         </svg>
+        <span class="top-bar-title">Trident Non-Planar Designer &amp; Slicer</span>
       </div>
 
-      <div id="mode-bar" class="mode-bar">
-        <button class="mode-btn" data-mode="design" aria-pressed="false">Design</button>
-        <button class="mode-btn" data-mode="viewer" aria-pressed="false">G-code Viewer</button>
+      <div class="top-bar-divider"></div>
+
+      <div class="top-bar-actions">
+        <div class="top-bar-action-group">
+          <button id="undo-btn" class="btn btn-icon" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
+          <button id="redo-btn" class="btn btn-icon" title="Redo (Ctrl+Y)" disabled>&#8631;</button>
+        </div>
+        <div class="top-bar-action-group">
+          <button id="load-design" class="btn btn-sm" title="Load a .trident or .json design file">Load</button>
+          <button id="history-btn" class="btn btn-icon" type="button" title="Edit history" aria-label="Edit history" aria-haspopup="dialog">&#8801;</button>
+        </div>
+        <input type="file" id="load-design-file" accept=".trident,.json" hidden>
       </div>
 
       <div class="top-bar-spacer"></div>
-      
-      <!-- Moved History and Load buttons -->
-      <button id="undo-btn" class="btn btn-icon" title="Undo (Ctrl+Z)" disabled style="margin-right:4px;">&#8630;</button>
-      <button id="redo-btn" class="btn btn-icon" title="Redo (Ctrl+Y)" disabled style="margin-right:12px;">&#8631;</button>
-      <button id="load-design" class="btn btn-sm" title="Load a .trident or .json design file" style="margin-right:12px;">Load</button>
-      <button id="history-btn" class="btn btn-icon" type="button" title="Edit history" aria-label="Edit history" aria-haspopup="dialog" style="margin-right:8px; font-size:20px; line-height:1;">&#8801;</button>
-      <input type="file" id="load-design-file" accept=".trident,.json" hidden>
     </div>
 
-    <!-- App body: LEFT panel + splitter + 3-D canvas (OrcaSlicer layout) -->
+    <!-- App body: LEFT panel + splitter + 3-D canvas -->
     <div class="app-body">
       <div id="panel" class="panel">
         <div id="panel-scroll" class="panel-scroll">
@@ -139,6 +142,12 @@
                   aria-haspopup="listbox" aria-controls="param-search-results" aria-autocomplete="list">
                 <div id="param-search-results" class="param-search-results" role="listbox"></div>
               </div>
+
+              <div id="mode-bar" class="mode-bar">
+                <button class="mode-btn" data-mode="design" aria-pressed="false">Design</button>
+                <button class="mode-btn" data-mode="viewer" aria-pressed="false">G-code Viewer</button>
+              </div>
+
               <div id="preset-bar" style="display:none">
                 <select id="preset-select"><option value="">0.20mm Standard</option></select>
               </div>
@@ -523,6 +532,16 @@
           </div>
 
           <div id="mode-viewer" class="mode-panel">
+            <!-- Mirrors #mode-bar in the Design panel (same .mode-btn class,
+                 same generic click wiring in designer.js) -- Design mode's
+                 copy lives below the Filament bar, but that whole block is
+                 Design-only, so Viewer mode needs its own copy or switching
+                 here would strand the user with no way back. -->
+            <div class="mode-bar">
+              <button class="mode-btn" data-mode="design" aria-pressed="false">Design</button>
+              <button class="mode-btn" data-mode="viewer" aria-pressed="false">G-code Viewer</button>
+            </div>
+
             <div class="drop" id="drop" tabindex="0" role="button">
               Click to choose a .gcode file<br>or drag &amp; drop anywhere
               <input type="file" id="file" accept=".gcode,.gco,.g,.nc,.txt" hidden>

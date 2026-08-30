@@ -327,28 +327,13 @@ input, select, textarea {
   letter-spacing:-0.01em; white-space:nowrap;
   font-feature-settings:"ss03";
 }
-/* Mode bar inside top bar: pill-segment style on dark bg */
-.top-bar .mode-bar {
-  margin:0; flex:0 0 auto;
-  background:var(--surface-raised);
-  border:1px solid var(--line);
-}
-.top-bar .mode-btn {
-  color:var(--ink-muted); font-size:12px;
-}
-.top-bar .mode-btn:hover { color:var(--ink); }
-.top-bar .mode-btn.active { color:var(--ink-on-accent); background:var(--accent-fill); }
-/* Param search inside top bar */
-.top-bar .param-search { flex:1 1 auto; max-width:280px; margin:0; }
-.top-bar .param-search input {
-  background-color:var(--input-bg); color:var(--ink);
-  border-color:var(--line); font-size:12px;
-  padding:5px 10px 5px 28px;
-}
-.top-bar .param-search input::placeholder { color:var(--ink-muted); }
-.top-bar .param-search input:focus {
-  background-color:var(--input-bg); border-color:var(--accent);
-}
+/* Ties the undo/redo/load/history cluster to the brand instead of
+   letting it float alone at the window's far edge -- a hairline, not a
+   shadow, per TASTES.md. */
+.top-bar-divider { width:1px; align-self:stretch; margin:10px 0;
+  background:var(--line); flex:0 0 auto; }
+.top-bar-actions { display:flex; align-items:center; gap:var(--sp-4); flex:0 0 auto; }
+.top-bar-action-group { display:flex; align-items:center; gap:4px; }
 .top-bar-spacer { flex:1 1 auto; }
 
 /* ---- App body: canvas + splitter + panel, horizontal ---- */
@@ -620,7 +605,7 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .canvas-wrap.has-timeline { --overlay-bottom:92px; }
 .canvas-wrap:has(#telemetry-card.collapsed) { --overlay-top:60px; }
 
-.tool-rail { position:absolute; right:12px; z-index:6;
+.tool-rail { position:absolute; left:12px; z-index:6;
   top:min(max(50%, var(--overlay-top)), calc(100% - var(--overlay-bottom) - 64px));
   display:flex; flex-direction:column; gap:6px; padding:6px;
   background:rgba(24,27,32,.92); border:1px solid var(--line); border-radius:var(--radius-md);
@@ -815,9 +800,6 @@ input[type=checkbox]:active:not(:disabled), input[type=radio]:active:not(:disabl
 .cv-readout .cv-readout-mm { color:var(--ink); font-weight:700; font-size:12.5px; }
 .cv-readout .cv-readout-sub { margin-left:6px; }
 
-/* Param search inside the panel now (left side): results drop down normally */
-.top-bar .param-search-results { position:fixed; top:var(--top-bar-h); left:0; right:auto;
-  width:300px; z-index:20; }
 .param-search { position:relative; margin-bottom:var(--sp-3); }
 /* Magnifying-glass icon lives in a background-image, so background-COLOR
    (and the other longhands) are set explicitly here, never the `background`

@@ -143,20 +143,17 @@ function buildTridentLogoTexture(peiHex){
     }
   }
 
-  // "TRIDENT / NON-PLANAR SLICER" wordmark below the glyph, matching the
-  // naming used on the brand's own social/promo assets. Ink bounds for the
-  // full glyph are y 24.9-81.2 within its own 12.92-93.18 viewBox span (see
-  // brand/README.md), so the ink's bottom edge sits 85.1% down the drawn box
-  // -- used here to clear the glyph regardless of logoPx.
+  // "TRIDENT" wordmark below the glyph, matching the naming used on the
+  // brand's own social/promo assets. Ink bounds for the full glyph are y
+  // 24.9-81.2 within its own 12.92-93.18 viewBox span (see brand/README.md),
+  // so the ink's bottom edge sits 85.1% down the drawn box -- used here to
+  // clear the glyph regardless of logoPx.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const inkBottom = boxTop + logoPx * ((81.2 - TRIDENT_MARK_VB.y) / TRIDENT_MARK_VB.w);
   const titlePx = size * 0.042;
   const titleY = inkBottom + size*0.035 + titlePx*0.8;
   drawSpacedText('TRIDENT', size/2, titleY, titlePx, 700, 0.32, '#9aa0a6');
-  const subPx = titlePx * 0.52;
-  const subY = titleY + titlePx*0.6 + subPx*1.3;
-  drawSpacedText('NON-PLANAR SLICER', size/2, subY, subPx, 600, 0.28, 'rgba(154,160,166,0.75)');
 
   const tex = new THREE.CanvasTexture(c);
   if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;

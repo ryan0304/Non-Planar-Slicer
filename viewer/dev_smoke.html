@@ -724,10 +724,267 @@
           w.__viewFlags().pathVisible === true,
           'pathVisible ' + w.__viewFlags().pathVisible);
 
+    // ---- top bar: brand, full app name, undo/redo/load/edit-history --------
+    // jing-liang's UI merge replaced the old sidebar header (icon + full app
+    // name, search bar, mode tabs) with a bare icon in a persistent top bar.
+    // Follow-ups restored the full app name beside the icon, then briefly
+    // removed the top bar entirely (moving Undo/Redo/Load/Edit-history into
+    // a shared #panel-actions sibling of the mode panels), then restored the
+    // top bar again on request -- it's the version the user actually wants,
+    // matching their reference screenshot: icon + full name, then the same
+    // four buttons grouped behind a hairline divider.
+    var topBarTitleEl = w.document.querySelector('.top-bar-title');
+    check('the top bar shows the full app name next to the icon',
+          !!topBarTitleEl && /Trident Non-Planar Designer/i.test(topBarTitleEl.textContent),
+          'got ' + JSON.stringify(topBarTitleEl && topBarTitleEl.textContent));
+    check('the document title matches',
+          /Trident Non-Planar Designer/i.test(w.document.title),
+          'got ' + JSON.stringify(w.document.title));
+
+    var tbUndo = w.document.getElementById('undo-btn');
+    var tbRedo = w.document.getElementById('redo-btn');
+    var tbLoad = w.document.getElementById('load-design');
+    var tbHistBtn = w.document.getElementById('history-btn');
+    check('the top bar carries undo/redo/load/history buttons',
+          !!tbUndo && !!tbRedo && !!tbLoad && !!tbHistBtn, 'one or more missing');
+    check('undo/redo and load/history sit in the same .top-bar-actions cluster ' +
+          '(not floating separately)',
+          !!tbUndo.closest('.top-bar-actions') && !!tbHistBtn.closest('.top-bar-actions'),
+          'not grouped as expected');
+
+    var ehModal = w.document.getElementById('history-modal');
+    check('the edit-history modal starts closed', ehModal.style.display === 'none',
+          'got display=' + ehModal.style.display);
+    tbHistBtn.click();
+    check('the history button opens the edit-history modal',
+          ehModal.style.display !== 'none', 'got display=' + ehModal.style.display);
+    w.document.getElementById('eh-modal-done').click();
+    check('Done closes the edit-history modal',
+          ehModal.style.display === 'none', 'got display=' + ehModal.style.display);
+
+    // ---- mode toggle has two DOM copies and both stay in sync ---------------
+    // #mode-bar (Design/G-code Viewer) used to be the one thing in the
+    // scrollable panel visible from either mode. It was moved below the
+    // Filament bar per request, which is Design-only content -- so a second
+    // copy was added at the top of the Viewer panel, or switching TO Viewer
+    // mode would strand the user with no way back. activateMode() in
+    // designer.js toggles .active/aria-pressed on every .mode-btn it finds,
+    // not just one -- confirm both copies actually exist and stay synced,
+    // not just the one instance every other assertion in this file happens
+    // to click through modeBtn().
+    var allModeBtns = Array.prototype.slice.call(w.document.querySelectorAll('.mode-btn'));
+    check('there are two mode-bar copies (4 buttons total: 2x Design, 2x Viewer)',
+          allModeBtns.length === 4, 'got ' + allModeBtns.length);
+    var designModeBar = w.document.querySelector('#mode-design .mode-bar');
+    var viewerModeBar = w.document.querySelector('#mode-viewer .mode-bar');
+    check('the Design panel has its own mode-bar copy (below the Filament bar)',
+          !!designModeBar, 'missing');
+    check('the Viewer panel has its own mode-bar copy (at the top)', !!viewerModeBar, 'missing');
+
+    var viewerBtnsAll = allModeBtns.filter(function(b){ return b.dataset.mode === 'viewer'; });
+    var designBtnsAll = allModeBtns.filter(function(b){ return b.dataset.mode === 'design'; });
+    check('while in Viewer mode, EVERY G-code Viewer button reads active, not just one',
+          viewerBtnsAll.every(function(b){
+            return b.classList.contains('active') && b.getAttribute('aria-pressed') === 'true';
+          }),
+          'active flags: ' + viewerBtnsAll.map(function(b){ return b.classList.contains('active'); }).join(','));
+    check('...and every Design button reads inactive',
+          designBtnsAll.every(function(b){
+            return !b.classList.contains('active') && b.getAttribute('aria-pressed') === 'false';
+          }),
+          'active flags: ' + designBtnsAll.map(function(b){ return b.classList.contains('active'); }).join(','));
+
+    // Switch back via the VIEWER PANEL's OWN copy specifically (not
+    // modeBtn(), which resolves to the first DOM match -- the Design-panel
+    // copy every other assertion already exercises) to prove that second
+    // instance's click handler genuinely works, not just present in the DOM
+    // inert.
+    viewerModeBar.querySelector('.mode-btn[data-mode="design"]').click();
+    check('clicking Design from the viewer panel\'s OWN copy switches modes',
+          w.document.getElementById('mode-design').classList.contains('active') &&
+          !w.document.getElementById('mode-viewer').classList.contains('active'),
+          'design active=' + w.document.getElementById('mode-design').classList.contains('active'));
+
+    // Back to Viewer for the measure-tool assertions below (the rail only
+    // renders while #canvas-wrap's chrome is in viewer mode).
+    modeBtn('viewer').click();
+
+    // ---- measure tool rail: left-anchored, card follows it -------------------
+    // The floating rail was CSS-anchored to the canvas's right edge
+    // (.tool-rail { right:12px }) and moved to left:12px on request, to sit
+    // next to the sidebar/splitter instead of floating on the far side. Its
+    // readout card computes its position from the rail's live
+    // getBoundingClientRect() (positionBelowRail() in viewer.js), so it must
+    // follow correctly regardless of which side the rail is CSS-anchored to.
+    var railEl = w.document.getElementById('tool-rail');
+    var railRectBefore = railEl.getBoundingClientRect();
+    check('the tool rail renders on the LEFT half of the canvas, not the right',
+          railRectBefore.left < w.innerWidth / 2, 'rail left=' + railRectBefore.left
+          + ', viewport width=' + w.innerWidth);
+
+    var measureBtn = w.document.getElementById('tool-measure');
+    var measureCardEl = w.document.getElementById('measure-card');
+    check('the measure card starts closed', measureCardEl.style.display === 'none',
+          'got display=' + measureCardEl.style.display);
+    measureBtn.click();
+    check('clicking Measure opens its readout card',
+          measureCardEl.style.display !== 'none', 'got display=' + measureCardEl.style.display);
+    var cardRect = measureCardEl.getBoundingClientRect();
+    check('the readout card actually sits near the rail (follows it), not stranded ' +
+          'at the canvas\'s old right-side spot',
+          cardRect.left < w.innerWidth * 0.6,
+          'rail left=' + railEl.getBoundingClientRect().left + ' card left=' + cardRect.left);
+    measureBtn.click();
+    check('clicking Measure again closes the card',
+          measureCardEl.style.display === 'none', 'got display=' + measureCardEl.style.display);
+
     // Hand the suite back in Design mode. loadGcode() above switched to the
     // viewer, and every check below this point reads rows in the design panel
     // -- which is the inactive panel while the viewer is up.
     modeBtn('design').click();
+
+    // ---- Filament subsystem: combo, edit/add modal, tooltips, overrides ----
+    // jing-liang's PR shipped this whole subsystem (the combo button/list,
+    // the edit/add icons, and the settings modal with its data-tip/
+    // data-tip-html hover tooltips) as HTML/CSS only -- zero JS wired any of
+    // it. A follow-up wrote the combo's open/close + selection sync, the
+    // modal's open/close, the temperature-override reset buttons, and the
+    // tooltip mechanism, all on top of the ALREADY-BOUND #d-filament /
+    // #d-nozzletemp / #d-bedtemp / #d-overhang-k / #d-fan-min / #d-fan-max
+    // fields -- no new design state was introduced.
+    var famSelEl = w.document.getElementById('d-filament');
+    var filaComboBtn = w.document.getElementById('filament-combo-btn');
+    var filaComboList = w.document.getElementById('filament-combo-list');
+    var filaComboLabel = w.document.getElementById('filament-combo-label');
+    var prevFilamentValue = famSelEl.value;
+    check('filament dropdown fetched real profiles (more than just the generic fallback)',
+          famSelEl.options.length > 1, 'got ' + famSelEl.options.length + ' options');
+
+    filaComboBtn.click();
+    check('clicking the filament combo opens its list',
+          filaComboList.classList.contains('open'), 'list classes ' + filaComboList.className);
+    check('the open list is populated from the real <select>, not left empty',
+          filaComboList.children.length === famSelEl.options.length,
+          'list has ' + filaComboList.children.length + ', select has ' + famSelEl.options.length);
+
+    var targetOpt = famSelEl.options[1];
+    filaComboList.children[1].dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    check('picking a filament from the list updates the real <select>',
+          famSelEl.value === targetOpt.value, 'select value ' + famSelEl.value + ', want ' + targetOpt.value);
+    check('...and updates design.filament to match',
+          w.__designSnapshot().filament === targetOpt.value,
+          'got ' + w.__designSnapshot().filament);
+    check('...and updates the combo label text',
+          filaComboLabel.textContent === targetOpt.textContent,
+          'got ' + JSON.stringify(filaComboLabel.textContent));
+    check('picking a filament closes the list',
+          !filaComboList.classList.contains('open'), 'still open');
+
+    var filaModal = w.document.getElementById('filament-modal');
+    var filaCustomRow = w.document.getElementById('fm-custom-row');
+    check('filament settings modal starts closed', filaModal.style.display === 'none',
+          'got display=' + filaModal.style.display);
+    w.document.getElementById('filament-edit-btn').click();
+    check('the Edit icon opens the filament settings modal',
+          filaModal.style.display !== 'none', 'got display=' + filaModal.style.display);
+    check('the "Save as custom filament" row stays hidden (no backend exists for it)',
+          filaCustomRow.style.display === 'none', 'got display=' + filaCustomRow.style.display);
+    w.document.getElementById('fm-modal-done').click();
+    check('Done closes the filament settings modal',
+          filaModal.style.display === 'none', 'got display=' + filaModal.style.display);
+
+    w.document.getElementById('filament-add-btn').click();
+    check('the Add icon also opens the same filament settings modal',
+          filaModal.style.display !== 'none', 'got display=' + filaModal.style.display);
+
+    // Tooltip: hover an info button, confirm the shared #fm-tooltip shows
+    // its data-tip content and hides again on mouseleave.
+    var fmTip = w.document.getElementById('fm-tooltip');
+    var infoBtn = filaModal.querySelector('.fm-info-btn');
+    check('an info button exists inside the filament modal to hover', !!infoBtn, 'none found');
+    infoBtn.dispatchEvent(new w.Event('mouseenter'));
+    check('hovering an info button shows the shared tooltip with its own text',
+          fmTip.style.display !== 'none' && fmTip.textContent.length > 0 &&
+          fmTip.textContent === infoBtn.getAttribute('data-tip'),
+          'tooltip display=' + fmTip.style.display + ' text=' + JSON.stringify(fmTip.textContent));
+    infoBtn.dispatchEvent(new w.Event('mouseleave'));
+    check('leaving the info button hides the tooltip again',
+          fmTip.style.display === 'none', 'got display=' + fmTip.style.display);
+
+    // Temperature override: entering a value reveals the reset-to-default
+    // button (hidden by default); clicking it clears back to blank
+    // (= "auto", the filament's own default) and hides itself again.
+    var nozzleTempEl = w.document.getElementById('d-nozzletemp');
+    var nozzleResetBtn = w.document.getElementById('fm-reset-nozzle');
+    var prevNozzleTemp = nozzleTempEl.value;
+    check('the reset button is hidden while there is no override',
+          nozzleResetBtn.style.display === 'none', 'got display=' + nozzleResetBtn.style.display);
+    nozzleTempEl.value = '215';
+    nozzleTempEl.dispatchEvent(new w.Event('input'));
+    nozzleTempEl.dispatchEvent(new w.Event('change'));
+    check('entering an override value shows the reset button',
+          nozzleResetBtn.style.display !== 'none', 'got display=' + nozzleResetBtn.style.display);
+    check('...and marks the field as overridden',
+          nozzleTempEl.classList.contains('fm-overridden'), 'classes ' + nozzleTempEl.className);
+    nozzleResetBtn.click();
+    check('clicking reset clears the override back to blank',
+          nozzleTempEl.value === '', 'got ' + JSON.stringify(nozzleTempEl.value));
+    // __designSnapshot() IS buildGenerateBody() -- it only sets body.nozzle_temp
+    // when design.nozzle_temp is non-null (see designer.js's "_parse_nozzle_temp()"
+    // comment), so a cleared override means the KEY IS ABSENT from the request
+    // (undefined here), not present-and-null. That absence is what tells the
+    // server to fall back to the filament's own default -- the actual "auto"
+    // contract, not a null value.
+    check('...and the request no longer carries a nozzle_temp override (auto)',
+          w.__designSnapshot().nozzle_temp === undefined,
+          'got ' + w.__designSnapshot().nozzle_temp);
+    check('...and the reset button hides itself again',
+          nozzleResetBtn.style.display === 'none', 'got display=' + nozzleResetBtn.style.display);
+
+    // Leave the field and the selection as we found them.
+    if(prevNozzleTemp !== ''){
+      nozzleTempEl.value = prevNozzleTemp;
+      nozzleTempEl.dispatchEvent(new w.Event('input'));
+      nozzleTempEl.dispatchEvent(new w.Event('change'));
+    }
+    w.document.getElementById('fm-modal-done').click();
+    famSelEl.value = prevFilamentValue;
+    famSelEl.dispatchEvent(new w.Event('change'));
+
+    // ---- Zone Overrides / Point Edit Modifiers / printer-add modal: still ---
+    // ---- open and close cleanly after the index.html merge ------------------
+    // None of these three were the focus of any of this session's edits, but
+    // the jing-liang merge touched nearly the whole of index.html, so don't
+    // assume untouched-looking code came through unscathed -- check it.
+    var zoModal = w.document.getElementById('zone-modal');
+    check('Zone Overrides modal starts closed', zoModal.style.display === 'none',
+          'got display=' + zoModal.style.display);
+    w.document.getElementById('zone-btn').click();
+    check('Zone Overrides button opens its modal',
+          zoModal.style.display !== 'none', 'got display=' + zoModal.style.display);
+    w.document.getElementById('zo-modal-done').click();
+    check('Done closes the Zone Overrides modal',
+          zoModal.style.display === 'none', 'got display=' + zoModal.style.display);
+
+    var peModal = w.document.getElementById('point-edit-modal');
+    check('Point Edit Modifiers modal starts closed', peModal.style.display === 'none',
+          'got display=' + peModal.style.display);
+    w.document.getElementById('point-edit-btn').click();
+    check('Point Edit Modifiers button opens its modal',
+          peModal.style.display !== 'none', 'got display=' + peModal.style.display);
+    w.document.getElementById('pe-modal-done').click();
+    check('Done closes the Point Edit Modifiers modal',
+          peModal.style.display === 'none', 'got display=' + peModal.style.display);
+
+    var pmModal = w.document.getElementById('printer-modal');
+    check('Add-printer modal starts closed', pmModal.style.display === 'none',
+          'got display=' + pmModal.style.display);
+    w.document.getElementById('printer-add-btn').click();
+    check('the + icon opens the add-printer modal',
+          pmModal.style.display !== 'none', 'got display=' + pmModal.style.display);
+    w.document.getElementById('pm-cancel-btn').click();
+    check('Cancel closes the add-printer modal',
+          pmModal.style.display === 'none', 'got display=' + pmModal.style.display);
 
     // ---- Bottom (Open/Solid) must not clobber Base layers --------------------
     // The Bottom radio handler used to do
