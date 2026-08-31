@@ -35,8 +35,8 @@ const OVH_RED_DEG = 55;
 
 // ---- scene setup ----------------------------------------------------------
 const wrap = document.getElementById('canvas-wrap');
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -51,15 +51,15 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x2b3036);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
-camera.position.set(BED_X * 0.9, BED_Z * 1.1, BED_Y * 1.3);
+camera.position.set(BED_X*0.9, BED_Z*1.1, BED_Y*1.3);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = false;   // on-demand rendering instead of a perpetual loop
-controls.target.set(0, BED_Z * 0.25, 0);
+controls.target.set(0, BED_Z*0.25, 0);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.9));
 const dir = new THREE.DirectionalLight(0xffffff, 0.6);
-dir.position.set(1, 2, 1); scene.add(dir);
+dir.position.set(1,2,1); scene.add(dir);
 
 // ---- bed ------------------------------------------------------------------
 // Printer X -> three X, printer Y -> three -Z (NEGATED), printer Z -> three Y
@@ -77,16 +77,15 @@ const bedGroup = new THREE.Group(); scene.add(bedGroup);
   // above): 0x2a2e33 was the previous minor-line colour and is now almost
   // exactly the background colour itself -- the grid would have nearly
   // vanished. Both colours keep the same ~1.6x major/minor ratio as before.
-  const grid = new THREE.GridHelper(BED_X, 23, 0x3b434e, 0x21262d);
+  const grid = new THREE.GridHelper(BED_X, 23, 0x5b6572, 0x393f47);
   bedGroup.add(grid);
   // Safe-print-area outline (30-208 x 30-185 from printer.cfg).
-  // (Removed on request)
-  // const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
-  // const c=[[ax[0],ay[0]],[ax[1],ay[0]],[ax[1],ay[1]],[ax[0],ay[1]],[ax[0],ay[0]]];
-  // const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,cy-y));
-  // const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
-  //   new THREE.LineDashedMaterial({color:0x2f6bff,dashSize:4,gapSize:3,transparent:true,opacity:.7}));
-  // ln.computeLineDistances(); bedGroup.add(ln);
+  const ax=[30,208], ay=[30,185], cx=BED_X/2, cy=BED_Y/2;
+  const c=[[ax[0],ay[0]],[ax[1],ay[0]],[ax[1],ay[1]],[ax[0],ay[1]],[ax[0],ay[0]]];
+  const pts=c.map(([x,y])=>new THREE.Vector3(x-cx,0.1,cy-y));
+  const ln=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineDashedMaterial({color:0x2f6bff,dashSize:4,gapSize:3,transparent:true,opacity:.7}));
+  ln.computeLineDistances(); bedGroup.add(ln);
 }
 
 // ---- Voron Trident build plate ---------------------------------------------
@@ -106,7 +105,7 @@ const TRIDENT_MARK_D =
 // full glyph's viewBox: "8.22 12.92 80.26 80.26" (see brand/README.md)
 const TRIDENT_MARK_VB = { x: 8.22, y: 12.92, w: 80.26 };
 
-function buildTridentLogoTexture(peiHex) {
+function buildTridentLogoTexture(peiHex){
   const size = 512;
   const c = document.createElement('canvas');
   c.width = c.height = size;
@@ -115,10 +114,10 @@ function buildTridentLogoTexture(peiHex) {
   ctx.fillRect(0, 0, size, size);
 
   const logoPx = size * 0.30;                        // rendered mark size on the plate
-  const boxTop = size / 2 - logoPx / 2;
+  const boxTop = size/2 - logoPx/2;
   const scale = logoPx / TRIDENT_MARK_VB.w;
   ctx.save();
-  ctx.translate(size / 2 - logoPx / 2, boxTop);
+  ctx.translate(size/2 - logoPx/2, boxTop);
   ctx.scale(scale, scale);
   ctx.translate(-TRIDENT_MARK_VB.x, -TRIDENT_MARK_VB.y);
   ctx.strokeStyle = '#9aa0a6';   // --ink-muted, same grey as the app's mark
@@ -130,30 +129,33 @@ function buildTridentLogoTexture(peiHex) {
 
   // Draws `text` centered at (cx, baselineY) with manual per-character
   // letter-spacing (portable -- no reliance on ctx.letterSpacing support).
-  function drawSpacedText(text, cx, baselineY, fontPx, weight, spacingFrac, fillStyle) {
+  function drawSpacedText(text, cx, baselineY, fontPx, weight, spacingFrac, fillStyle){
     ctx.font = `${weight} ${fontPx}px -apple-system, "Segoe UI", Arial, sans-serif`;
     ctx.fillStyle = fillStyle;
     const spacing = fontPx * spacingFrac;
     const charW = [...text].map(ch => ctx.measureText(ch).width);
-    const totalW = charW.reduce((a, b) => a + b, 0) + spacing * (text.length - 1);
-    let x = cx - totalW / 2;
+    const totalW = charW.reduce((a,b) => a+b, 0) + spacing*(text.length-1);
+    let x = cx - totalW/2;
     for (let i = 0; i < text.length; i++) {
-      ctx.fillText(text[i], x + charW[i] / 2, baselineY);
+      ctx.fillText(text[i], x + charW[i]/2, baselineY);
       x += charW[i] + spacing;
     }
   }
 
-  // "TRIDENT" wordmark below the glyph, matching the naming used on the
-  // brand's own social/promo assets. Ink bounds for the full glyph are y
-  // 24.9-81.2 within its own 12.92-93.18 viewBox span (see brand/README.md),
-  // so the ink's bottom edge sits 85.1% down the drawn box -- used here to
-  // clear the glyph regardless of logoPx.
+  // "TRIDENT / NON-PLANAR SLICER" wordmark below the glyph, matching the
+  // naming used on the brand's own social/promo assets. Ink bounds for the
+  // full glyph are y 24.9-81.2 within its own 12.92-93.18 viewBox span (see
+  // brand/README.md), so the ink's bottom edge sits 85.1% down the drawn box
+  // -- used here to clear the glyph regardless of logoPx.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const inkBottom = boxTop + logoPx * ((81.2 - TRIDENT_MARK_VB.y) / TRIDENT_MARK_VB.w);
   const titlePx = size * 0.042;
-  const titleY = inkBottom + size * 0.035 + titlePx * 0.8;
-  drawSpacedText('TRIDENT', size / 2, titleY, titlePx, 700, 0.32, '#9aa0a6');
+  const titleY = inkBottom + size*0.035 + titlePx*0.8;
+  drawSpacedText('TRIDENT', size/2, titleY, titlePx, 700, 0.32, '#9aa0a6');
+  const subPx = titlePx * 0.52;
+  const subY = titleY + titlePx*0.6 + subPx*1.3;
+  drawSpacedText('NON-PLANAR SLICER', size/2, subY, subPx, 600, 0.28, 'rgba(154,160,166,0.75)');
 
   const tex = new THREE.CanvasTexture(c);
   if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
@@ -162,9 +164,9 @@ function buildTridentLogoTexture(peiHex) {
 
 const printerGroup = new THREE.Group(); scene.add(printerGroup);
 {
-  const beam = (x, y, z, sx, sy, sz, mat) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
-    m.position.set(x, y, z); printerGroup.add(m); return m;
+  const beam = (x,y,z, sx,sy,sz, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), mat);
+    m.position.set(x,y,z); printerGroup.add(m); return m;
   };
   // moving bed plate. IMPORTANT: the PEI's TOP surface must sit exactly at
   // world Y=0 (the print's Z=0) or first layers get swallowed inside the
@@ -172,23 +174,19 @@ const printerGroup = new THREE.Group(); scene.add(printerGroup);
   // Plate materials are kept transparent so they can fade out when the camera
   // dips below the bed - otherwise the opaque boxes black out the whole model
   // when viewing from underneath.
-  const plateMat = new THREE.MeshStandardMaterial({
-    color: 0x14181f, metalness: 0.2,
-    roughness: 0.85, transparent: true, opacity: 0.95
-  });
+  const plateMat = new THREE.MeshStandardMaterial({ color:0x14181f, metalness:0.2,
+    roughness:0.85, transparent:true, opacity:0.95 });
   // color left white: MeshStandardMaterial multiplies map texels by `color`,
   // and the canvas texture already paints the PEI background itself, so a
   // tinted base color would darken the grey logo lines toward invisibility.
-  const peiMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff, metalness: 0.1,
-    roughness: 0.95, transparent: true, opacity: 0.95, map: buildTridentLogoTexture('#2a2f1c')
-  });
+  const peiMat = new THREE.MeshStandardMaterial({ color:0xffffff, metalness:0.1,
+    roughness:0.95, transparent:true, opacity:0.95, map: buildTridentLogoTexture('#2a2f1c') });
   window.__bedMats = [plateMat, peiMat];
-  const plate = beam(0, -4.6, 0, BED_X, 8, BED_Y, plateMat);
-  const pei = beam(0, -0.32, 0, BED_X - 6, 0.6, BED_Y - 6, peiMat);
+  const plate = beam(0,-4.6,0, BED_X,8,BED_Y, plateMat);
+  const pei = beam(0,-0.32,0, BED_X-6,0.6,BED_Y-6, peiMat);
 }
 
-let pathObj = null, travelObj = null;
+let pathObj=null, travelObj=null;
 
 // ---- toolpath bead mesh -----------------------------------------------------
 // The real toolpath renders as one box per extrude segment (InstancedMesh,
@@ -224,13 +222,13 @@ const nozzle = (() => {
   const g = new THREE.Group();
   const tip = new THREE.Mesh(
     new THREE.ConeGeometry(2.4, 7, 16),
-    new THREE.MeshStandardMaterial({ color: 0xbfc6cf, metalness: 0.7, roughness: 0.35 }));
+    new THREE.MeshStandardMaterial({ color:0xbfc6cf, metalness:0.7, roughness:0.35 }));
   tip.rotation.x = Math.PI;     // point the cone tip downward (to the bed)
   tip.position.y = 3.5;         // apex sits at the group origin = the print point
   g.add(tip);
   const hot = new THREE.Mesh(
     new THREE.CylinderGeometry(2.6, 2.6, 5, 16),
-    new THREE.MeshStandardMaterial({ color: 0xe0402f, metalness: 0.3, roughness: 0.6 }));
+    new THREE.MeshStandardMaterial({ color:0xe0402f, metalness:0.3, roughness:0.6 }));
   hot.position.y = 9.5;
   g.add(hot);
   g.visible = false;
@@ -248,20 +246,20 @@ let speedMult = 8;      // playback speed multiplier (1x = real print time), fro
 let playT = 0;          // play clock in seconds, along the extrude-only segT[] timeline
 
 // viridis-ish ramp
-function ramp(t) {
-  const stops = [[0.17, 0.23, 0.56], [0.12, 0.62, 0.54], [0.81, 0.88, 0.12], [0.99, 0.65, 0.04], [0.88, 0.25, 0.18]];
-  t = Math.max(0, Math.min(1, t)); const f = t * (stops.length - 1); const i = Math.floor(f); const a = f - i;
-  const c0 = stops[i], c1 = stops[Math.min(i + 1, stops.length - 1)];
-  return [c0[0] + (c1[0] - c0[0]) * a, c0[1] + (c1[1] - c0[1]) * a, c0[2] + (c1[2] - c0[2]) * a];
+function ramp(t){
+  const stops=[[0.17,0.23,0.56],[0.12,0.62,0.54],[0.81,0.88,0.12],[0.99,0.65,0.04],[0.88,0.25,0.18]];
+  t=Math.max(0,Math.min(1,t)); const f=t*(stops.length-1); const i=Math.floor(f); const a=f-i;
+  const c0=stops[i], c1=stops[Math.min(i+1,stops.length-1)];
+  return [c0[0]+(c1[0]-c0[0])*a, c0[1]+(c1[1]-c0[1])*a, c0[2]+(c1[2]-c0[2])*a];
 }
 
 // ---- gcode parsing --------------------------------------------------------
-const FIL_AREA = Math.PI * (1.75 / 2) * (1.75 / 2);   // mm^2 of 1.75mm filament
+const FIL_AREA = Math.PI * (1.75/2) * (1.75/2);   // mm^2 of 1.75mm filament
 
 // Build a string key for a 2D bucket in the XY support grid.
 // bx/bz are printer-space X/Y coordinates; cell is the bucket size in mm.
-function bucketKey(bx, bz, cell) {
-  return (Math.floor(bx / cell) | 0) + ',' + (Math.floor(bz / cell) | 0);
+function bucketKey(bx, bz, cell){
+  return (Math.floor(bx/cell) | 0) + ',' + (Math.floor(bz/cell) | 0);
 }
 
 // Compute per-segment risk flags using an O(n) XY grid hash.
@@ -294,7 +292,7 @@ function bucketKey(bx, bz, cell) {
 // over-warn relative to the authoritative report -- if that ever inverts,
 // something here has drifted and needs looking at.
 // Returns a Uint8Array of length nSeg (1=risky, 0=safe).
-function computeRiskFlags(ext, nSeg) {
+function computeRiskFlags(ext, nSeg){
   // Grid maps "bucket_x,bucket_z" -> Map of "qx,qy,qz" -> {wx,wy,wz}, the
   // de-duplicated, quantised prior midpoints in that cell (Map dedups on the
   // quantised-string key the way analyze.py's per-cell set() does).
@@ -304,21 +302,21 @@ function computeRiskFlags(ext, nSeg) {
   const XY_STEP = 0.5, Z_STEP = 0.1;                 // match analyze.py's storage quantisation
   const quant = (v, step) => Math.round(v / step) * step;
 
-  for (let s = 0; s < nSeg; s++) {
+  for(let s = 0; s < nSeg; s++){
     const base = s * 6;
     // Midpoint in printer coordinates (not world coords).
     // ext[] stores world-space: ax=printerX-cx, ay=printerZ(=worldY), az=cy-printerY
     // (negated -- see the coordinate-mapping note near the top of this file).
     // We stored ax/ay/az for start, bx/by/bz for end.
-    const mx = (ext[base + 0] + ext[base + 3]) * 0.5;   // world X = printerX - cx
-    const mz = (ext[base + 2] + ext[base + 5]) * 0.5;   // world Z = cy - printerY
+    const mx = (ext[base+0] + ext[base+3]) * 0.5;   // world X = printerX - cx
+    const mz = (ext[base+2] + ext[base+5]) * 0.5;   // world Z = cy - printerY
     // NOTE: this function only ever uses mz through hypot()/distance math below,
     // so the sign of the Y<->Z mapping does not affect its result -- confirmed,
     // no logic change needed here beyond the comment.
-    const my = (ext[base + 1] + ext[base + 4]) * 0.5;   // world Y = printerZ
+    const my = (ext[base+1] + ext[base+4]) * 0.5;   // world Y = printerZ
 
     // Only test segments above the first-layer threshold.
-    if (my > RISK_Z_MIN) {
+    if(my > RISK_Z_MIN){
       // Check neighbouring buckets in XY. Bucket index uses round(), matching
       // analyze.py's `round(mx / CELL)` exactly (NOT Math.floor: a floor-based
       // index and a round-based index can disagree on which cell a point near
@@ -331,23 +329,23 @@ function computeRiskFlags(ext, nSeg) {
       // 3x3 neighbour-cell scan (radius 1), same as analyze.py's
       // cx in (gx-1, gx, gx+1) x cy in (gy-1, gy, gy+1).
       outer:
-      for (let di = -1; di <= 1 && !supported; di++) {
-        for (let dj = -1; dj <= 1 && !supported; dj++) {
-          const key = (bxi + di) + ',' + (bzi + dj);
+      for(let di = -1; di <= 1 && !supported; di++){
+        for(let dj = -1; dj <= 1 && !supported; dj++){
+          const key = (bxi+di) + ',' + (bzi+dj);
           const bucket = grid.get(key);
-          if (!bucket) continue;
-          for (const pr of bucket.values()) {
+          if(!bucket) continue;
+          for(const pr of bucket.values()){
             // Distance test against the RAW (unquantised) query midpoint --
             // only what we store below is quantised, exactly as analyze.py
             // quantises what it stores, not what it queries.
             const dxy = Math.hypot(pr.wx - mx, pr.wz - mz);
-            if (dxy > RISK_XY) continue;
+            if(dxy > RISK_XY) continue;
             const dz = my - pr.wy;  // positive = current is above prior
-            if (dz > RISK_DZ_LO && dz <= RISK_DZ_HI) { supported = true; break; }
+            if(dz > RISK_DZ_LO && dz <= RISK_DZ_HI){ supported = true; break; }
           }
         }
       }
-      if (!supported) risk[s] = 1;
+      if(!supported) risk[s] = 1;
     }
 
     // Insert this segment's midpoint into the grid for future segments,
@@ -355,10 +353,10 @@ function computeRiskFlags(ext, nSeg) {
     // analyze.py's `grid.setdefault(key, set()).add((round(mx*2)/2, ...))`.
     const key = Math.round(mx / BUCKET_CELL) + ',' + Math.round(mz / BUCKET_CELL);
     let bucket = grid.get(key);
-    if (!bucket) { bucket = new Map(); grid.set(key, bucket); }
+    if(!bucket){ bucket = new Map(); grid.set(key, bucket); }
     const qx = quant(mx, XY_STEP), qy = quant(my, Z_STEP), qz = quant(mz, XY_STEP);
     const qkey = qx + ',' + qy + ',' + qz;
-    if (!bucket.has(qkey)) bucket.set(qkey, { wx: qx, wy: qy, wz: qz });
+    if(!bucket.has(qkey)) bucket.set(qkey, {wx: qx, wy: qy, wz: qz});
   }
   return risk;
 }
@@ -372,12 +370,12 @@ function computeRiskFlags(ext, nSeg) {
 // into thin air (no support within OVH_SEARCH_R) -> 90 deg. First-layer
 // segments (printer-Z <= OVH_Z_FIRST) are pinned to 0 deg. Returns a
 // Float32Array of length nSeg.
-function computeOverhang(ext, nSeg) {
+function computeOverhang(ext, nSeg){
   const grid = new Map();
   const ovh = new Float32Array(nSeg);
   const NR = Math.ceil(OVH_SEARCH_R / BUCKET_CELL) + 1;
 
-  for (let s = 0; s < nSeg; s++) {
+  for(let s = 0; s < nSeg; s++){
     const base = s * 6;
     // Printer coordinates: world X = printerX, world Z = cy - printerY (both
     // the horizontal plane, Y negated per the top-of-file mapping note);
@@ -385,28 +383,28 @@ function computeOverhang(ext, nSeg) {
     // through hypot()/atan2(h, dz) with h itself a hypot() -- purely metric,
     // no chirality -- so the sign of the Y<->Z mapping does not change its
     // output; confirmed, no logic change needed here beyond this comment.
-    const mx = (ext[base + 0] + ext[base + 3]) * 0.5;   // printer X (horizontal)
-    const mz = (ext[base + 1] + ext[base + 4]) * 0.5;   // printer Z (height)
-    const my = (ext[base + 2] + ext[base + 5]) * 0.5;   // printer Y (horizontal)
+    const mx = (ext[base+0] + ext[base+3]) * 0.5;   // printer X (horizontal)
+    const mz = (ext[base+1] + ext[base+4]) * 0.5;   // printer Z (height)
+    const my = (ext[base+2] + ext[base+5]) * 0.5;   // printer Y (horizontal)
 
     let deg;
-    if (mz <= OVH_Z_FIRST) {
+    if(mz <= OVH_Z_FIRST){
       deg = 0;                                       // first layer: sits on plate
     } else {
       const bxi = Math.floor(mx / BUCKET_CELL);
       const byi = Math.floor(my / BUCKET_CELL);
       let bestH = Infinity, bestDz = 0;
-      for (let di = -NR; di <= NR; di++) {
-        for (let dj = -NR; dj <= NR; dj++) {
-          const bucket = grid.get((bxi + di) + ',' + (byi + dj));
-          if (!bucket) continue;
-          for (let k = 0; k < bucket.length; k++) {
+      for(let di = -NR; di <= NR; di++){
+        for(let dj = -NR; dj <= NR; dj++){
+          const bucket = grid.get((bxi+di) + ',' + (byi+dj));
+          if(!bucket) continue;
+          for(let k = 0; k < bucket.length; k++){
             const pr = bucket[k];
             const dz = mz - pr.mz;                    // height above the prior point
-            if (dz > OVH_DZ_LO && dz <= OVH_DZ_HI) {
+            if(dz > OVH_DZ_LO && dz <= OVH_DZ_HI){
               const h = Math.hypot(pr.mx - mx, pr.my - my);
-              if (h > OVH_SEARCH_R) continue;
-              if (h < bestH) { bestH = h; bestDz = dz; }
+              if(h > OVH_SEARCH_R) continue;
+              if(h < bestH){ bestH = h; bestDz = dz; }
             }
           }
         }
@@ -420,23 +418,23 @@ function computeOverhang(ext, nSeg) {
     // Insert this midpoint for later segments (keyed by printer-XY).
     const key = bucketKey(mx, my, BUCKET_CELL);
     let bucket = grid.get(key);
-    if (!bucket) { bucket = []; grid.set(key, bucket); }
-    bucket.push({ mx, my, mz });
+    if(!bucket){ bucket = []; grid.set(key, bucket); }
+    bucket.push({mx, my, mz});
   }
   return ovh;
 }
 
 // Map an overhang angle (deg) to a green -> yellow -> red RGB triple.
-function overhangColor(deg) {
+function overhangColor(deg){
   const green = [0.15, 0.75, 0.20], yellow = [0.95, 0.85, 0.10], red = [0.88, 0.16, 0.12];
-  if (deg <= 0) return green.slice();
-  if (deg >= OVH_RED_DEG) return red.slice();
-  if (deg <= OVH_YELLOW_DEG) {
+  if(deg <= 0) return green.slice();
+  if(deg >= OVH_RED_DEG) return red.slice();
+  if(deg <= OVH_YELLOW_DEG){
     const t = deg / OVH_YELLOW_DEG;
-    return [green[0] + (yellow[0] - green[0]) * t, green[1] + (yellow[1] - green[1]) * t, green[2] + (yellow[2] - green[2]) * t];
+    return [green[0]+(yellow[0]-green[0])*t, green[1]+(yellow[1]-green[1])*t, green[2]+(yellow[2]-green[2])*t];
   }
   const t = (deg - OVH_YELLOW_DEG) / (OVH_RED_DEG - OVH_YELLOW_DEG);
-  return [yellow[0] + (red[0] - yellow[0]) * t, yellow[1] + (red[1] - yellow[1]) * t, yellow[2] + (red[2] - yellow[2]) * t];
+  return [yellow[0]+(red[0]-yellow[0])*t, yellow[1]+(red[1]-yellow[1])*t, yellow[2]+(red[2]-yellow[2])*t];
 }
 
 // Effective duration (seconds) of extrude segment s. Shared physics for both
@@ -444,13 +442,13 @@ function overhangColor(deg) {
 // agree: effective_speed = min(commandedSpeed, sqrt(dist * ACCEL)) approximates
 // segments that never reach commanded speed (short moves stay slow), and the
 // Z-component speed is additionally capped at MAX_Z_SPEED.
-function segDuration(ext, segSpeed, s) {
+function segDuration(ext, segSpeed, s){
   const base = s * 6;
-  const dx = ext[base + 3] - ext[base + 0];
-  const dy = ext[base + 4] - ext[base + 1];  // world Y = printer Z
-  const dz = ext[base + 5] - ext[base + 2];
-  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  if (dist < 1e-9) return 0;
+  const dx = ext[base+3] - ext[base+0];
+  const dy = ext[base+4] - ext[base+1];  // world Y = printer Z
+  const dz = ext[base+5] - ext[base+2];
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  if(dist < 1e-9) return 0;
   let spd = segSpeed[s] || 1;
   // Acceleration-limited effective speed for short moves.
   const accelSpd = Math.sqrt(dist * ACCEL);
@@ -459,7 +457,7 @@ function segDuration(ext, segSpeed, s) {
   const zFrac = Math.abs(dy) / dist;
   const maxSpd = zFrac > 1e-6 ? MAX_Z_SPEED / zFrac : Infinity;
   spd = Math.min(spd, maxSpd);
-  if (spd < 1e-9) spd = 1;
+  if(spd < 1e-9) spd = 1;
   return dist / spd;
 }
 
@@ -467,38 +465,38 @@ function segDuration(ext, segSpeed, s) {
 // segT[0]=0) for the largest index k with segT[k] <= t. Used to map the
 // play clock (seconds) to a segment count for setProgress. Clamps t outside
 // [segT[0], segT[last]] to the nearest end.
-function timeToSegIndex(segT, t) {
+function timeToSegIndex(segT, t){
   const n = segT.length;
-  if (n === 0) return 0;
-  if (t <= segT[0]) return 0;
-  if (t >= segT[n - 1]) return n - 1;
-  let lo = 0, hi = n - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (segT[mid] <= t) lo = mid; else hi = mid;
+  if(n === 0) return 0;
+  if(t <= segT[0]) return 0;
+  if(t >= segT[n-1]) return n-1;
+  let lo = 0, hi = n-1;
+  while(hi - lo > 1){
+    const mid = (lo+hi) >> 1;
+    if(segT[mid] <= t) lo = mid; else hi = mid;
   }
   return lo;
 }
 
 // Estimate total print time (seconds) summing dist/effective_speed for every move.
-function computeEstTime(ext, trv, segSpeed, nExtSeg) {
+function computeEstTime(ext, trv, segSpeed, nExtSeg){
   let total = 0;
 
   // Extrude segments -- segSpeed[] has one entry per extrude seg.
-  for (let s = 0; s < nExtSeg; s++) total += segDuration(ext, segSpeed, s);
+  for(let s = 0; s < nExtSeg; s++) total += segDuration(ext, segSpeed, s);
 
   // Travel segments -- trv[] has no per-segment speed; use a nominal travel speed.
   // We cannot recover per-travel speed after parsing, so skip or use a default.
   // The travel array only has positions; we do best-effort with no speed data.
   // (Travel time is typically small compared to extrude time.)
   const nTrv = trv.length / 6;
-  for (let s = 0; s < nTrv; s++) {
+  for(let s = 0; s < nTrv; s++){
     const base = s * 6;
-    const dx = trv[base + 3] - trv[base + 0];
-    const dy = trv[base + 4] - trv[base + 1];
-    const dz = trv[base + 5] - trv[base + 2];
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (dist < 1e-9) continue;
+    const dx = trv[base+3] - trv[base+0];
+    const dy = trv[base+4] - trv[base+1];
+    const dz = trv[base+5] - trv[base+2];
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if(dist < 1e-9) continue;
     // Travel speed is not stored -- use 200 mm/s as a typical Voron travel speed.
     const spd = Math.min(200, Math.sqrt(dist * ACCEL));
     total += dist / spd;
@@ -507,82 +505,82 @@ function computeEstTime(ext, trv, segSpeed, nExtSeg) {
 }
 
 // Format seconds into "Xh Ym" or "Xm Ys" string.
-function fmtTime(secs) {
+function fmtTime(secs){
   secs = Math.round(secs);
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   const s = secs % 60;
-  if (h > 0) return h + 'h ' + m + 'm';
-  if (m > 0) return m + 'm ' + s + 's';
+  if(h > 0) return h + 'h ' + m + 'm';
+  if(m > 0) return m + 'm ' + s + 's';
   return s + 's';
 }
 
 // Format seconds as a clock readout: "M:SS" (e.g. "4:12"), or "H:MM:SS" once
 // past an hour (e.g. "1:04:12"). Used for the elapsed/total playback readout.
-function fmtClock(secs) {
+function fmtClock(secs){
   secs = Math.max(0, Math.round(secs));
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   const s = secs % 60;
   const ss = String(s).padStart(2, '0');
-  if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + ss;
+  if(h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + ss;
   return m + ':' + ss;
 }
 
-function parseGcode(text) {
-  const cx = BED_X / 2, cy = BED_Y / 2;
-  let x = 0, y = 0, z = 0, has = false, curF = 0;
-  let minz = Infinity, maxz = -Infinity, minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
-  let fil = 0, extrudeCount = 0, travelCount = 0, maxZrate = 0, relE = false;
-  let curFan = 0, minFan = Infinity, maxFan = -Infinity, fanEverOn = false;   // sticky M106/M107 state (0..1)
-  const ext = [], extCol = [], trv = [];          // world-space vertex arrays
-  const segSpeed = [], segFlow = [];            // per-extrude-segment telemetry
-  const meta = { lineWidth: null, layerHeight: null, nozzle: null, nozzleTemp: null };
+function parseGcode(text){
+  const cx=BED_X/2, cy=BED_Y/2;
+  let x=0,y=0,z=0, has=false, curF=0;
+  let minz=Infinity,maxz=-Infinity, minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity;
+  let fil=0, extrudeCount=0, travelCount=0, maxZrate=0, relE=false;
+  let curFan=0, minFan=Infinity, maxFan=-Infinity, fanEverOn=false;   // sticky M106/M107 state (0..1)
+  const ext=[], extCol=[], trv=[];          // world-space vertex arrays
+  const segSpeed=[], segFlow=[];            // per-extrude-segment telemetry
+  const meta={lineWidth:null, layerHeight:null, nozzle:null, nozzleTemp:null};
 
-  for (let raw of text.split('\n')) {
-    const line = raw.trim(); if (!line) continue;
-    if (line[0] === ';') {                        // header metadata comments
+  for (let raw of text.split('\n')){
+    const line=raw.trim(); if(!line) continue;
+    if(line[0]===';'){                        // header metadata comments
       let m;
-      if ((m = line.match(/line_width=([\d.]+)/))) meta.lineWidth = parseFloat(m[1]);
-      if ((m = line.match(/layer_height=([\d.]+)/))) meta.layerHeight = parseFloat(m[1]);
-      if ((m = line.match(/nozzle=([\d.]+)/))) meta.nozzle = parseFloat(m[1]);
+      if((m=line.match(/line_width=([\d.]+)/))) meta.lineWidth=parseFloat(m[1]);
+      if((m=line.match(/layer_height=([\d.]+)/))) meta.layerHeight=parseFloat(m[1]);
+      if((m=line.match(/nozzle=([\d.]+)/))) meta.nozzle=parseFloat(m[1]);
       continue;
     }
-    const up = line.toUpperCase();
-    if (up.startsWith('M106')) {
-      const m = up.match(/S([\d.]+)/);
-      if (m) curFan = Math.min(1, Math.max(0, parseFloat(m[1]) / 255));
-      fanEverOn = true;                     // fan commanded on at least once
+    const up=line.toUpperCase();
+    if(up.startsWith('M106')){
+      const m=up.match(/S([\d.]+)/);
+      if(m) curFan=Math.min(1,Math.max(0,parseFloat(m[1])/255));
+      fanEverOn=true;                     // fan commanded on at least once
       continue;
     }
-    if (up.startsWith('M107')) { curFan = 0; continue; }
-    if (up.startsWith('M83')) { relE = true; continue; }
-    if (up.startsWith('M82')) { relE = false; continue; }
+    if(up.startsWith('M107')){ curFan=0; continue; }
+    if(up.startsWith('M83')) { relE=true; continue; }
+    if(up.startsWith('M82')) { relE=false; continue; }
     // Nozzle temp: Bambu-style profiles emit M104/M109 S<temp>; the Trident
     // (default) profile emits PRINT_START EXTRUDER=<temp> ... instead. S0 is
     // the heater-off line in the end G-code, not a real target -- ignored so
     // it doesn't clobber the value read from the start of the file.
-    if (up.startsWith('M104') || up.startsWith('M109')) {
-      const m = up.match(/S([\d.]+)/);
-      if (m) { const t = parseFloat(m[1]); if (t > 0) meta.nozzleTemp = t; }
+    if(up.startsWith('M104')||up.startsWith('M109')){
+      const m=up.match(/S([\d.]+)/);
+      if(m){ const t=parseFloat(m[1]); if(t>0) meta.nozzleTemp=t; }
       continue;
     }
-    if (up.startsWith('PRINT_START')) {
-      const m = up.match(/EXTRUDER=([\d.]+)/);
-      if (m) meta.nozzleTemp = parseFloat(m[1]);
+    if(up.startsWith('PRINT_START')){
+      const m=up.match(/EXTRUDER=([\d.]+)/);
+      if(m) meta.nozzleTemp=parseFloat(m[1]);
       continue;
     }
-    if (!(up.startsWith('G0') || up.startsWith('G1'))) continue;
-    let nx = x, ny = y, nz = z, e = null, f = null;
-    for (const tok of line.split(/\s+/).slice(1)) {
-      const c = tok[0].toUpperCase(), v = parseFloat(tok.slice(1));
-      if (Number.isNaN(v)) continue;
-      if (c === 'X') nx = v; else if (c === 'Y') ny = v; else if (c === 'Z') nz = v;
-      else if (c === 'E') e = v; else if (c === 'F') f = v;
+    if(!(up.startsWith('G0')||up.startsWith('G1'))) continue;
+    let nx=x,ny=y,nz=z,e=null,f=null;
+    for(const tok of line.split(/\s+/).slice(1)){
+      const c=tok[0].toUpperCase(), v=parseFloat(tok.slice(1));
+      if(Number.isNaN(v))continue;
+      if(c==='X')nx=v; else if(c==='Y')ny=v; else if(c==='Z')nz=v;
+      else if(c==='E')e=v; else if(c==='F')f=v;
     }
-    if (f !== null) curF = f;                       // feedrate is sticky across moves
-    const extruding = e !== null && (relE ? e > 1e-6 : e > 0);
-    if (has) {
+    if(f!==null) curF=f;                       // feedrate is sticky across moves
+    const extruding = e!==null && (relE ? e>1e-6 : e>0);
+    if(has){
       // Remap to world (Y up). Y is NEGATED (cy-y, not y-cy) so the swap of
       // two axes (printer Z-up -> Three.js Y-up) stays a rotation rather than
       // a reflection -- an un-negated swap has determinant -1 and mirrors any
@@ -590,10 +588,10 @@ function parseGcode(text) {
       // machine actually prints. Every other printer-Y <-> world-Z site in
       // this file (fitView, computeTurns, the measure tool, the shape cage,
       // the nav cube) must use this same negated form.
-      const ax = x - cx, ay = z, az = cy - y;
-      const bx = nx - cx, by = nz, bz = cy - ny;
-      const len = Math.hypot(nx - x, ny - y, nz - z);
-      const speed = curF / 60;                       // mm/s
+      const ax=x-cx, ay=z, az=cy-y;
+      const bx=nx-cx, by=nz, bz=cy-ny;
+      const len=Math.hypot(nx-x,ny-y,nz-z);
+      const speed=curF/60;                       // mm/s
       // Peak Z-rate deliberately mirrors trident_gcode/analyze.py's max_z_rate
       // (see analyze.py around line 216: `if dist > 0 and speed > 0: zr = ...`).
       // That is computed over EVERY move -- travel included -- not just
@@ -603,24 +601,24 @@ function parseGcode(text) {
       // extruding-only (as it used to be) made the viewer under-report the
       // same file's peak Z-rate by 4x. Keep this outside the extruding branch
       // below so the two panels cannot drift apart again.
-      if (len > 0 && speed > 0) { const zr = speed * Math.abs(nz - z) / len; if (zr > maxZrate) maxZrate = zr; }
-      if (extruding) {
-        ext.push(ax, ay, az, bx, by, bz);
+      if(len>0 && speed>0){ const zr=speed*Math.abs(nz-z)/len; if(zr>maxZrate)maxZrate=zr; }
+      if(extruding){
+        ext.push(ax,ay,az, bx,by,bz);
         extCol.push(nz, nz);            // store z; convert to colour after
         extrudeCount++;
         // volumetric flow = filament volume extruded / time = e*area*speed/len
-        const flow = (len > 0 && relE) ? e * FIL_AREA * speed / len : 0;
+        const flow=(len>0 && relE)? e*FIL_AREA*speed/len : 0;
         segSpeed.push(speed); segFlow.push(flow);
         // skip pre-M106 extrudes (fan-off adhesion window) so they don't pin minFan to 0
-        if (fanEverOn) { if (curFan < minFan) minFan = curFan; if (curFan > maxFan) maxFan = curFan; }
-        if (relE) fil += e;
-        minz = Math.min(minz, z, nz); maxz = Math.max(maxz, z, nz);
-        minx = Math.min(minx, nx); maxx = Math.max(maxx, nx); miny = Math.min(miny, ny); maxy = Math.max(maxy, ny);
+        if(fanEverOn){ if(curFan<minFan) minFan=curFan; if(curFan>maxFan) maxFan=curFan; }
+        if(relE) fil+=e;
+        minz=Math.min(minz,z,nz); maxz=Math.max(maxz,z,nz);
+        minx=Math.min(minx,nx);maxx=Math.max(maxx,nx);miny=Math.min(miny,ny);maxy=Math.max(maxy,ny);
       } else {
-        trv.push(ax, ay, az, bx, by, bz); travelCount++;
+        trv.push(ax,ay,az, bx,by,bz); travelCount++;
       }
     }
-    x = nx; y = ny; z = nz; has = true;
+    x=nx;y=ny;z=nz;has=true;
   }
 
   const nExtSeg = extrudeCount;
@@ -644,69 +642,67 @@ function parseGcode(text) {
   // time-based playback walks. segT[0]=0, segT[nExtSeg]=total extrude-only
   // path time (differs from estTimeSec by the excluded travel time).
   const segT = new Float64Array(nExtSeg + 1);
-  for (let s = 0; s < nExtSeg; s++) segT[s + 1] = segT[s] + segDuration(extFlat, segSpeed, s);
+  for(let s = 0; s < nExtSeg; s++) segT[s+1] = segT[s] + segDuration(extFlat, segSpeed, s);
 
   // No M106 seen at all (e.g. a printer profile with no part-cooling fan) --
   // minFan/maxFan stay at their unset Infinity/-Infinity sentinels; null reads
   // better than a nonsensical range in the telemetry card.
   const fanSeen = extrudeCount > 0 && isFinite(minFan);
 
-  return {
-    ext: extFlat, extCol, trv: trvFlat, segSpeed, segFlow, meta, minz, maxz, minx, maxx, miny, maxy,
-    fil, extrudeCount, travelCount, maxZrate,
-    riskFlags: null, riskyCount: null, overhang: null,   // filled in by load() -- see NOTE above
-    estTime, estTimeSec, segT,
-    minFan: fanSeen ? minFan : null, maxFan: fanSeen ? maxFan : null
-  };
+  return {ext:extFlat,extCol,trv:trvFlat,segSpeed,segFlow,meta,minz,maxz,minx,maxx,miny,maxy,
+          fil,extrudeCount,travelCount,maxZrate,
+          riskFlags:null,riskyCount:null,overhang:null,   // filled in by load() -- see NOTE above
+          estTime,estTimeSec,segT,
+          minFan: fanSeen ? minFan : null, maxFan: fanSeen ? maxFan : null};
 }
 
 // Swap the Display-panel legend to match the active colour mode: height shows
 // the viridis gradient + z-range labels, overhang shows a green->yellow->red
 // gradient + angle labels, plain hides the legend entirely.
-function updateLegend(colorMode, d) {
+function updateLegend(colorMode, d){
   const legend = document.getElementById('legend');
   const labels = document.getElementById('legend-labels');
   const lo = document.getElementById('z-lo');
   const mid = document.getElementById('z-mid');
   const hi = document.getElementById('z-hi');
-  if (!legend || !labels) return;
-  if (colorMode === 'overhang') {
+  if(!legend || !labels) return;
+  if(colorMode === 'overhang'){
     legend.style.display = ''; labels.style.display = '';
     legend.style.background = 'linear-gradient(90deg,#26bf33,#f2d919,#e0402f)';
-    if (lo) lo.textContent = '0°';
-    if (mid) mid.textContent = 'overhang';
-    if (hi) hi.textContent = '≥55°';
-  } else if (colorMode === 'plain') {
+    if(lo) lo.textContent = '0°';
+    if(mid) mid.textContent = 'overhang';
+    if(hi) hi.textContent = '≥55°';
+  } else if(colorMode === 'plain'){
     legend.style.display = 'none'; labels.style.display = 'none';
   } else {  // height
     legend.style.display = ''; labels.style.display = '';
     legend.style.background = '';   // fall back to the CSS viridis gradient
-    if (lo) lo.textContent = d ? d.minz.toFixed(0) : '0';
-    if (mid) mid.textContent = 'height (mm)';
-    if (hi) hi.textContent = d ? d.maxz.toFixed(0) : '–';
+    if(lo) lo.textContent = d ? d.minz.toFixed(0) : '0';
+    if(mid) mid.textContent = 'height (mm)';
+    if(hi) hi.textContent = d ? d.maxz.toFixed(0) : '–';
   }
 }
 
-function buildGeometry(d) {
-  if (pathObj) { scene.remove(pathObj); if (pathMat) pathMat.dispose(); }
-  if (travelObj) { scene.remove(travelObj); travelObj.geometry.dispose(); }
+function buildGeometry(d){
+  if(pathObj){scene.remove(pathObj); if(pathMat) pathMat.dispose();}
+  if(travelObj){scene.remove(travelObj);travelObj.geometry.dispose();}
 
   const colorMode = document.getElementById('t-colormode').value;   // 'height' | 'overhang' | 'plain'
   updateLegend(colorMode, d);
   const banding = document.getElementById('t-bands').checked;
   const showRisk = document.getElementById('t-risk').checked;
-  const nSeg = d.ext.length / 6;
+  const nSeg = d.ext.length/6;
 
   // Map each segment to its spiral-turn index so we can shade alternating turns.
   const segTurn = new Int32Array(nSeg);
-  if (banding && cuts && cuts.length > 1) {
-    let ti = 0;
-    for (let s = 0; s < nSeg; s++) { while (ti + 1 < cuts.length && s >= cuts[ti + 1]) ti++; segTurn[s] = ti; }
+  if(banding && cuts && cuts.length>1){
+    let ti=0;
+    for(let s=0;s<nSeg;s++){ while(ti+1<cuts.length && s>=cuts[ti+1]) ti++; segTurn[s]=ti; }
   }
-  const span = Math.max(1e-6, d.maxz - d.minz);
+  const span=Math.max(1e-6, d.maxz-d.minz);
   // Plain mode carries no data, so it is free to just look like filament: a
   // bright natural PLA cream, lit like everything else in the scene.
-  const PLAIN_RGB = [0xff / 255, 0xf6 / 255, 0xe4 / 255];   // bright cream PLA (0xfff6e4)
+  const PLAIN_RGB = [0xff/255, 0xf6/255, 0xe4/255];   // bright cream PLA (0xfff6e4)
   const ext = d.ext;
   const beadW = (d.meta && d.meta.lineWidth) ? d.meta.lineWidth : 0.45;
   const layerH = (d.meta && d.meta.layerHeight) ? d.meta.layerHeight : 0.3;
@@ -719,25 +715,24 @@ function buildGeometry(d) {
   // colour, so it lifts every colour mode's shadow floor equally without
   // shifting anyone's hue.
   pathMat = new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 0.6, metalness: 0.05,
-    emissive: 0x4a4436, emissiveIntensity: 1.0
-  });
+    vertexColors:true, roughness:0.6, metalness:0.05,
+    emissive:0x4a4436, emissiveIntensity:1.0 });
   pathObj = new THREE.InstancedMesh(PATH_BOX_GEOM, pathMat, nSeg);
-  for (let s = 0; s < nSeg; s++) {
-    const zc = d.extCol[s * 2];
+  for(let s=0;s<nSeg;s++){
+    const zc = d.extCol[s*2];
     let rgb;
     // Risky segments get bright red override when highlight-risky is enabled.
-    if (showRisk && d.riskFlags && d.riskFlags[s]) {
+    if(showRisk && d.riskFlags && d.riskFlags[s]){
       rgb = [1.0, 0.15, 0.1];
     } else {
-      if (colorMode === 'overhang') {
+      if(colorMode==='overhang'){
         rgb = overhangColor(d.overhang ? d.overhang[s] : 0);
-      } else if (colorMode === 'plain') {
+      } else if(colorMode==='plain'){
         rgb = PLAIN_RGB;
       } else {
-        rgb = ramp((zc - d.minz) / span);       // height (viridis)
+        rgb = ramp((zc-d.minz)/span);       // height (viridis)
       }
-      if (banding) {
+      if(banding){
         // Darken every other turn -> one stripe per real layer_height. 0.55
         // (chosen for the old UNLIT fat-line renderer, which had zero depth
         // cues of its own) is too strong now that the toolpath is real lit
@@ -747,7 +742,7 @@ function buildGeometry(d) {
         // patches rather than clean rings. 0.85 adds just enough definition
         // without fighting the geometry's own shading.
         const b = (segTurn[s] % 2 === 0) ? 1.0 : 0.85;
-        rgb = [rgb[0] * b, rgb[1] * b, rgb[2] * b];
+        rgb = [rgb[0]*b, rgb[1]*b, rgb[2]*b];
       }
     }
     pathObj.setColorAt(s, _pbColor.setRGB(rgb[0], rgb[1], rgb[2]));
@@ -758,12 +753,12 @@ function buildGeometry(d) {
     // world-up across neighbouring segments instead of twisting -- adjacent
     // beads would otherwise show visible seams rather than reading as one
     // continuous corrugated wall.
-    _pbStart.set(ext[s * 6], ext[s * 6 + 1], ext[s * 6 + 2]);
-    _pbEnd.set(ext[s * 6 + 3], ext[s * 6 + 4], ext[s * 6 + 5]);
+    _pbStart.set(ext[s*6], ext[s*6+1], ext[s*6+2]);
+    _pbEnd.set(ext[s*6+3], ext[s*6+4], ext[s*6+5]);
     _pbMid.addVectors(_pbStart, _pbEnd).multiplyScalar(0.5);
     _pbDir.subVectors(_pbEnd, _pbStart);
     const len = Math.max(_pbDir.length(), 1e-4);
-    const up = Math.abs(_pbDir.y / len) > 0.999 ? _pbAltUp : _pbUp;
+    const up = Math.abs(_pbDir.y/len) > 0.999 ? _pbAltUp : _pbUp;
     _pbM4.lookAt(_pbStart, _pbEnd, up);
     _pbQuat.setFromRotationMatrix(_pbM4);
     _pbScale.set(beadW, layerH, len);
@@ -771,17 +766,17 @@ function buildGeometry(d) {
     pathObj.setMatrixAt(s, _pbM4);
   }
   pathObj.instanceMatrix.needsUpdate = true;
-  if (pathObj.instanceColor) pathObj.instanceColor.needsUpdate = true;
+  if(pathObj.instanceColor) pathObj.instanceColor.needsUpdate = true;
   scene.add(pathObj);
 
-  const tg = new THREE.BufferGeometry();
-  tg.setAttribute('position', new THREE.Float32BufferAttribute(d.trv, 3));
+  const tg=new THREE.BufferGeometry();
+  tg.setAttribute('position', new THREE.Float32BufferAttribute(d.trv,3));
   // 0x5a5a5a was tuned against the 0x1c1f22 canvas; against the lighter
   // 0x2b3036 background its contrast dropped by roughly half, so it is
   // lifted again here to keep travel moves legible without turning them into
   // a distraction from the extrude path they are meant to sit behind.
-  travelObj = new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x74747a, transparent: true, opacity: 0.45 }));
-  travelObj.visible = document.getElementById('t-travel').checked;
+  travelObj=new THREE.LineSegments(tg, new THREE.LineBasicMaterial({color:0x74747a,transparent:true,opacity:0.45}));
+  travelObj.visible=document.getElementById('t-travel').checked;
   scene.add(travelObj);
 
   // Init print-process animation: reveal is by instance count (1 per segment).
@@ -795,9 +790,9 @@ function buildGeometry(d) {
 // and depth-test off so the whole toolpath is see-through; the bed is dimmed by
 // render(). Off: fully opaque with normal depth testing. Reads the checkbox so
 // it stays correct after buildGeometry rebuilds pathMat from scratch.
-function applyXray() {
+function applyXray(){
   xrayOn = !!document.getElementById('t-xray').checked;
-  if (pathMat) {
+  if(pathMat){
     pathMat.transparent = xrayOn;
     pathMat.opacity = xrayOn ? 0.28 : 1.0;
     pathMat.depthTest = !xrayOn;
@@ -808,33 +803,33 @@ function applyXray() {
 // Frame the camera on the loaded model (not the whole bed). Flat prints (e.g.
 // a single-layer calibration disk) get a steep, near-top-down view so the
 // spiral fill is actually visible; tall prints get the classic 3/4 view.
-function fitView() {
-  if (!lastData) return;
-  const d = lastData;
+function fitView(){
+  if(!lastData) return;
+  const d=lastData;
   // cz uses BED_Y/2 - (miny+maxy)/2 (not the reverse) to match parseGcode's
   // negated printer-Y -> world-Z mapping (az = cy - y).
-  const cx = (d.minx + d.maxx) / 2 - BED_X / 2, cz = BED_Y / 2 - (d.miny + d.maxy) / 2;
-  const h = d.maxz - d.minz, cy = (d.minz + d.maxz) / 2;
-  const span = Math.max(d.maxx - d.minx, d.maxy - d.miny, h * 1.6, 12);
-  const flat = h < span * 0.15;
-  const dist = span * 1.55;
+  const cx=(d.minx+d.maxx)/2-BED_X/2, cz=BED_Y/2-(d.miny+d.maxy)/2;
+  const h=d.maxz-d.minz, cy=(d.minz+d.maxz)/2;
+  const span=Math.max(d.maxx-d.minx, d.maxy-d.miny, h*1.6, 12);
+  const flat = h < span*0.15;
+  const dist = span*1.55;
   const elev = flat ? 1.15 : 0.55;          // steeper for flat prints
   // Positive Z offset from the model centre = the FRONT side of the bed
   // (world +Z is printer Y=0 after the negated mapping above), so this is a
   // deliberate front-right-above 3/4 view, matching the initial
   // camera.position.set() near the top of this file -- not an accident of
   // the sign of `dist`.
-  camera.position.set(cx + dist * Math.cos(elev) * 0.75,
-    cy + dist * Math.sin(elev),
-    cz + dist * Math.cos(elev) * 0.75);
+  camera.position.set(cx + dist*Math.cos(elev)*0.75,
+                      cy + dist*Math.sin(elev),
+                      cz + dist*Math.cos(elev)*0.75);
   controls.target.set(cx, cy, cz);
   controls.update();
   render();
 }
 
 let gcodeTitleEl = null;
-function showGcodeTitle(name) {
-  if (!gcodeTitleEl) {
+function showGcodeTitle(name){
+  if(!gcodeTitleEl){
     gcodeTitleEl = document.createElement('div');
     gcodeTitleEl.id = 'gcode-title';
     // Tokens resolve normally here: this is an ordinary element inside
@@ -865,35 +860,35 @@ function showGcodeTitle(name) {
 // fetch, so it may be absent or incomplete at the instant this runs). Returns
 // a finite number, or null if no grounded limit is available -- callers must
 // withhold the ok/danger verdict in the null case rather than guess.
-function currentMaxZVelocity() {
+function currentMaxZVelocity(){
   const lim = window.__printerLimits;
   const v = lim && lim.max_z_velocity;
   return (typeof v === 'number' && isFinite(v)) ? v : null;
 }
 
-function showStats(name, d) {
-  document.getElementById('stats-group').style.display = 'block';
-  document.getElementById('overlay').style.display = 'none';
+function showStats(name,d){
+  document.getElementById('stats-group').style.display='block';
+  document.getElementById('overlay').style.display='none';
   showGcodeTitle(name);
-  const set = (id, v) => document.getElementById(id).textContent = v;
-  set('s-name', name.length > 20 ? name.slice(0, 18) + '...' : name);
-  set('s-moves', d.extrudeCount.toLocaleString());
-  set('s-travel', d.travelCount.toLocaleString());
-  set('s-height', (d.maxz - d.minz).toFixed(1) + ' mm');
-  set('s-foot', `${(d.maxx - d.minx).toFixed(0)}x${(d.maxy - d.miny).toFixed(0)} mm`);
-  set('s-fil', d.fil > 0 ? (d.fil / 1000).toFixed(2) + ' m' : 'n/a');
-  const zr = d.maxZrate;
-  const zLimit = currentMaxZVelocity();
-  const zrateEl = document.getElementById('s-zrate');
-  if (zLimit != null) {
-    set('s-zrate', zr.toFixed(1) + ' mm/s' + (zr > zLimit ? ' !' : ' ok'));
-    zrateEl.classList.toggle('state-danger', zr > zLimit);
+  const set=(id,v)=>document.getElementById(id).textContent=v;
+  set('s-name',name.length>20?name.slice(0,18)+'...':name);
+  set('s-moves',d.extrudeCount.toLocaleString());
+  set('s-travel',d.travelCount.toLocaleString());
+  set('s-height',(d.maxz-d.minz).toFixed(1)+' mm');
+  set('s-foot',`${(d.maxx-d.minx).toFixed(0)}x${(d.maxy-d.miny).toFixed(0)} mm`);
+  set('s-fil',d.fil>0?(d.fil/1000).toFixed(2)+' m':'n/a');
+  const zr=d.maxZrate;
+  const zLimit=currentMaxZVelocity();
+  const zrateEl=document.getElementById('s-zrate');
+  if(zLimit!=null){
+    set('s-zrate',zr.toFixed(1)+' mm/s'+(zr>zLimit?' !':' ok'));
+    zrateEl.classList.toggle('state-danger', zr>zLimit);
   } else {
     // No grounded limit available -- show the measured rate but withhold the
     // verdict rather than inventing or falling back to a ceiling. A verdict
     // that isn't backed by the selected printer's own declared limit is
     // worse than none (CLAUDE.md).
-    set('s-zrate', zr.toFixed(1) + ' mm/s (limit unknown)');
+    set('s-zrate',zr.toFixed(1)+' mm/s (limit unknown)');
     zrateEl.classList.remove('state-danger');
   }
   set('s-time', d.estTime || '--');
@@ -917,29 +912,29 @@ const SPARK_FILL_COL = 'rgba(47,107,255,0.18)';
 const SPARK_REF_COL = '#ffb454';  // mirrors --warn in style.css (safety-state color, not decoration)
 const SPARK_CURSOR_COL = 'rgba(255,255,255,0.75)';
 
-function buildSparkline(d) {
+function buildSparkline(d){
   const canvas = document.getElementById('spark');
-  if (!canvas) return;
+  if(!canvas) return;
   const W = canvas.offsetWidth || canvas.parentElement.clientWidth || 400;
   const H = 26;
   canvas.width = W;
   canvas.height = H;
 
   const nSeg = d.segFlow.length;
-  if (nSeg === 0) { sparkOffscreen = null; return; }
+  if(nSeg === 0){ sparkOffscreen = null; return; }
 
   // Downsample to SPARK_BUCKETS: take max flow in each bucket.
   const nb = Math.min(SPARK_BUCKETS, nSeg);
   const buckets = new Float32Array(nb);
-  for (let s = 0; s < nSeg; s++) {
+  for(let s = 0; s < nSeg; s++){
     const bi = Math.floor(s / nSeg * nb);
     const v = d.segFlow[s] || 0;
-    if (v > buckets[bi]) buckets[bi] = v;
+    if(v > buckets[bi]) buckets[bi] = v;
   }
 
   // Find max flow for vertical scale (at least 2x the ref line so ref is visible).
   let maxFlow = 0;
-  for (let i = 0; i < nb; i++) if (buckets[i] > maxFlow) maxFlow = buckets[i];
+  for(let i = 0; i < nb; i++) if(buckets[i] > maxFlow) maxFlow = buckets[i];
   maxFlow = Math.max(maxFlow, SPARK_FLOW_MAX_REF * 1.2, 1);
 
   // Draw to an offscreen canvas so we can blit + cursor cheaply.
@@ -965,10 +960,10 @@ function buildSparkline(d) {
   // Filled area.
   ctx.beginPath();
   ctx.moveTo(0, H);
-  for (let i = 0; i < nb; i++) {
+  for(let i = 0; i < nb; i++){
     const px = (i / nb) * W;
     const py = H - (buckets[i] / maxFlow) * H;
-    if (i === 0) ctx.lineTo(px, py); else ctx.lineTo(px, py);
+    if(i === 0) ctx.lineTo(px, py); else ctx.lineTo(px, py);
   }
   ctx.lineTo(W, H);
   ctx.closePath();
@@ -979,10 +974,10 @@ function buildSparkline(d) {
   ctx.beginPath();
   ctx.strokeStyle = SPARK_LINE_COL;
   ctx.lineWidth = 1.5;
-  for (let i = 0; i < nb; i++) {
+  for(let i = 0; i < nb; i++){
     const px = (i / nb) * W;
     const py = H - (buckets[i] / maxFlow) * H;
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    if(i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
   }
   ctx.stroke();
 
@@ -992,11 +987,11 @@ function buildSparkline(d) {
 }
 
 // Blit the offscreen sparkline and overlay a cursor line at the given progress.
-function drawSparkCursor(p) {
+function drawSparkCursor(p){
   const canvas = document.getElementById('spark');
-  if (!canvas || !sparkOffscreen) return;
+  if(!canvas || !sparkOffscreen) return;
   const W = canvas.width, H = canvas.height;
-  if (W === 0 || H === 0) return;
+  if(W === 0 || H === 0) return;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(sparkOffscreen, 0, 0);
   // Cursor line.
@@ -1010,9 +1005,9 @@ function drawSparkCursor(p) {
 }
 
 // Seek on sparkline click/drag -- same fraction math as the scrub slider.
-function sparkSeek(e) {
+function sparkSeek(e){
   const canvas = document.getElementById('spark');
-  if (!canvas) return;
+  if(!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   stopPlay();
@@ -1022,9 +1017,9 @@ function sparkSeek(e) {
 {
   const spark = document.getElementById('spark');
   let draggingSpark = false;
-  spark.addEventListener('mousedown', e => { draggingSpark = true; sparkSeek(e); });
-  window.addEventListener('mousemove', e => { if (draggingSpark) sparkSeek(e); });
-  window.addEventListener('mouseup', () => { draggingSpark = false; });
+  spark.addEventListener('mousedown', e=>{ draggingSpark=true; sparkSeek(e); });
+  window.addEventListener('mousemove', e=>{ if(draggingSpark) sparkSeek(e); });
+  window.addEventListener('mouseup', ()=>{ draggingSpark=false; });
 }
 
 // ---- telemetry card collapse (persisted across reloads) -------------------
@@ -1032,17 +1027,17 @@ function sparkSeek(e) {
   const TM_KEY = 'telemetry-collapsed';
   const card = document.getElementById('telemetry-card');
   const toggleBtn = document.getElementById('telemetry-toggle');
-  function setTelemetryCollapsed(collapsed) {
+  function setTelemetryCollapsed(collapsed){
     card.classList.toggle('collapsed', collapsed);
     toggleBtn.setAttribute('aria-expanded', String(!collapsed));
     localStorage.setItem(TM_KEY, collapsed ? '1' : '0');
   }
   setTelemetryCollapsed(localStorage.getItem(TM_KEY) === '1');
-  toggleBtn.addEventListener('click', () => setTelemetryCollapsed(!card.classList.contains('collapsed')));
+  toggleBtn.addEventListener('click', ()=> setTelemetryCollapsed(!card.classList.contains('collapsed')));
 }
 
-let lastData = null;
-let cuts = [0];   // extrude-segment indices at each spiral-turn boundary (+ the end)
+let lastData=null;
+let cuts=[0];   // extrude-segment indices at each spiral-turn boundary (+ the end)
 
 // ---- staged load overlay ---------------------------------------------------
 // load() below runs several O(extrude segments) passes back to back
@@ -1057,8 +1052,8 @@ let cuts = [0];   // extrude-segment indices at each spiral-turn boundary (+ the
 // deliberately avoid --ok/--warn/--danger/--accent-purple, which are reserved
 // to other subsystems.
 let loadOverlayEl = null, loadOverlayStageEl = null, loadOverlayFileEl = null;
-function showLoadOverlay(name) {
-  if (!loadOverlayEl) {
+function showLoadOverlay(name){
+  if(!loadOverlayEl){
     loadOverlayEl = document.createElement('div');
     loadOverlayEl.id = 'load-overlay';
     loadOverlayEl.style.cssText =
@@ -1080,11 +1075,11 @@ function showLoadOverlay(name) {
   loadOverlayFileEl.textContent = name;
   loadOverlayEl.style.display = 'flex';
 }
-function setLoadStage(text) {
-  if (loadOverlayStageEl) loadOverlayStageEl.textContent = text;
+function setLoadStage(text){
+  if(loadOverlayStageEl) loadOverlayStageEl.textContent = text;
 }
-function hideLoadOverlay() {
-  if (loadOverlayEl) loadOverlayEl.style.display = 'none';
+function hideLoadOverlay(){
+  if(loadOverlayEl) loadOverlayEl.style.display = 'none';
 }
 // Yield to the browser and guarantee at least one paint has happened before
 // resuming. A single requestAnimationFrame callback runs BEFORE that frame's
@@ -1103,16 +1098,16 @@ function hideLoadOverlay() {
 // above still holds; on a hidden tab it guarantees forward progress anyway,
 // just without that guarantee -- which is fine, because there is nothing to
 // paint for the user to see until the tab is visible again regardless.
-function loadYield() {
+function loadYield(){
   return new Promise(resolve => {
     let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
+    const finish = () => { if(!done){ done = true; resolve(); } };
     requestAnimationFrame(() => requestAnimationFrame(finish));
     setTimeout(finish, 200);
   });
 }
 
-async function load(name, text) {
+async function load(name,text){
   showLoadOverlay(name);
   try {
     // Cheap upfront count for the parse-stage label; a single split() is
@@ -1126,7 +1121,7 @@ async function load(name, text) {
     await loadYield();
     const riskFlags = computeRiskFlags(parsed.ext, parsed.extrudeCount);   // heavy: O(segments)
     let riskyCount = 0;
-    for (let i = 0; i < riskFlags.length; i++) riskyCount += riskFlags[i];
+    for(let i=0;i<riskFlags.length;i++) riskyCount += riskFlags[i];
 
     setLoadStage('Computing overhangs...');
     await loadYield();
@@ -1139,9 +1134,9 @@ async function load(name, text) {
     parsed.overhang = overhang;
     lastData = parsed;
     window.__lastData = lastData;          // automation/debug hook, same convention as __camera/__controls
-    cuts = computeTurns(lastData);           // turn boundaries (used for banding + stepping)
+    cuts=computeTurns(lastData);           // turn boundaries (used for banding + stepping)
     window.__cuts = cuts;                  // automation/debug hook, same convention as __camera/__controls
-    buildGeometry(lastData); showStats(name, lastData);   // heavy: O(segments)
+    buildGeometry(lastData); showStats(name,lastData);   // heavy: O(segments)
     measureReload();                       // new model: any old measurement is meaningless
     // A file was loaded (dropped, picked, or generated) - show the viewer mode.
     // This happens BEFORE the canvas chrome appears and before fitView(),
@@ -1150,12 +1145,12 @@ async function load(name, text) {
     // strip, the telemetry card and the has-timeline class by hand, which is
     // how they survived into Design mode -- two places setting them, only one
     // ever clearing them.
-    if (window.setAppMode) window.setAppMode('viewer');
+    if(window.setAppMode) window.setAppMode('viewer');
     syncCanvasChromeForMode();             // also covers designer.js being absent
     stopPlay(); setProgress(1);            // start fully drawn
     fitView();                             // frame the camera on the model
     // Build the sparkline after layout settles (offsetWidth needs a rendered frame).
-    requestAnimationFrame(() => { buildSparkline(lastData); drawSparkCursor(1); });
+    requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(1); });
   } finally {
     // Always clears, success or failure -- a stuck overlay would be worse
     // than the freeze it replaces (looks like a hang forever, not just once).
@@ -1178,13 +1173,13 @@ async function load(name, text) {
 // to a single detected "turn" -- exactly the failure that made Emphasize
 // layers render as one flat colour with no visible layer lines. Z always
 // climbs monotonically once per revolution regardless of any XY lean.
-function computeTurns(d) {
-  const extCol = d.extCol, nSeg = extCol.length / 2;
+function computeTurns(d){
+  const extCol=d.extCol, nSeg=extCol.length/2;
   const lh = Math.max((d.meta && d.meta.layerHeight) || 0.3, 1e-6);
-  const out = [0]; let last = 0;
-  for (let s = 0; s < nSeg; s++) {
-    const t = Math.floor((extCol[s * 2] - d.minz) / lh);
-    if (t > last) { last = t; out.push(s); }
+  const out=[0]; let last=0;
+  for(let s=0;s<nSeg;s++){
+    const t=Math.floor((extCol[s*2]-d.minz)/lh);
+    if(t>last){ last=t; out.push(s); }
   }
   out.push(nSeg);            // final boundary = end of print
   return out;
@@ -1194,16 +1189,16 @@ window.loadGcode = load;
 window.__camera = camera;   // camera access for automation/tests
 window.__controls = controls;   // OrbitControls access for automation/tests (freeze regression checks)
 window.__segColor = (s) => {           // brightness (sum of rgb) of segment s
-  if (!pathObj || !pathObj.instanceColor) return null;
+  if(!pathObj || !pathObj.instanceColor) return null;
   const a = pathObj.instanceColor;
-  return +(a.getX(s) + a.getY(s) + a.getZ(s)).toFixed(3);
+  return +(a.getX(s)+a.getY(s)+a.getZ(s)).toFixed(3);
 };
 window.__previewState = () => ({
   animSeg,
   progress: +progress.toFixed(4),
   drawnSegs: pathObj ? pathObj.count : null,
   nozzleVisible: nozzle.visible,
-  nozzlePos: nozzle.visible ? nozzle.position.toArray().map(v => +v.toFixed(1)) : null,
+  nozzlePos: nozzle.visible ? nozzle.position.toArray().map(v=>+v.toFixed(1)) : null,
   // Segment count of the blue DRAFT preview currently on the bed (0 = none).
   // Distinct from drawnSegs above, which counts generated G-code. Exposed so a
   // test can tell "the draft is on screen" from "the canvas is empty", which
@@ -1211,12 +1206,10 @@ window.__previewState = () => ({
   draftSegments: previewPositions ? previewPositions.length / 6 : 0,
   riskyCount: lastData ? lastData.riskyCount : null,
   estTime: lastData ? lastData.estTime : null,
-  telemetry: {
-    speed: document.getElementById('tm-speed')?.textContent,
-    flow: document.getElementById('tm-flow')?.textContent,
-    layerHeight: document.getElementById('tm-lh')?.textContent,
-    lineWidth: document.getElementById('tm-lw')?.textContent
-  },
+  telemetry: {speed:document.getElementById('tm-speed')?.textContent,
+              flow:document.getElementById('tm-flow')?.textContent,
+              layerHeight:document.getElementById('tm-lh')?.textContent,
+              lineWidth:document.getElementById('tm-lw')?.textContent},
 });
 
 // ---- print-process playback ------------------------------------------------
@@ -1236,33 +1229,33 @@ window.__previewState = () => ({
 // only knows a target segment fraction, not a time, so those DO resync playT
 // from segT[k] -- that direction is safe and idempotent (segT[k] is exactly
 // the time timeToSegIndex would map back to k).
-function setProgress(p, fromClock) {
+function setProgress(p, fromClock){
   progress = Math.min(1, Math.max(0, p));
-  let k = 0;
-  if (animSeg > 0) k = Math.round(progress * animSeg);
-  if (pathObj && animSeg > 0) {
+  let k=0;
+  if(animSeg>0) k = Math.round(progress*animSeg);
+  if(pathObj && animSeg>0){
     pathObj.count = k;                              // reveal only printed segments
-    if (k > 0 && progress < 1) {
-      const i = (k - 1) * 6 + 3;                            // end of last drawn segment
-      nozzle.position.set(extArr[i], extArr[i + 1], extArr[i + 2]);
-      nozzle.visible = true;
+    if(k>0 && progress<1){
+      const i=(k-1)*6+3;                            // end of last drawn segment
+      nozzle.position.set(extArr[i], extArr[i+1], extArr[i+2]);
+      nozzle.visible=true;
     } else {
-      nozzle.visible = false;                         // hide at 0% and when finished
+      nozzle.visible=false;                         // hide at 0% and when finished
     }
   }
   const segT = lastData && lastData.segT;
-  const total = (segT && segT.length) ? segT[segT.length - 1] : 0;
-  if (!fromClock) playT = (segT && segT.length) ? segT[Math.min(k, segT.length - 1)] : 0;
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(!fromClock) playT = (segT && segT.length) ? segT[Math.min(k, segT.length-1)] : 0;
   document.getElementById('play').disabled = !(total > 0);
 
-  const z = (lastData ? lastData.minz : 0) + progress * ((lastData ? (lastData.maxz - lastData.minz) : 0));
-  let layerHtml = '';
-  if (cuts && cuts.length > 1) {
-    const tot = cuts.length - 1;
-    const cur = Math.min(tot, cuts.filter(c => c <= k).length);
+  const z = (lastData? lastData.minz:0) + progress*((lastData? (lastData.maxz-lastData.minz):0));
+  let layerHtml='';
+  if(cuts && cuts.length>1){
+    const tot=cuts.length-1;
+    const cur=Math.min(tot, cuts.filter(c=>c<=k).length);
     // Turn/revolution counter gets visual primacy -- per-spiral-turn stepping
     // (arrow keys) is this tool's signature playback mode.
-    layerHtml = ` &middot; <span class="turn-count">L${cur}/${tot}</span>`;
+    layerHtml=` &middot; <span class="turn-count">L${cur}/${tot}</span>`;
   }
   // Elapsed/total print time is strictly more informative than a bare percent
   // (e.g. "4:12 / 17:30" tells you how long the real print has left); fall
@@ -1270,92 +1263,92 @@ function setProgress(p, fromClock) {
   // segments) to avoid a div-by-zero readout.
   const timeHtml = total > 0
     ? ` &middot; ${fmtClock(playT)} / ${fmtClock(total)}`
-    : ` &middot; ${Math.round(progress * 100)}%`;
+    : ` &middot; ${Math.round(progress*100)}%`;
   document.getElementById('tl-read').innerHTML =
     `Z ${z.toFixed(1)}mm${layerHtml}${timeHtml}`;
   // Scrub bar now maps to TIME fraction, not segment fraction, so dragging
   // feels uniform in time regardless of how segment density varies.
-  const timeFrac = total > 0 ? Math.min(1, playT / total) : progress;
-  document.getElementById('scrub').value = Math.round(timeFrac * 1000);
+  const timeFrac = total > 0 ? Math.min(1, playT/total) : progress;
+  document.getElementById('scrub').value = Math.round(timeFrac*1000);
   updateTelemetry(k, z);
   drawSparkCursor(progress);
   render();
 }
 
 // Live telemetry HUD -- reflects the move under the playhead.
-function updateTelemetry(k, z) {
-  if (!lastData) return;
-  const seg = Math.min(Math.max(k - 1, 0), (lastData.segSpeed.length - 1));
+function updateTelemetry(k, z){
+  if(!lastData) return;
+  const seg = Math.min(Math.max(k-1,0), (lastData.segSpeed.length-1));
   const spd = lastData.segSpeed[seg] ?? 0;
   const flow = lastData.segFlow[seg] ?? 0;
-  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  set('tm-speed', spd ? spd.toFixed(0) + ' mm/s' : '--');
-  const flowWarn = flow > 17 ? ' !' : '';   // 17 mm^3/s ~ typical melt ceiling
-  set('tm-flow', flow ? flow.toFixed(1) + ' mm3/s' + flowWarn : '--');
+  const set=(id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
+  set('tm-speed', spd ? spd.toFixed(0)+' mm/s' : '--');
+  const flowWarn = flow>17 ? ' !' : '';   // 17 mm^3/s ~ typical melt ceiling
+  set('tm-flow', flow ? flow.toFixed(1)+' mm3/s'+flowWarn : '--');
   const tmFlowEl = document.getElementById('tm-flow');
-  if (tmFlowEl) tmFlowEl.classList.toggle('state-danger', flow > 17);
+  if(tmFlowEl) tmFlowEl.classList.toggle('state-danger', flow>17);
   // Fan min/max are whole-print constants (actual M106 range in the loaded
   // file, not a per-segment value) -- set once here rather than looked up
   // per playhead position, same way meta.lineWidth/layerHeight/nozzle are.
-  set('tm-fan-min', lastData.minFan != null ? Math.round(lastData.minFan * 100) + '%' : '--');
-  set('tm-fan-max', lastData.maxFan != null ? Math.round(lastData.maxFan * 100) + '%' : '--');
-  set('tm-z', z.toFixed(2) + ' mm');
-  set('tm-lh', lastData.meta.layerHeight != null ? lastData.meta.layerHeight.toFixed(2) + ' mm' : '--');
-  set('tm-lw', lastData.meta.lineWidth != null ? lastData.meta.lineWidth.toFixed(2) + ' mm' : '--');
-  set('tm-nz', lastData.meta.nozzle != null ? lastData.meta.nozzle.toFixed(2) + ' mm' : '--');
-  set('tm-temp', lastData.meta.nozzleTemp != null ? Math.round(lastData.meta.nozzleTemp) + ' C' : '--');
+  set('tm-fan-min', lastData.minFan!=null ? Math.round(lastData.minFan*100)+'%' : '--');
+  set('tm-fan-max', lastData.maxFan!=null ? Math.round(lastData.maxFan*100)+'%' : '--');
+  set('tm-z', z.toFixed(2)+' mm');
+  set('tm-lh', lastData.meta.layerHeight!=null ? lastData.meta.layerHeight.toFixed(2)+' mm' : '--');
+  set('tm-lw', lastData.meta.lineWidth!=null ? lastData.meta.lineWidth.toFixed(2)+' mm' : '--');
+  set('tm-nz', lastData.meta.nozzle!=null ? lastData.meta.nozzle.toFixed(2)+' mm' : '--');
+  set('tm-temp', lastData.meta.nozzleTemp!=null ? Math.round(lastData.meta.nozzleTemp)+' C' : '--');
 }
-function updatePlayBtn() { document.getElementById('play').textContent = playing ? '||' : '>'; }
-function stopPlay() { playing = false; updatePlayBtn(); }
-let _lastT = 0;
-function playLoop(t) {
-  if (!playing) return;
-  if (!_lastT) _lastT = t; const dt = (t - _lastT) / 1000; _lastT = t;
+function updatePlayBtn(){ document.getElementById('play').textContent = playing?'||':'>'; }
+function stopPlay(){ playing=false; updatePlayBtn(); }
+let _lastT=0;
+function playLoop(t){
+  if(!playing) return;
+  if(!_lastT)_lastT=t; const dt=(t-_lastT)/1000; _lastT=t;
   const segT = lastData && lastData.segT;
-  const total = (segT && segT.length) ? segT[segT.length - 1] : 0;
-  if (total <= 0 || animSeg <= 0) { stopPlay(); return; }   // guard: zero-extrude-segment file
-  playT = Math.min(total, playT + dt * speedMult);
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(total<=0 || animSeg<=0){ stopPlay(); return; }   // guard: zero-extrude-segment file
+  playT = Math.min(total, playT + dt*speedMult);
   const k = timeToSegIndex(segT, playT);
-  setProgress(k / animSeg, true);          // fromClock: don't snap playT back to segT[k]
-  if (playT >= total) { stopPlay(); return; }
+  setProgress(k/animSeg, true);          // fromClock: don't snap playT back to segT[k]
+  if(playT>=total){ stopPlay(); return; }
   requestAnimationFrame(playLoop);
 }
-document.getElementById('play').addEventListener('click', () => {
-  if (playing) { stopPlay(); return; }
+document.getElementById('play').addEventListener('click',()=>{
+  if(playing){ stopPlay(); return; }
   const segT = lastData && lastData.segT;
-  const total = (segT && segT.length) ? segT[segT.length - 1] : 0;
-  if (total <= 0) return;                    // guard: nothing to play
-  if (progress >= 1) { progress = 0; playT = 0; } // replay from the start
-  playing = true; _lastT = 0; updatePlayBtn(); requestAnimationFrame(playLoop);
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(total<=0) return;                    // guard: nothing to play
+  if(progress>=1){ progress=0; playT=0; } // replay from the start
+  playing=true; _lastT=0; updatePlayBtn(); requestAnimationFrame(playLoop);
 });
-document.getElementById('scrub').addEventListener('input', e => {
+document.getElementById('scrub').addEventListener('input',e=>{
   stopPlay();
   const segT = lastData && lastData.segT;
-  const total = (segT && segT.length) ? segT[segT.length - 1] : 0;
-  if (total > 0) {
+  const total = (segT && segT.length) ? segT[segT.length-1] : 0;
+  if(total>0){
     // Scrub bar is a time fraction now: derive playT directly from it (more
     // precise than round-tripping through a segment index) and pass
     // fromClock so setProgress doesn't re-snap it to segT[k].
-    playT = (e.target.value / 1000) * total;
+    playT = (e.target.value/1000) * total;
     const k = timeToSegIndex(segT, playT);
-    setProgress(animSeg > 0 ? k / animSeg : 0, true);
+    setProgress(animSeg>0 ? k/animSeg : 0, true);
   } else {
-    setProgress(e.target.value / 1000);
+    setProgress(e.target.value/1000);
   }
 });
-document.getElementById('speed').addEventListener('change', e => { speedMult = parseFloat(e.target.value); });
+document.getElementById('speed').addEventListener('change',e=>{ speedMult=parseFloat(e.target.value); });
 
 // ---- per-layer (per-turn) stepping ----------------------------------------
-function nearestCut() {
-  const k = Math.round(progress * animSeg); let best = 0, bd = Infinity;
-  for (let i = 0; i < cuts.length; i++) { const dd = Math.abs(cuts[i] - k); if (dd < bd) { bd = dd; best = i; } }
+function nearestCut(){
+  const k=Math.round(progress*animSeg); let best=0, bd=Infinity;
+  for(let i=0;i<cuts.length;i++){ const dd=Math.abs(cuts[i]-k); if(dd<bd){bd=dd;best=i;} }
   return best;
 }
-function stepLayer(dir) {
-  if (cuts.length < 2 || !animSeg) return;
+function stepLayer(dir){
+  if(cuts.length<2 || !animSeg) return;
   stopPlay();
-  let p = Math.max(0, Math.min(cuts.length - 1, nearestCut() + dir));
-  setProgress(cuts[p] / animSeg);
+  let p=Math.max(0, Math.min(cuts.length-1, nearestCut()+dir));
+  setProgress(cuts[p]/animSeg);
 }
 window.stepLayer = stepLayer;   // automation hook
 
@@ -1371,12 +1364,12 @@ window.stepLayer = stepLayer;   // automation hook
 // fit-view, and what got saved was "G1F3000". Start G-code is the one blob of
 // text in this app that goes to the machine unedited, which makes a silently
 // dropped character a hardware problem, not a typo.
-function typingInField(e) {
+function typingInField(e){
   const el = e.target;
-  if (!el) return false;
+  if(!el) return false;
   const tag = el.tagName;
   return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' ||
-    el.isContentEditable === true;
+         el.isContentEditable === true;
 }
 
 // Playback shortcuts belong to the G-code viewer, not to the design form.
@@ -1385,93 +1378,93 @@ function typingInField(e) {
 // #canvas-wrap, outside BOTH mode panels, so load() reveals it once and
 // nothing hides it again. After one generate, space/arrows/Home/End stayed
 // armed over the whole design form for the rest of the session.
-function viewerModeActive() {
+function viewerModeActive(){
   const p = document.getElementById('mode-viewer');
   return !!(p && p.classList.contains('active'));
 }
-window.addEventListener('keydown', e => {
-  if (typingInField(e)) return;
-  if (!viewerModeActive()) return;
-  if (document.getElementById('tl-wrap').style.display === 'none') return;
-  if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { stepLayer(1); e.preventDefault(); }
-  else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { stepLayer(-1); e.preventDefault(); }
-  else if (e.key === 'Home') { setProgress(0); e.preventDefault(); }
-  else if (e.key === 'End') { setProgress(1); e.preventDefault(); }
-  else if (e.key === ' ') { document.getElementById('play').click(); e.preventDefault(); }
+window.addEventListener('keydown',e=>{
+  if(typingInField(e)) return;
+  if(!viewerModeActive()) return;
+  if(document.getElementById('tl-wrap').style.display==='none') return;
+  if(e.key==='ArrowRight'||e.key==='ArrowUp'){ stepLayer(1); e.preventDefault(); }
+  else if(e.key==='ArrowLeft'||e.key==='ArrowDown'){ stepLayer(-1); e.preventDefault(); }
+  else if(e.key==='Home'){ setProgress(0); e.preventDefault(); }
+  else if(e.key==='End'){ setProgress(1); e.preventDefault(); }
+  else if(e.key===' '){ document.getElementById('play').click(); e.preventDefault(); }
 });
 
 // ---- file input -----------------------------------------------------------
-const fileInput = document.getElementById('file');
-document.getElementById('drop').addEventListener('click', () => fileInput.click());
-document.getElementById('drop').addEventListener('keydown', e => {
-  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+const fileInput=document.getElementById('file');
+document.getElementById('drop').addEventListener('click',()=>fileInput.click());
+document.getElementById('drop').addEventListener('keydown',e=>{
+  if(e.key==='Enter'||e.key===' '){ e.preventDefault(); fileInput.click(); }
 });
-fileInput.addEventListener('change', e => { const f = e.target.files[0]; if (f) f.text().then(t => load(f.name, t)); });
-['dragenter', 'dragover'].forEach(ev => window.addEventListener(ev, e => { e.preventDefault(); document.getElementById('drop').classList.add('hot'); }));
-['dragleave', 'drop'].forEach(ev => window.addEventListener(ev, e => { e.preventDefault(); document.getElementById('drop').classList.remove('hot'); }));
-window.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) f.text().then(t => load(f.name, t)); });
+fileInput.addEventListener('change',e=>{const f=e.target.files[0]; if(f) f.text().then(t=>load(f.name,t));});
+['dragenter','dragover'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();document.getElementById('drop').classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();document.getElementById('drop').classList.remove('hot');}));
+window.addEventListener('drop',e=>{const f=e.dataTransfer.files[0]; if(f) f.text().then(t=>load(f.name,t));});
 
 // ---- toggles --------------------------------------------------------------
-document.getElementById('t-colormode').addEventListener('change', () => { if (lastData) { buildGeometry(lastData); setProgress(progress); } else { updateLegend(document.getElementById('t-colormode').value, null); } });
-document.getElementById('t-xray').addEventListener('change', () => { applyXray(); render(); });
-document.getElementById('t-bands').addEventListener('change', () => { if (lastData) { buildGeometry(lastData); setProgress(progress); } });
-document.getElementById('t-risk').addEventListener('change', () => { if (lastData) { buildGeometry(lastData); setProgress(progress); } });
-document.getElementById('t-travel').addEventListener('change', e => { if (travelObj) { travelObj.visible = e.target.checked; render(); } });
-document.getElementById('t-bed').addEventListener('change', e => { bedGroup.visible = e.target.checked; render(); });
-document.getElementById('t-printer').addEventListener('change', e => { printerGroup.visible = e.target.checked; render(); });
-document.getElementById('fit-view').addEventListener('click', fitView);
-window.addEventListener('keydown', e => {
-  if (typingInField(e)) return;
-  if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey) { fitView(); e.preventDefault(); }
+document.getElementById('t-colormode').addEventListener('change',()=>{if(lastData){buildGeometry(lastData);setProgress(progress);} else {updateLegend(document.getElementById('t-colormode').value, null);}});
+document.getElementById('t-xray').addEventListener('change',()=>{applyXray();render();});
+document.getElementById('t-bands').addEventListener('change',()=>{if(lastData){buildGeometry(lastData);setProgress(progress);}});
+document.getElementById('t-risk').addEventListener('change',()=>{if(lastData){buildGeometry(lastData);setProgress(progress);}});
+document.getElementById('t-travel').addEventListener('change',e=>{if(travelObj){travelObj.visible=e.target.checked;render();}});
+document.getElementById('t-bed').addEventListener('change',e=>{bedGroup.visible=e.target.checked;render();});
+document.getElementById('t-printer').addEventListener('change',e=>{printerGroup.visible=e.target.checked;render();});
+document.getElementById('fit-view').addEventListener('click',fitView);
+window.addEventListener('keydown',e=>{
+  if(typingInField(e)) return;
+  if((e.key==='f'||e.key==='F') && !e.ctrlKey && !e.metaKey){ fitView(); e.preventDefault(); }
 });
 controls.autoRotateSpeed = 1.2;
-document.getElementById('t-spin').addEventListener('change', e => { controls.autoRotate = e.target.checked; if (e.target.checked) spinLoop(); });
+document.getElementById('t-spin').addEventListener('change',e=>{controls.autoRotate=e.target.checked; if(e.target.checked) spinLoop();});
 
 // ---- on-demand rendering --------------------------------------------------
 // Render only when something changes (orbit, resize, load, toggle). Keeps the
 // page idle when nothing moves -- lighter on the GPU and lets screenshots settle.
-function render() {
+function render(){
   // Fade the bed plate when the camera is below the print surface so the
   // model stays visible when orbiting to a floor-up view. X-ray view also
   // dims the bed so the see-through toolpath reads clearly against it.
-  if (window.__bedMats) {
+  if(window.__bedMats){
     const below = camera.position.y < 2;
     const op = xrayOn ? 0.12 : (below ? 0.12 : 0.95);
-    for (const m of window.__bedMats) m.opacity = op;
+    for(const m of window.__bedMats) m.opacity = op;
   }
-  renderer.render(scene, camera);
+  renderer.render(scene,camera);
   // Measure tool's floating value tag is a DOM node, so it has to be
   // re-projected after every camera change. Read off `window` (same idiom as
   // __bedMats above) because render() runs once during module init, before the
   // measure section further down has initialised its bindings.
-  if (window.__measureSync) window.__measureSync();
+  if(window.__measureSync) window.__measureSync();
   // Same for the shape cage's drag readout -- a DOM node pinned to a handle,
   // so it has to be re-projected whenever the camera moves. Read off `window`
   // for the same TDZ reason as __measureSync above.
-  if (window.__cageSync) window.__cageSync();
+  if(window.__cageSync) window.__cageSync();
   // Zone Overrides' on-model mm height labels -- same DOM-tracks-a-3D-point
   // reprojection idiom, same TDZ reason (defined further down this file).
-  if (window.__zoneLabelSync) window.__zoneLabelSync();
+  if(window.__zoneLabelSync) window.__zoneLabelSync();
   // Orientation cube tracks the main camera every frame this renders --
   // see the comment on navSyncCamera() further down for why this is a
   // window.__* hook rather than a direct call (TDZ: that section is defined
   // after this function, and render() also runs once during module init).
-  if (window.__navCubeSync) window.__navCubeSync();
+  if(window.__navCubeSync) window.__navCubeSync();
 }
-function resize() {
-  const w = wrap.clientWidth, h = wrap.clientHeight;
-  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+function resize(){
+  const w=wrap.clientWidth, h=wrap.clientHeight;
+  renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
   // Rebuild sparkline if data is loaded (canvas width may have changed).
-  if (lastData && sparkOffscreen) requestAnimationFrame(() => { buildSparkline(lastData); drawSparkCursor(progress); });
+  if(lastData && sparkOffscreen) requestAnimationFrame(()=>{ buildSparkline(lastData); drawSparkCursor(progress); });
   render();
 }
 controls.addEventListener('change', render);
-function spinLoop() {
-  if (!controls.autoRotate) return;
+function spinLoop(){
+  if(!controls.autoRotate) return;
   controls.update(); render();
   requestAnimationFrame(spinLoop);
 }
-window.addEventListener('resize', resize); resize();
+window.addEventListener('resize',resize); resize();
 render();
 
 // Expose resize so the panel splitter can trigger a viewport recalculation
@@ -1480,7 +1473,7 @@ window.__viewerResize = resize;
 
 // Debug/test hook: report which layer is currently shown (generated rainbow
 // path vs the live blue draft) so automated checks can confirm the swap.
-window.__viewFlags = function () {
+window.__viewFlags = function(){
   return {
     pathVisible: !!(pathObj && pathObj.visible),
     draftPresent: !!previewObj,
@@ -1491,29 +1484,27 @@ window.__viewFlags = function () {
 // Debug/test hook: bucket the loaded path's per-segment colours so automated
 // checks can confirm the active colour mode without pixel sampling. Reads the
 // InstancedMesh's per-instance colour attribute (one RGB triple per segment).
-window.__colorStats = function () {
-  if (!pathObj || !pathObj.instanceColor) return null;
+window.__colorStats = function(){
+  if(!pathObj || !pathObj.instanceColor) return null;
   const a = pathObj.instanceColor;
   const n = a.count;
-  let green = 0, yellow = 0, red = 0, plain = 0, other = 0;
-  for (let i = 0; i < n; i++) {
-    const r = a.getX(i), g = a.getY(i), b = a.getZ(i);
+  let green=0, yellow=0, red=0, plain=0, other=0;
+  for(let i=0;i<n;i++){
+    const r=a.getX(i), g=a.getY(i), b=a.getZ(i);
     // Plain mode's beige filament. Warm (b below r) and light on all three
     // channels, which no viridis height stop and no overhang colour reaches:
     // viridis peaks yellow (b ~= 0.14) and the overhang ramp is green/yellow/
     // red, all far below b>0.6.
-    if (r > 0.8 && g > 0.75 && b > 0.6 && b < r) plain++;
-    else if (r < 0.4 && g > 0.55 && b < 0.35) green++;      // safe overhang
-    else if (r > 0.7 && g > 0.6 && b < 0.35) yellow++;      // caution
-    else if (r > 0.7 && g < 0.45 && b < 0.3) red++;         // steep/air
+    if(r>0.8 && g>0.75 && b>0.6 && b<r) plain++;
+    else if(r<0.4 && g>0.55 && b<0.35) green++;      // safe overhang
+    else if(r>0.7 && g>0.6 && b<0.35) yellow++;      // caution
+    else if(r>0.7 && g<0.45 && b<0.3) red++;         // steep/air
     else other++;
   }
-  return {
-    mode: document.getElementById('t-colormode').value,
-    xray: !!(pathMat && pathMat.transparent),
-    opacity: pathMat ? +pathMat.opacity.toFixed(2) : null,
-    n, green, yellow, red, plain, other
-  };
+  return { mode: document.getElementById('t-colormode').value,
+           xray: !!(pathMat && pathMat.transparent),
+           opacity: pathMat ? +pathMat.opacity.toFixed(2) : null,
+           n, green, yellow, red, plain, other };
 };
 
 // ---- draft preview layer ----------------------------------------------------
@@ -1541,20 +1532,20 @@ let previewBounds = null;
 // ``keepActiveCageDrag`` is passed by showPreview() (a REFRESH of the draft)
 // and never by clearPreview() (a teardown of it) -- see the hideShapeCage
 // call below for what it protects.
-function disposePreviewObjects(keepActiveCageDrag) {
-  if (previewObj) {
+function disposePreviewObjects(keepActiveCageDrag){
+  if(previewObj){
     scene.remove(previewObj);
     previewObj.geometry.dispose();
     previewObj.material.dispose();
     previewObj = null;
   }
-  if (previewSiteObj) {
+  if(previewSiteObj){
     scene.remove(previewSiteObj);
     previewSiteObj.geometry.dispose();
     previewSiteObj.material.dispose();
     previewSiteObj = null;
   }
-  if (previewLabel) previewLabel.style.display = 'none';
+  if(previewLabel) previewLabel.style.display = 'none';
   // NOT while a cage handle is being dragged. hideShapeCage() disposes every
   // handle and clears cageActive/__silDragActive as a failsafe, so the
   // debounced live preview (designer.js schedulePreview, 100ms) cancelled the
@@ -1570,35 +1561,35 @@ function disposePreviewObjects(keepActiveCageDrag) {
   // declines to rebuild the cage while __silDragActive is set -- a guard that
   // only works if this call has not cleared the flag a moment earlier.
   // A teardown (clearPreview) passes no flag and still hides unconditionally.
-  if (window.hideShapeCage && !(keepActiveCageDrag && cageActive)) window.hideShapeCage();
+  if(window.hideShapeCage && !(keepActiveCageDrag && cageActive)) window.hideShapeCage();
   // Restore the generated (rainbow) path that showPreview hid, so viewing the
   // G-code again brings it back. Travels follow their own toggle.
-  if (pathObj) pathObj.visible = true;
-  if (travelObj) travelObj.visible = document.getElementById('t-travel').checked;
+  if(pathObj) pathObj.visible = true;
+  if(travelObj) travelObj.visible = document.getElementById('t-travel').checked;
   // Restore drop overlay only if no real gcode is loaded.
-  if (!lastData) {
+  if(!lastData){
     var ov = document.getElementById('overlay');
-    if (ov) ov.style.display = '';
+    if(ov) ov.style.display = '';
   }
 }
 
-window.showPreview = function (positions) {
+window.showPreview = function(positions){
   // positions: Float32Array [x0,y0,z0, x1,y1,z1, ...]
-  if (!positions || positions.length < 6) return;
+  if(!positions || positions.length < 6) return;
   disposePreviewObjects(true);   // a refresh must not cancel a cage drag
 
   // Measure tool's Design-mode source array, plus its bounds for
   // measureRaySpan's slab test -- computed once here rather than per pick.
   previewPositions = positions;
   {
-    let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity, minz = Infinity, maxz = -Infinity;
-    for (let i = 0; i < positions.length; i += 3) {
-      const x = positions[i], y = positions[i + 1], z = positions[i + 2];
-      if (x < minx) minx = x; if (x > maxx) maxx = x;
-      if (y < miny) miny = y; if (y > maxy) maxy = y;
-      if (z < minz) minz = z; if (z > maxz) maxz = z;
+    let minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity,minz=Infinity,maxz=-Infinity;
+    for(let i = 0; i < positions.length; i += 3){
+      const x = positions[i], y = positions[i+1], z = positions[i+2];
+      if(x < minx) minx = x; if(x > maxx) maxx = x;
+      if(y < miny) miny = y; if(y > maxy) maxy = y;
+      if(z < minz) minz = z; if(z > maxz) maxz = z;
     }
-    previewBounds = { minx, maxx, miny, maxy, minz, maxz };
+    previewBounds = {minx,maxx,miny,maxy,minz,maxz};
   }
 
   const nSeg = positions.length / 6;
@@ -1617,43 +1608,43 @@ window.showPreview = function (positions) {
   const cols = new Float32Array(nSeg * 6);   // 2 vertices * 3 rgb per segment
   const zoneBands = window.__zonePreviewBands;
   const inertBands = window.__zoneInertBands;
-  const paletteRGB = ZONE_PALETTE.map(function (c) {
-    return [((c >> 16) & 0xff) / 255, ((c >> 8) & 0xff) / 255, (c & 0xff) / 255];
+  const paletteRGB = ZONE_PALETTE.map(function(c){
+    return [((c>>16)&0xff)/255, ((c>>8)&0xff)/255, (c&0xff)/255];
   });
-  for (let i = 0; i < nSeg; i++) {
+  for(let i = 0; i < nSeg; i++){
     const base = i * 6;
     let r = 0.30, g = 0.76, b = 1.00;
     let activeHit = false;
     const needY = (zoneBands && zoneBands.length) || (inertBands && inertBands.length);
-    const ymid = needY ? (positions[base + 1] + positions[base + 4]) / 2 : 0;
-    if (zoneBands && zoneBands.length) {
+    const ymid = needY ? (positions[base+1] + positions[base+4]) / 2 : 0;
+    if(zoneBands && zoneBands.length){
       let wsum = 0;
       const ws = new Array(zoneBands.length);
-      for (let bi = 0; bi < zoneBands.length; bi++) {
+      for(let bi = 0; bi < zoneBands.length; bi++){
         const band = zoneBands[bi];
         let bw = 0;
-        if (ymid > band.y0 && ymid < band.y1) {
+        if(ymid > band.y0 && ymid < band.y1){
           bw = 1;
           const bl = band.b;
-          if (bl > 0) {
-            if (ymid < band.y0 + bl) bw = (ymid - band.y0) / bl;
-            else if (ymid > band.y1 - bl) bw = (band.y1 - ymid) / bl;
+          if(bl > 0){
+            if(ymid < band.y0 + bl) bw = (ymid - band.y0) / bl;
+            else if(ymid > band.y1 - bl) bw = (band.y1 - ymid) / bl;
           }
         }
         ws[bi] = bw;
         wsum += bw;
       }
-      if (wsum > 0) {
+      if(wsum > 0){
         const norm = Math.max(1, wsum);
         let zr = 0, zg = 0, zb = 0, wtot = 0;
-        for (let bi = 0; bi < zoneBands.length; bi++) {
+        for(let bi = 0; bi < zoneBands.length; bi++){
           const wn = ws[bi] / norm;
-          if (wn <= 0) continue;
+          if(wn <= 0) continue;
           const pal = paletteRGB[((zoneBands[bi].ci % paletteRGB.length) + paletteRGB.length) % paletteRGB.length];
           zr += pal[0] * wn; zg += pal[1] * wn; zb += pal[2] * wn;
           wtot += wn;
         }
-        if (wtot > 0) {
+        if(wtot > 0){
           // ZONE_TINT_BOOST only scales how far this segment travels toward
           // the already-normalized blend colour (zr/wtot etc) -- it never
           // touches ws[]/wsum/norm, so the max(1,sum) overlap-safety proof
@@ -1661,7 +1652,7 @@ window.showPreview = function (positions) {
           // holds exactly as before. Clamped to 1 so a boosted plateau still
           // can't overshoot the pure palette colour.
           const mix = Math.min(1, wtot * ZONE_TINT_BOOST);
-          r += (zr / wtot - r) * mix; g += (zg / wtot - g) * mix; b += (zb / wtot - b) * mix;
+          r += (zr/wtot - r) * mix; g += (zg/wtot - g) * mix; b += (zb/wtot - b) * mix;
           activeHit = true;
         }
       }
@@ -1671,18 +1662,18 @@ window.showPreview = function (positions) {
     // the ramped active-zone look, so a zone that changes nothing about the
     // print can never be mistaken for one that does. Skipped wherever an
     // active band already tinted this segment.
-    if (!activeHit && inertBands && inertBands.length) {
-      for (let bi = 0; bi < inertBands.length; bi++) {
+    if(!activeHit && inertBands && inertBands.length){
+      for(let bi = 0; bi < inertBands.length; bi++){
         const band = inertBands[bi];
-        if (ymid > band.y0 && ymid < band.y1) {
+        if(ymid > band.y0 && ymid < band.y1){
           const pal = paletteRGB[((band.ci % paletteRGB.length) + paletteRGB.length) % paletteRGB.length];
           r += (pal[0] - r) * ZONE_INERT_DIM; g += (pal[1] - g) * ZONE_INERT_DIM; b += (pal[2] - b) * ZONE_INERT_DIM;
           break;
         }
       }
     }
-    cols[base] = r; cols[base + 1] = g; cols[base + 2] = b;
-    cols[base + 3] = r; cols[base + 4] = g; cols[base + 5] = b;
+    cols[base]   = r; cols[base+1] = g; cols[base+2] = b;
+    cols[base+3] = r; cols[base+4] = g; cols[base+5] = b;
   }
 
   const g = new LineSegmentsGeometry();
@@ -1702,7 +1693,7 @@ window.showPreview = function (positions) {
 
   // Site dots (loop-fabric hanging-loop markers), if the design has them.
   const siteDots = window.__sitePreviewSites;
-  if (siteDots && siteDots.length >= 3) {
+  if(siteDots && siteDots.length >= 3){
     const bg = new THREE.BufferGeometry();
     bg.setAttribute('position', new THREE.Float32BufferAttribute(siteDots, 3));
     const bmat = new THREE.PointsMaterial({
@@ -1718,7 +1709,7 @@ window.showPreview = function (positions) {
 
   // "Draft preview" label -- top-right, clear of the telemetry card (which
   // owns the top-left corner) at any telemetry collapsed/expanded state.
-  if (!previewLabel) {
+  if(!previewLabel){
     previewLabel = document.createElement('div');
     previewLabel.className = 'draft-preview-label';
     previewLabel.textContent = 'Draft preview';
@@ -1728,14 +1719,14 @@ window.showPreview = function (positions) {
 
   // Hide the "drop gcode" overlay while the draft preview is visible.
   var ov = document.getElementById('overlay');
-  if (ov) ov.style.display = 'none';
+  if(ov) ov.style.display = 'none';
 
   // Hide any previously-generated (rainbow) path so the live blue draft is
   // clearly visible while the user is designing — the generated path is
   // opaque and would otherwise occlude the thin draft line. It is restored
   // by clearPreview() when the user views the generated G-code again.
-  if (pathObj) pathObj.visible = false;
-  if (travelObj) travelObj.visible = false;
+  if(pathObj) pathObj.visible = false;
+  if(travelObj) travelObj.visible = false;
   nozzle.visible = false;
 
   // The shape just changed under the measure tool: its Design-mode pick grid
@@ -1748,7 +1739,7 @@ window.showPreview = function (positions) {
   render();
 };
 
-window.clearPreview = function () {
+window.clearPreview = function(){
   disposePreviewObjects();
   // The draft the measure tool was reading from in Design mode is gone.
   // syncCanvasChromeForMode() drops its pick grid and any in-progress pick
@@ -1815,9 +1806,9 @@ const cageTangent = new THREE.Vector3();
 const cageRadialDir = new THREE.Vector3();
 let cageListenersBound = false;
 
-function cageClamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function cageClamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
 
-function cageUpdatePointerNDC(e) {
+function cageUpdatePointerNDC(e){
   const rect = renderer.domElement.getBoundingClientRect();
   cagePointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   cagePointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1829,19 +1820,19 @@ function cageUpdatePointerNDC(e) {
 // raycast miss by a pixel used to fall straight through to OrbitControls.
 // Projection matches window.__cageDebug()'s screen-position math exactly.
 // Ties (equal screen distance) break toward the handle nearer the camera.
-function cagePickAt(clientX, clientY) {
-  if (!cageSpheres.length) return -1;
+function cagePickAt(clientX, clientY){
+  if(!cageSpheres.length) return -1;
   const rect = renderer.domElement.getBoundingClientRect();
   let best = -1, bestDist = Infinity, bestZ = Infinity;
-  for (let k = 0; k < cageSpheres.length; k++) {
+  for(let k = 0; k < cageSpheres.length; k++){
     const v = cageSpheres[k].mesh.position.clone().project(camera);
-    if (v.z < -1 || v.z > 1) continue;   // behind the camera / clipped
-    const sx = rect.left + (v.x + 1) / 2 * rect.width;
-    const sy = rect.top + (1 - v.y) / 2 * rect.height;
+    if(v.z < -1 || v.z > 1) continue;   // behind the camera / clipped
+    const sx = rect.left + (v.x+1)/2*rect.width;
+    const sy = rect.top + (1-v.y)/2*rect.height;
     const dx = sx - clientX, dy = sy - clientY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > CAGE_PICK_PX) continue;
-    if (dist < bestDist || (dist === bestDist && v.z < bestZ)) {
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if(dist > CAGE_PICK_PX) continue;
+    if(dist < bestDist || (dist === bestDist && v.z < bestZ)){
       best = k; bestDist = dist; bestZ = v.z;
     }
   }
@@ -1860,8 +1851,8 @@ function cagePickAt(clientX, clientY) {
 //   ring   = selected
 // White is chosen deliberately: it is outside the amber/orange/red ramp, so
 // it reads on all three dot colours and adds no new meaning to that ramp.
-function cageRingTexture() {
-  if (cageRingTex) return cageRingTex;
+function cageRingTexture(){
+  if(cageRingTex) return cageRingTex;
   const S = 128;
   const c = document.createElement('canvas');
   c.width = S; c.height = S;
@@ -1871,19 +1862,19 @@ function cageRingTexture() {
   g.strokeStyle = 'rgba(0,0,0,0.55)';
   g.lineWidth = 16;
   g.beginPath();
-  g.arc(S / 2, S / 2, S / 2 - 14, 0, Math.PI * 2);
+  g.arc(S/2, S/2, S/2 - 14, 0, Math.PI*2);
   g.stroke();
   g.strokeStyle = '#ffffff';
   g.lineWidth = 10;
   g.beginPath();
-  g.arc(S / 2, S / 2, S / 2 - 14, 0, Math.PI * 2);
+  g.arc(S/2, S/2, S/2 - 14, 0, Math.PI*2);
   g.stroke();
   // Cached for the page lifetime and shared by every ring; deliberately NOT
   // disposed in hideShapeCage, since the cage is shown/hidden repeatedly.
   cageRingTex = new THREE.CanvasTexture(c);
   // Tag it as sRGB so the white stays white through the renderer's colour
   // pipeline instead of being treated as linear data.
-  if (THREE.SRGBColorSpace) cageRingTex.colorSpace = THREE.SRGBColorSpace;
+  if(THREE.SRGBColorSpace) cageRingTex.colorSpace = THREE.SRGBColorSpace;
   return cageRingTex;
 }
 
@@ -1897,10 +1888,10 @@ function cageRingTexture() {
 // These are three.js hex literals private to this subsystem, deliberately
 // NOT the reserved CSS --danger/--warn safety tokens (see style.css) -- this
 // red means "you edited this point", not "unsafe machine state".
-function cageRestyle() {
-  for (let k = 0; k < cageSpheres.length; k++) {
+function cageRestyle(){
+  for(let k = 0; k < cageSpheres.length; k++){
     const s = cageSpheres[k];
-    const idx = s.i * cageCols + s.j;
+    const idx = s.i*cageCols + s.j;
     const scale = (cageScales && cageScales[s.i]) ? cageScales[s.i][s.j] : 1.0;
     const edited = Math.abs(scale - 1.0) > 1e-6;
     const hovered = (idx === cageHover);
@@ -1911,7 +1902,7 @@ function cageRestyle() {
     // not allowed to share this channel.
     s.mesh.scale.setScalar(hovered ? 1.35 : 1.0);
     const ring = cageRings[k];
-    if (ring) {
+    if(ring){
       ring.visible = selected;
       // Handles move while dragging, so keep the ring pinned to its dot here
       // (cageRestyle runs on every drag move).
@@ -1919,7 +1910,7 @@ function cageRestyle() {
       ring.position.set(p.x, p.y, p.z);
     }
   }
-  if (typeof window.onCageSelectionChange === 'function') window.onCageSelectionChange(cageSelection.size);
+  if(typeof window.onCageSelectionChange === 'function') window.onCageSelectionChange(cageSelection.size);
 }
 
 // ---- cage drag readout ------------------------------------------------------
@@ -1948,15 +1939,15 @@ let cageTagEl = null;
 let cageTagIdx = -1;            // flat index the tag currently describes, or -1
 const cageTagProj = new THREE.Vector3();
 
-function cageOffsetMm(i, j, scale) {
-  if (!cageBase || !cageBase[i]) return 0;
+function cageOffsetMm(i, j, scale){
+  if(!cageBase || !cageBase[i]) return 0;
   return cageBase[i][j] * (scale - 1.0);
 }
 
-function cageFmtMm(mm) {
+function cageFmtMm(mm){
   // Explicit '+' so a bulge and a pinch are told apart at a glance; -0.00 is
   // an artefact of the sign of a rounded zero, never something to show.
-  if (Math.abs(mm) < 0.005) return '0.00 mm';
+  if(Math.abs(mm) < 0.005) return '0.00 mm';
   return (mm > 0 ? '+' : '') + mm.toFixed(2) + ' mm';
 }
 
@@ -1968,21 +1959,21 @@ function cageFmtMm(mm) {
 // value here is a locally computed number, so there is nothing to inject
 // today -- but a tag that renders markup is one refactor away from being
 // handed a name or a label, and this costs nothing now.
-function cageFillTag(el, k, dragging) {
+function cageFillTag(el, k, dragging){
   const s = cageSpheres[k];
   const scale = (cageScales && cageScales[s.i]) ? cageScales[s.i][s.j] : 1.0;
   const meta = [scale.toFixed(2) + 'x'];
   // Naming the end of the range is the point: without it, a handle that has
   // stopped following the pointer looks broken rather than clamped.
-  if (scale >= 1.5 - 1e-9) meta.push('max');
-  else if (scale <= 0.5 + 1e-9) meta.push('min');
-  if (dragging && cageDragStart && cageDragStart.length > 1) {
+  if(scale >= 1.5 - 1e-9) meta.push('max');
+  else if(scale <= 0.5 + 1e-9) meta.push('min');
+  if(dragging && cageDragStart && cageDragStart.length > 1){
     meta.push(cageDragStart.length + ' pts');
   }
 
   const span = (cls, text) => {
     const n = document.createElement('span');
-    if (cls) n.className = cls;
+    if(cls) n.className = cls;
     n.textContent = text;
     return n;
   };
@@ -1990,16 +1981,16 @@ function cageFillTag(el, k, dragging) {
   el.appendChild(span('cage-tag-mm', cageFmtMm(cageOffsetMm(s.i, s.j, scale))));
   el.appendChild(document.createTextNode(' '));
   el.appendChild(span('cage-tag-meta', meta.join(', ')));
-  if (dragging && Math.abs(cageDragAnchorScale - 1.0) > 1e-6) {
+  if(dragging && Math.abs(cageDragAnchorScale - 1.0) > 1e-6){
     const moved = cageOffsetMm(s.i, s.j, scale)
-      - cageOffsetMm(s.i, s.j, cageDragAnchorScale);
+                - cageOffsetMm(s.i, s.j, cageDragAnchorScale);
     el.appendChild(span('cage-tag-delta', cageFmtMm(moved) + ' this drag'));
   }
 }
 
-function cageShowTag(k) {
-  if (k < 0 || k >= cageSpheres.length) { cageHideTag(); return; }
-  if (!cageTagEl) {
+function cageShowTag(k){
+  if(k < 0 || k >= cageSpheres.length){ cageHideTag(); return; }
+  if(!cageTagEl){
     cageTagEl = document.createElement('div');
     cageTagEl.className = 'cage-tag';
     wrap.appendChild(cageTagEl);
@@ -2009,28 +2000,28 @@ function cageShowTag(k) {
   cageSyncTag();
 }
 
-function cageHideTag() {
+function cageHideTag(){
   cageTagIdx = -1;
-  if (cageTagEl) cageTagEl.style.display = 'none';
+  if(cageTagEl) cageTagEl.style.display = 'none';
 }
 
 // Re-projects the tag onto the handle it describes. Called from render() via
 // window.__cageSync (same idiom as the measure tag) so it tracks orbit, zoom
 // and resize -- hovering still allows wheel zoom, so the tag has to follow.
-function cageSyncTag() {
-  if (!cageTagEl) return;
-  if (cageTagIdx < 0 || cageTagIdx >= cageSpheres.length) {
+function cageSyncTag(){
+  if(!cageTagEl) return;
+  if(cageTagIdx < 0 || cageTagIdx >= cageSpheres.length){
     cageTagEl.style.display = 'none';
     return;
   }
   cageTagProj.copy(cageSpheres[cageTagIdx].mesh.position).project(camera);
-  if (cageTagProj.z < -1 || cageTagProj.z > 1) {
+  if(cageTagProj.z < -1 || cageTagProj.z > 1){
     cageTagEl.style.display = 'none';
     return;
   }
   cageTagEl.style.display = '';
-  cageTagEl.style.left = ((cageTagProj.x + 1) / 2 * wrap.clientWidth) + 'px';
-  cageTagEl.style.top = ((1 - cageTagProj.y) / 2 * wrap.clientHeight) + 'px';
+  cageTagEl.style.left = ((cageTagProj.x+1)/2*wrap.clientWidth) + 'px';
+  cageTagEl.style.top  = ((1-cageTagProj.y)/2*wrap.clientHeight) + 'px';
 }
 window.__cageSync = cageSyncTag;
 
@@ -2043,7 +2034,7 @@ window.__cageSync = cageSyncTag;
 // so that is the only binding that has to yield.
 // An actual in-progress drag still takes the full `controls.enabled = false`
 // lock below -- that path is unchanged and proven.
-function cageSetHoverLock(on) {
+function cageSetHoverLock(on){
   controls.mouseButtons.LEFT = on ? null : CAGE_LEFT_BUTTON;
 }
 
@@ -2051,7 +2042,7 @@ function cageSetHoverLock(on) {
 // (pointerup on window, pointercancel, or the window losing focus mid-drag).
 // Controls always come back on; if the pointer is still resting on a handle the
 // lighter hover-lock takes over from the full drag lock.
-function cageEndDrag() {
+function cageEndDrag(){
   cageActive = null;
   cageDragStart = null;
   window.__silDragActive = false;
@@ -2059,57 +2050,57 @@ function cageEndDrag() {
   cageSetHoverLock(cageHover >= 0);
   // Releasing over the handle keeps its readout up (now without the
   // mid-press extras); releasing anywhere else drops it.
-  if (cageHover >= 0) cageShowTag(cageHover); else cageHideTag();
+  if(cageHover >= 0) cageShowTag(cageHover); else cageHideTag();
   renderer.domElement.style.cursor =
     measureOn ? 'crosshair' : ((cageHover >= 0) ? 'pointer' : '');
 }
 
-function cageRebuildLines() {
-  if (!cageGroup) return;
-  for (let i = 0; i < cageRows; i++) {
+function cageRebuildLines(){
+  if(!cageGroup) return;
+  for(let i = 0; i < cageRows; i++){
     const line = cageRowLines[i];
-    if (!line) continue;
+    if(!line) continue;
     const pos = line.geometry.attributes.position;
-    for (let j = 0; j < cageCols; j++) {
-      const p = cageSpheres[i * cageCols + j].mesh.position;
+    for(let j = 0; j < cageCols; j++){
+      const p = cageSpheres[i*cageCols+j].mesh.position;
       pos.setXYZ(j, p.x, p.y, p.z);
     }
-    const first = cageSpheres[i * cageCols + 0].mesh.position;
+    const first = cageSpheres[i*cageCols+0].mesh.position;
     pos.setXYZ(cageCols, first.x, first.y, first.z);   // close the ring
     pos.needsUpdate = true;
   }
-  for (let j = 0; j < cageCols; j++) {
+  for(let j = 0; j < cageCols; j++){
     const line = cageColLines[j];
-    if (!line) continue;
+    if(!line) continue;
     const pos = line.geometry.attributes.position;
-    for (let i = 0; i < cageRows; i++) {
-      const p = cageSpheres[i * cageCols + j].mesh.position;
+    for(let i = 0; i < cageRows; i++){
+      const p = cageSpheres[i*cageCols+j].mesh.position;
       pos.setXYZ(i, p.x, p.y, p.z);
     }
     pos.needsUpdate = true;
   }
 }
 
-function cageBindListeners() {
-  if (cageListenersBound) return;
+function cageBindListeners(){
+  if(cageListenersBound) return;
   cageListenersBound = true;
   const canvas = renderer.domElement;
 
   // pointerdown stays on the canvas. Picking is screen-space (cagePickAt),
   // not a raycast -- see the comment on that function.
-  canvas.addEventListener('pointerdown', function (e) {
-    if (!cageSpheres.length) return;
+  canvas.addEventListener('pointerdown', function(e){
+    if(!cageSpheres.length) return;
     // The measure tool owns the left button while it is active. Without this
     // a click aimed at a measurement point would also land as "clicked empty
     // space" here and silently wipe the cage selection underneath.
-    if (measureOn) return;
+    if(measureOn) return;
     // A Zone Overrides ring drag already owns the pointer -- mutual exclusion
     // is symmetric with zoneRingPickAt's own "cage wins ties" check below.
-    if (zoneRingActive >= 0) return;
+    if(zoneRingActive >= 0) return;
     // Left button only. Right-drag is OrbitControls' pan and middle is its
     // dolly; hijacking either to move a handle would make navigation
     // unpredictable exactly where the dots are densest.
-    if (e.button !== 0) return;
+    if(e.button !== 0) return;
     const hit = cagePickAt(e.clientX, e.clientY);
 
     // Multi-select modifier. Shift is accepted alongside ctrl/meta because
@@ -2121,12 +2112,12 @@ function cageBindListeners() {
     // path; both are documented in the panel hint.
     const addToSel = e.ctrlKey || e.metaKey || e.shiftKey;
 
-    if (hit < 0) {
+    if(hit < 0){
       // Missed every handle. Plain click clears the selection; a modified
       // click on empty space is a no-op (so a stray miss while multi-
       // selecting doesn't wipe the picks already made). Either way, do NOT
       // preventDefault -- let OrbitControls orbit normally.
-      if (!addToSel) {
+      if(!addToSel){
         cageSelection.clear();
         cageRestyle();
         render();
@@ -2135,18 +2126,18 @@ function cageBindListeners() {
     }
 
     const s = cageSpheres[hit];
-    const idx = s.i * cageCols + s.j;
+    const idx = s.i*cageCols + s.j;
 
-    if (addToSel) {
+    if(addToSel){
       // Toggle membership only -- never starts a drag.
-      if (cageSelection.has(idx)) cageSelection.delete(idx); else cageSelection.add(idx);
+      if(cageSelection.has(idx)) cageSelection.delete(idx); else cageSelection.add(idx);
       cageRestyle();
       render();
       e.preventDefault();
       return;
     }
 
-    if (!cageSelection.has(idx)) {
+    if(!cageSelection.has(idx)){
       cageSelection.clear();
       cageSelection.add(idx);
     }
@@ -2154,7 +2145,7 @@ function cageBindListeners() {
     // Snapshot every selected handle's starting scale so the whole group can
     // be dragged rigidly together (see the delta-clamp in the move handler).
     cageDragStart = [];
-    cageSelection.forEach(function (fi) {
+    cageSelection.forEach(function(fi){
       const si = Math.floor(fi / cageCols), sj = fi % cageCols;
       const sc = (cageScales && cageScales[si]) ? cageScales[si][sj] : 1.0;
       cageDragStart.push({ idx: fi, i: si, j: sj, scale: sc });
@@ -2171,17 +2162,17 @@ function cageBindListeners() {
   // Hover tracking lives on the canvas (not window) -- only cursor-over-
   // canvas should highlight/lock. Guarded so it only does work when the
   // hovered handle actually changes; pointermove fires constantly.
-  canvas.addEventListener('pointermove', function (e) {
-    if (cageActive) return;   // mid-drag: the window listener below owns this
-    if (measureOn) return;    // measure tool owns hover + cursor while active
+  canvas.addEventListener('pointermove', function(e){
+    if(cageActive) return;   // mid-drag: the window listener below owns this
+    if(measureOn) return;    // measure tool owns hover + cursor while active
     const hit = cagePickAt(e.clientX, e.clientY);
-    if (hit === cageHover) return;
+    if(hit === cageHover) return;
     cageHover = hit;
     cageRestyle();
     // Hovering reads the same number the drag shows, so a handle's current
     // offset stays inspectable after the mouse comes up -- the red "edited"
     // dot says THAT it moved, this says by how much.
-    if (cageHover >= 0) cageShowTag(cageHover); else cageHideTag();
+    if(cageHover >= 0) cageShowTag(cageHover); else cageHideTag();
     canvas.style.cursor = (cageHover >= 0) ? 'pointer' : '';
     cageSetHoverLock(cageHover >= 0);   // orbit is dead before the click lands
     render();
@@ -2191,9 +2182,9 @@ function cageBindListeners() {
   // freeze-safety note at the top of this section. Skipped mid-drag: dragging
   // a handle out past the canvas edge is normal, and the drag's own full lock
   // must stay in force until pointerup.
-  canvas.addEventListener('pointerleave', function () {
-    if (cageActive) return;
-    if (cageHover < 0) return;   // nothing to clear; don't burn a render
+  canvas.addEventListener('pointerleave', function(){
+    if(cageActive) return;
+    if(cageHover < 0) return;   // nothing to clear; don't burn a render
     cageHover = -1;
     cageRestyle();
     cageHideTag();
@@ -2204,10 +2195,10 @@ function cageBindListeners() {
 
   // move/up/cancel + blur all live on window so releasing (or losing focus)
   // outside the canvas can never leave controls.enabled stuck at false.
-  window.addEventListener('pointermove', function (e) {
-    if (!cageActive) return;
+  window.addEventListener('pointermove', function(e){
+    if(!cageActive) return;
     const i = cageActive.i, j = cageActive.j;
-    const mesh = cageSpheres[i * cageCols + j].mesh;
+    const mesh = cageSpheres[i*cageCols+j].mesh;
     const theta = mesh.userData.theta;
 
     // Tangent = d/dtheta of the handle's world position (cos t, ., -sin t),
@@ -2220,7 +2211,7 @@ function cageBindListeners() {
     cageUpdatePointerNDC(e);
     cageRaycaster.setFromCamera(cagePointerNDC, camera);
     const hit = cageRaycaster.ray.intersectPlane(cageDragPlane, cageDragPoint);
-    if (!hit) return;   // ray near-parallel to the plane -- ignore this move
+    if(!hit) return;   // ray near-parallel to the plane -- ignore this move
 
     cageRadialDir.set(Math.cos(theta), 0, -Math.sin(theta));
     const dist = cageDragPoint.dot(cageRadialDir);
@@ -2233,18 +2224,18 @@ function cageBindListeners() {
     // the group's relative shape.
     let delta = newScale - cageDragAnchorScale;
     let maxDelta = Infinity, minDelta = -Infinity;
-    for (let k = 0; k < cageDragStart.length; k++) {
+    for(let k = 0; k < cageDragStart.length; k++){
       maxDelta = Math.min(maxDelta, 1.5 - cageDragStart[k].scale);
       minDelta = Math.max(minDelta, 0.5 - cageDragStart[k].scale);
     }
     delta = Math.max(minDelta, Math.min(maxDelta, delta));
 
     const changes = [];
-    for (let k = 0; k < cageDragStart.length; k++) {
+    for(let k = 0; k < cageDragStart.length; k++){
       const st = cageDragStart[k];
       const s = st.scale + delta;
-      if (cageScales && cageScales[st.i]) cageScales[st.i][st.j] = s;
-      const m = cageSpheres[st.i * cageCols + st.j].mesh;
+      if(cageScales && cageScales[st.i]) cageScales[st.i][st.j] = s;
+      const m = cageSpheres[st.i*cageCols+st.j].mesh;
       const th = m.userData.theta;
       const r = cageBase[st.i][st.j] * s;
       m.position.set(r * Math.cos(th), m.position.y, -r * Math.sin(th));
@@ -2253,9 +2244,9 @@ function cageBindListeners() {
 
     cageRebuildLines();
     cageRestyle();
-    cageShowTag(i * cageCols + j);   // live mm readout for the grabbed handle
+    cageShowTag(i*cageCols + j);   // live mm readout for the grabbed handle
     render();
-    if (cageDragCallback) cageDragCallback(changes);
+    if(cageDragCallback) cageDragCallback(changes);
   });
 
   window.addEventListener('pointerup', cageEndDrag);
@@ -2264,37 +2255,37 @@ function cageBindListeners() {
   // meaning once the window isn't focused, so force controls back on
   // unconditionally rather than leaving them hostage to a hover that will
   // never get a pointerleave to clear it (e.g. alt-tab while hovering).
-  window.addEventListener('blur', function () {
+  window.addEventListener('blur', function(){
     cageHover = -1;            // cleared BEFORE cageEndDrag so it can't re-lock
     cageEndDrag();
     controls.enabled = true;
     cageSetHoverLock(false);
     canvas.style.cursor = '';
-    if (cageSpheres.length) { cageRestyle(); render(); }
+    if(cageSpheres.length){ cageRestyle(); render(); }
   });
 
   // Escape: mid-drag, revert to the pre-drag scales (and tell designer.js so
   // design.cage matches); otherwise, if there's a selection, just clear it.
-  window.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    if (measureOn) return;    // Esc belongs to the measure tool while it is open
-    if (cageActive && cageDragStart) {
+  window.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    if(measureOn) return;    // Esc belongs to the measure tool while it is open
+    if(cageActive && cageDragStart){
       const changes = [];
-      for (let k = 0; k < cageDragStart.length; k++) {
+      for(let k = 0; k < cageDragStart.length; k++){
         const st = cageDragStart[k];
-        if (cageScales && cageScales[st.i]) cageScales[st.i][st.j] = st.scale;
-        const m = cageSpheres[st.i * cageCols + st.j].mesh;
+        if(cageScales && cageScales[st.i]) cageScales[st.i][st.j] = st.scale;
+        const m = cageSpheres[st.i*cageCols+st.j].mesh;
         const th = m.userData.theta;
         const r = cageBase[st.i][st.j] * st.scale;
         m.position.set(r * Math.cos(th), m.position.y, -r * Math.sin(th));
         changes.push({ i: st.i, j: st.j, scale: st.scale });
       }
       cageRebuildLines();
-      if (cageDragCallback) cageDragCallback(changes);
+      if(cageDragCallback) cageDragCallback(changes);
       cageEndDrag();
       cageRestyle();
       render();
-    } else if (cageSelection.size) {
+    } else if(cageSelection.size){
       cageSelection.clear();
       cageRestyle();
       render();
@@ -2302,8 +2293,8 @@ function cageBindListeners() {
   });
 }
 
-window.showShapeCage = function (data, onDrag) {
-  if (!data || !data.base || !data.base.length || !data.cols) return;
+window.showShapeCage = function(data, onDrag){
+  if(!data || !data.base || !data.base.length || !data.cols) return;
   // A preview refresh (e.g. right after a drag) calls back in here and must
   // not lose the user's selection -- snapshot it before the internal
   // hideShapeCage() call (which clears it) and restore below, but only if
@@ -2326,10 +2317,10 @@ window.showShapeCage = function (data, onDrag) {
   cageSpheres = [];
   cageRings = [];
 
-  for (let i = 0; i < N; i++) {
-    const t = N > 1 ? i / (N - 1) : 0;
-    for (let j = 0; j < M; j++) {
-      const theta = 2 * Math.PI * j / M;
+  for(let i = 0; i < N; i++){
+    const t = N > 1 ? i/(N-1) : 0;
+    for(let j = 0; j < M; j++){
+      const theta = 2*Math.PI*j/M;
       const scale = (cageScales && cageScales[i]) ? cageScales[i][j] : 1.0;
       const r = cageBase[i][j] * scale;
       // transparent + high renderOrder so the dots draw in the transparent
@@ -2337,10 +2328,8 @@ window.showShapeCage = function (data, onDrag) {
       // render before transparent ones, so an opaque dot would be painted
       // over by the draft and vanish at some angles). depthTest off keeps
       // them on top of the model geometry.
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0xffc24c,
-        depthTest: false, depthWrite: false, transparent: true, opacity: 1.0
-      });
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffc24c,
+        depthTest: false, depthWrite: false, transparent: true, opacity: 1.0 });
       const mesh = new THREE.Mesh(sphereGeo, mat);
       mesh.renderOrder = 20;
       // World Z is NEGATED printer Y (see the coordinate-mapping note at the
@@ -2359,10 +2348,8 @@ window.showShapeCage = function (data, onDrag) {
       // ring radius clears even a hovered 1.35x dot, so they never overlap.
       // color is set explicitly rather than left to default so the ring can
       // never pick up a tint from anywhere else.
-      const ringMat = new THREE.SpriteMaterial({
-        map: cageRingTexture(),
-        color: 0xffffff, depthTest: false, depthWrite: false, transparent: true
-      });
+      const ringMat = new THREE.SpriteMaterial({ map: cageRingTexture(),
+        color: 0xffffff, depthTest: false, depthWrite: false, transparent: true });
       const ring = new THREE.Sprite(ringMat);
       ring.scale.set(CAGE_RING_MM, CAGE_RING_MM, 1);
       ring.position.set(mesh.position.x, mesh.position.y, mesh.position.z);
@@ -2377,10 +2364,10 @@ window.showShapeCage = function (data, onDrag) {
 
   // Row rings (closed loops around the model at each height).
   cageRowLines = [];
-  for (let i = 0; i < N; i++) {
+  for(let i = 0; i < N; i++){
     const positions = [];
-    for (let j = 0; j <= M; j++) {
-      const p = cageSpheres[i * M + (j % M)].mesh.position;
+    for(let j = 0; j <= M; j++){
+      const p = cageSpheres[i*M + (j % M)].mesh.position;
       positions.push(p.x, p.y, p.z);
     }
     const geo = new THREE.BufferGeometry();
@@ -2393,10 +2380,10 @@ window.showShapeCage = function (data, onDrag) {
   }
   // Column polylines (vertical ribs connecting each angular position).
   cageColLines = [];
-  for (let j = 0; j < M; j++) {
+  for(let j = 0; j < M; j++){
     const positions = [];
-    for (let i = 0; i < N; i++) {
-      const p = cageSpheres[i * M + j].mesh.position;
+    for(let i = 0; i < N; i++){
+      const p = cageSpheres[i*M+j].mesh.position;
       positions.push(p.x, p.y, p.z);
     }
     const geo = new THREE.BufferGeometry();
@@ -2414,9 +2401,9 @@ window.showShapeCage = function (data, onDrag) {
 
   cageBindListeners();
 
-  if (prevRows === N && prevCols === M) {
+  if(prevRows === N && prevCols === M){
     cageSelection = prevSelection;
-  } else if (prevRows) {
+  } else if(prevRows){
     // Grid shape changed -- the stored flat indices now name other handles,
     // so this is the one place a selection is dropped without the user
     // asking. (prevRows 0 means there was no previous cage at all.)
@@ -2430,22 +2417,22 @@ window.showShapeCage = function (data, onDrag) {
 // selected points" button.
 // Clears the selection from the sidebar, so it never depends on the Esc key
 // reaching this listener.
-window.clearCageSelection = function () {
-  if (!cageSelection.size) return;
+window.clearCageSelection = function(){
+  if(!cageSelection.size) return;
   cageSelection.clear();
   cageRestyle();
   render();
 };
 
-window.getCageSelection = function () {
-  return Array.from(cageSelection).sort(function (a, b) { return a - b; }).map(function (idx) {
+window.getCageSelection = function(){
+  return Array.from(cageSelection).sort(function(a,b){ return a-b; }).map(function(idx){
     return { i: Math.floor(idx / cageCols), j: idx % cageCols };
   });
 };
 
 // Debug/automation hook: handle count + world/screen positions so tests can
 // drive drags without knowing three.js internals.
-window.__cageDebug = function () {
+window.__cageDebug = function(){
   const rect = renderer.domElement.getBoundingClientRect();
   return {
     // The element the cage's own pointerdown listener is bound to, and the
@@ -2465,27 +2452,27 @@ window.__cageDebug = function () {
       text: cageTagEl ? cageTagEl.textContent : null
     },
     hover: cageHover,
-    selection: Array.from(cageSelection).sort(function (a, b) { return a - b; }),
+    selection: Array.from(cageSelection).sort(function(a,b){ return a-b; }),
     controlsEnabled: controls.enabled,
     hoverLocked: controls.mouseButtons.LEFT === null,
-    colors: cageSpheres.map(function (s) { return s.mesh.material.color.getHex(); }),
-    scaleValues: cageSpheres.map(function (s) {
+    colors: cageSpheres.map(function(s){ return s.mesh.material.color.getHex(); }),
+    scaleValues: cageSpheres.map(function(s){
       return (cageScales && cageScales[s.i]) ? cageScales[s.i][s.j] : 1.0;
     }),
-    dotScales: cageSpheres.map(function (s) { return s.mesh.scale.x; }),
-    ringsVisible: cageRings.map(function (r) { return !!r.visible; }),
+    dotScales: cageSpheres.map(function(s){ return s.mesh.scale.x; }),
+    ringsVisible: cageRings.map(function(r){ return !!r.visible; }),
     dotMat: cageSpheres.length ? {
       transparent: cageSpheres[0].mesh.material.transparent,
       depthTest: cageSpheres[0].mesh.material.depthTest,
       depthWrite: cageSpheres[0].mesh.material.depthWrite,
       renderOrder: cageSpheres[0].mesh.renderOrder
     } : null,
-    handles: cageSpheres.map(function (s) {
+    handles: cageSpheres.map(function(s){
       const v = s.mesh.position.clone().project(camera);
       return {
         i: s.i, j: s.j,
         pos: s.mesh.position.toArray(),
-        screen: [rect.left + (v.x + 1) / 2 * rect.width, rect.top + (1 - v.y) / 2 * rect.height]
+        screen: [rect.left + (v.x+1)/2*rect.width, rect.top + (1-v.y)/2*rect.height]
       };
     })
   };
@@ -2496,27 +2483,27 @@ window.__cageDebug = function () {
 // about the READOUT'S ARITHMETIC can name an exact multiplier instead of
 // hoping a synthetic screen-space drag happens to land on one. Never called
 // by the app; same convention as designer.js's __test* hooks.
-window.__cageSetScaleForTest = function (i, j, scale) {
-  if (!cageScales || !cageScales[i] || !cageSpheres.length) return null;
+window.__cageSetScaleForTest = function(i, j, scale){
+  if(!cageScales || !cageScales[i] || !cageSpheres.length) return null;
   cageScales[i][j] = scale;
-  const m = cageSpheres[i * cageCols + j].mesh;
+  const m = cageSpheres[i*cageCols+j].mesh;
   const th = m.userData.theta;
   const r = cageBase[i][j] * scale;
   m.position.set(r * Math.cos(th), m.position.y, -r * Math.sin(th));
   cageRebuildLines();
   cageRestyle();
-  cageShowTag(i * cageCols + j);
+  cageShowTag(i*cageCols + j);
   render();
   return cageTagEl ? cageTagEl.textContent : null;
 };
 
-window.hideShapeCage = function () {
-  if (cageGroup) {
-    cageSpheres.forEach(function (s) { s.mesh.material.dispose(); });
-    cageRings.forEach(function (r) { r.material.dispose(); });   // shared map kept
-    if (cageGroup.userData.sphereGeo) cageGroup.userData.sphereGeo.dispose();
-    cageRowLines.forEach(function (l) { l.geometry.dispose(); l.material.dispose(); });
-    cageColLines.forEach(function (l) { l.geometry.dispose(); l.material.dispose(); });
+window.hideShapeCage = function(){
+  if(cageGroup){
+    cageSpheres.forEach(function(s){ s.mesh.material.dispose(); });
+    cageRings.forEach(function(r){ r.material.dispose(); });   // shared map kept
+    if(cageGroup.userData.sphereGeo) cageGroup.userData.sphereGeo.dispose();
+    cageRowLines.forEach(function(l){ l.geometry.dispose(); l.material.dispose(); });
+    cageColLines.forEach(function(l){ l.geometry.dispose(); l.material.dispose(); });
     scene.remove(cageGroup);
     cageGroup = null;
   }
@@ -2545,7 +2532,7 @@ window.hideShapeCage = function () {
   // Re-assert the real count: the sidebar buttons stay correct even with no
   // handles on screen, and getCageSelection() still resolves (cageCols is
   // left intact), so "Reset selected points" keeps working.
-  if (typeof window.onCageSelectionChange === 'function') {
+  if(typeof window.onCageSelectionChange === 'function'){
     window.onCageSelectionChange(cageSelection.size);
   }
   render();
@@ -2596,8 +2583,8 @@ const ZONE_INERT_DIM = 0.85;
 const ZONE_RING_WHITE = new THREE.Color(0xffffff);
 
 const ZONE_RING_PICK_PX = 8;      // tighter than CAGE_PICK_PX (14): a ring is
-// long, a generous radius would sit under
-// the cursor constantly and fight orbit.
+                                   // long, a generous radius would sit under
+                                   // the cursor constantly and fight orbit.
 const ZONE_RING_PICK_STRIDE = 5;  // project every 5th sample (~48 per ring)
 
 let zoneRingGroup = null;
@@ -2634,26 +2621,26 @@ let zoneLabelEditingEl = null;  // the .zone-tag currently showing its inline ed
 // separately from zoneRingPositionsAt() below because zoneBandContains()
 // needs it too, to line up the two rings' azimuth sampling (see that
 // function's own comment for why misaligned k0s would build a twisted quad).
-function zoneRingK0(t) {
+function zoneRingK0(t){
   const meta = window.__previewWallMeta;
-  if (!meta) return 0;
+  if(!meta) return 0;
   const total = meta.totalSteps, ppt = meta.pointsPerTurn;
   return Math.max(0, Math.min(Math.round(t * total), total - ppt));
 }
 
-function zoneRingPositionsAt(t) {
+function zoneRingPositionsAt(t){
   const meta = window.__previewWallMeta;
-  if (!meta || !previewPositions) return null;
+  if(!meta || !previewPositions) return null;
   const bfc = meta.baseFloatCount, total = meta.totalSteps, ppt = meta.pointsPerTurn;
-  if (total < ppt) return null;
+  if(total < ppt) return null;
   const k0 = zoneRingK0(t);
   const arr = new Float32Array(ppt * 3);
-  for (let j = 0; j < ppt; j++) {
+  for(let j = 0; j < ppt; j++){
     const idx = bfc + (k0 + j) * 6;
-    if (idx + 2 >= previewPositions.length) return null;
-    arr[j * 3] = previewPositions[idx];
-    arr[j * 3 + 1] = previewPositions[idx + 1];
-    arr[j * 3 + 2] = previewPositions[idx + 2];
+    if(idx + 2 >= previewPositions.length) return null;
+    arr[j*3] = previewPositions[idx];
+    arr[j*3+1] = previewPositions[idx+1];
+    arr[j*3+2] = previewPositions[idx+2];
   }
   return arr;
 }
@@ -2663,13 +2650,13 @@ function zoneRingPositionsAt(t) {
 // EXACT wallOff + t*height instead, so a chip's printed number and its
 // on-screen height can never disagree by the fraction of a layer a real
 // spiral turn climbs over one ring's ppt samples.
-function zoneBasisFromPositions(arr) {
-  if (!arr || !arr.length) return null;
+function zoneBasisFromPositions(arr){
+  if(!arr || !arr.length) return null;
   let cx = 0, cz = 0, cr = 0;
   const n = arr.length / 3;
-  for (let i = 0; i < n; i++) { cx += arr[i * 3]; cz += arr[i * 3 + 2]; }
+  for(let i = 0; i < n; i++){ cx += arr[i*3]; cz += arr[i*3+2]; }
   cx /= n; cz /= n;
-  for (let i = 0; i < n; i++) { cr += Math.hypot(arr[i * 3] - cx, arr[i * 3 + 2] - cz); }
+  for(let i = 0; i < n; i++){ cr += Math.hypot(arr[i*3]-cx, arr[i*3+2]-cz); }
   return { cx: cx, cz: cz, r: cr / n };
 }
 
@@ -2678,17 +2665,17 @@ function zoneBasisFromPositions(arr) {
 // ring" branch, replacing three copies of the same three lines. Both rings
 // of a sliding band MUST go through this (not just have .t reassigned), or
 // the stale one's k0/basis desyncs and its label drifts off the ring.
-function zoneRingApplyT(ring, t) {
+function zoneRingApplyT(ring, t){
   ring.t = t;
   ring.k0 = zoneRingK0(t);
   ring.pos = zoneRingPositionsAt(t);
-  if (ring.pos) ring.line.geometry.setAttribute('position', new THREE.Float32BufferAttribute(ring.pos, 3));
+  if(ring.pos) ring.line.geometry.setAttribute('position', new THREE.Float32BufferAttribute(ring.pos, 3));
   ring.basis = zoneBasisFromPositions(ring.pos);
   // Only during a live drag: on the initial showZoneRings() build, zoneLabels
   // doesn't exist yet (zoneLabelsRebuild runs after, and builds each chip
   // straight from the just-applied ring.t/basis, making this redundant and,
   // worse, a no-op lookup into a stale/empty array).
-  if (window.__zoneRingDragActive) zoneLabelSyncRing(ring);
+  if(window.__zoneRingDragActive) zoneLabelSyncRing(ring);
 }
 
 // Rings render fully opaque now (contrast pass -- see showPreview()'s
@@ -2698,35 +2685,35 @@ function zoneRingApplyT(ring, t) {
 // --zone-c1 -> --zone-hover in style.css without hardcoding a second colour
 // pair per palette slot.
 const ZONE_RING_HOVER_LERP = 0.3125;
-function zoneRingSetHoverStyle() {
-  zoneRings.forEach(function (r, i) {
+function zoneRingSetHoverStyle(){
+  zoneRings.forEach(function(r, i){
     const bandLit = zoneBandHover >= 0 && r.zoneIdx === zoneBandHover;
     const lit = (i === zoneRingHover || i === zoneRingActive || bandLit);
     r.line.material.color.copy(r.color);
-    if (lit) r.line.material.color.lerp(ZONE_RING_WHITE, ZONE_RING_HOVER_LERP);
+    if(lit) r.line.material.color.lerp(ZONE_RING_WHITE, ZONE_RING_HOVER_LERP);
   });
 }
 
 // Screen-space proximity pick (not a raycast against a 1px line -- same
 // reasoning as cagePickAt's own comment). Ties break toward the sample
 // nearer the camera.
-function zoneRingPickAt(clientX, clientY) {
-  if (!zoneRings.length) return -1;
+function zoneRingPickAt(clientX, clientY){
+  if(!zoneRings.length) return -1;
   const rect = renderer.domElement.getBoundingClientRect();
   let best = -1, bestDist = Infinity, bestZ = Infinity;
   const v = new THREE.Vector3();
-  for (let r = 0; r < zoneRings.length; r++) {
+  for(let r = 0; r < zoneRings.length; r++){
     const pos = zoneRings[r].line.geometry.attributes.position;
-    if (!pos) continue;
-    for (let k = 0; k < pos.count; k += ZONE_RING_PICK_STRIDE) {
+    if(!pos) continue;
+    for(let k = 0; k < pos.count; k += ZONE_RING_PICK_STRIDE){
       v.set(pos.getX(k), pos.getY(k), pos.getZ(k)).project(camera);
-      if (v.z < -1 || v.z > 1) continue;
-      const sx = rect.left + (v.x + 1) / 2 * rect.width;
-      const sy = rect.top + (1 - v.y) / 2 * rect.height;
+      if(v.z < -1 || v.z > 1) continue;
+      const sx = rect.left + (v.x+1)/2*rect.width;
+      const sy = rect.top + (1-v.y)/2*rect.height;
       const dx = sx - clientX, dy = sy - clientY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > ZONE_RING_PICK_PX) continue;
-      if (dist < bestDist || (dist === bestDist && v.z < bestZ)) {
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if(dist > ZONE_RING_PICK_PX) continue;
+      if(dist < bestDist || (dist === bestDist && v.z < bestZ)){
         best = r; bestDist = dist; bestZ = v.z;
       }
     }
@@ -2736,10 +2723,10 @@ function zoneRingPickAt(clientX, clientY) {
 
 const ZONE_BAND_QUAD_STRIDE = 8;   // azimuth step (samples) for the band-body pick quads
 
-function zonePtInTri(px, py, ax, ay, bx, by, cx, cy) {
-  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
-  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
-  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+function zonePtInTri(px, py, ax, ay, bx, by, cx, cy){
+  const d1 = (px-bx)*(ay-by) - (ax-bx)*(py-by);
+  const d2 = (px-cx)*(by-cy) - (bx-cx)*(py-cy);
+  const d3 = (px-ax)*(cy-ay) - (cx-ax)*(py-ay);
   const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
   const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
   return !(hasNeg && hasPos);
@@ -2755,24 +2742,24 @@ function zonePtInTri(px, py, ax, ay, bx, by, cx, cy) {
 // costly to pay on every pointermove for a hover cursor. This instead reuses
 // the two rings' OWN vertex buffers, already in memory and already exactly
 // what is drawn -- a screen-space point-in-quad test per azimuth sector.
-function zoneBandContains(zoneIdx, clientX, clientY) {
+function zoneBandContains(zoneIdx, clientX, clientY){
   let lo = null, hi = null;
-  for (let i = 0; i < zoneRings.length; i++) {
-    if (zoneRings[i].zoneIdx !== zoneIdx) continue;
-    if (zoneRings[i].edge === 'lo') lo = zoneRings[i]; else hi = zoneRings[i];
+  for(let i = 0; i < zoneRings.length; i++){
+    if(zoneRings[i].zoneIdx !== zoneIdx) continue;
+    if(zoneRings[i].edge === 'lo') lo = zoneRings[i]; else hi = zoneRings[i];
   }
-  if (!lo || !hi || !lo.pos || !hi.pos) return false;
+  if(!lo || !hi || !lo.pos || !hi.pos) return false;
   const meta = window.__previewWallMeta;
-  if (!meta) return false;
+  if(!meta) return false;
   const ppt = meta.pointsPerTurn;
   const rect = renderer.domElement.getBoundingClientRect();
   const v = new THREE.Vector3();
-  function screenAt(posArr, j) {
-    v.set(posArr[j * 3], posArr[j * 3 + 1], posArr[j * 3 + 2]).project(camera);
-    if (v.z < -1 || v.z > 1) return null;
-    return [rect.left + (v.x + 1) / 2 * rect.width, rect.top + (1 - v.y) / 2 * rect.height];
+  function screenAt(posArr, j){
+    v.set(posArr[j*3], posArr[j*3+1], posArr[j*3+2]).project(camera);
+    if(v.z < -1 || v.z > 1) return null;
+    return [rect.left + (v.x+1)/2*rect.width, rect.top + (1-v.y)/2*rect.height];
   }
-  for (let a = 0; a < ppt; a += ZONE_BAND_QUAD_STRIDE) {
+  for(let a = 0; a < ppt; a += ZONE_BAND_QUAD_STRIDE){
     const a2 = (a + ZONE_BAND_QUAD_STRIDE) % ppt;
     // The two rings were sliced starting at DIFFERENT sample offsets
     // (each ring's own k0 = zoneRingK0(t)), so azimuth `a` is at vertex
@@ -2780,15 +2767,15 @@ function zoneBandContains(zoneIdx, clientX, clientY) {
     // remaps by the two k0s so a quad's four corners are all actually at
     // the same azimuth. Skipping this alignment builds a quad that crosses
     // the model's interior and produces false hits off the wall.
-    const jl0 = ((a - lo.k0) % ppt + ppt) % ppt;
+    const jl0 = ((a  - lo.k0) % ppt + ppt) % ppt;
     const jl1 = ((a2 - lo.k0) % ppt + ppt) % ppt;
-    const jh0 = ((a - hi.k0) % ppt + ppt) % ppt;
+    const jh0 = ((a  - hi.k0) % ppt + ppt) % ppt;
     const jh1 = ((a2 - hi.k0) % ppt + ppt) % ppt;
     const l0 = screenAt(lo.pos, jl0), l1 = screenAt(lo.pos, jl1);
     const h0 = screenAt(hi.pos, jh0), h1 = screenAt(hi.pos, jh1);
-    if (!l0 || !l1 || !h0 || !h1) continue;   // sector partly behind camera -- skip, not a false hit
-    if (zonePtInTri(clientX, clientY, l0[0], l0[1], l1[0], l1[1], h1[0], h1[1])) return true;
-    if (zonePtInTri(clientX, clientY, l0[0], l0[1], h1[0], h1[1], h0[0], h0[1])) return true;
+    if(!l0 || !l1 || !h0 || !h1) continue;   // sector partly behind camera -- skip, not a false hit
+    if(zonePtInTri(clientX, clientY, l0[0], l0[1], l1[0], l1[1], h1[0], h1[1])) return true;
+    if(zonePtInTri(clientX, clientY, l0[0], l0[1], h1[0], h1[1], h0[0], h0[1])) return true;
   }
   return false;
 }
@@ -2800,19 +2787,19 @@ function zoneBandContains(zoneIdx, clientX, clientY) {
 // otherwise be permanently ungrabbable, since the large band covers every
 // pixel the small one does. A band too thin to be worth grabbing this way is
 // already covered end-to-end by its own two ring picks, which run first.
-function zoneBandPickAt(clientX, clientY) {
+function zoneBandPickAt(clientX, clientY){
   const seen = {};
   let best = -1, bestSpan = Infinity;
-  for (let i = 0; i < zoneRings.length; i++) {
+  for(let i = 0; i < zoneRings.length; i++){
     const zi = zoneRings[i].zoneIdx;
-    if (seen[zi]) continue;
+    if(seen[zi]) continue;
     seen[zi] = true;
-    if (!zoneBandContains(zi, clientX, clientY)) continue;
-    const lo = zoneRings.find(function (r) { return r.zoneIdx === zi && r.edge === 'lo'; });
-    const hi = zoneRings.find(function (r) { return r.zoneIdx === zi && r.edge === 'hi'; });
-    if (!lo || !hi) continue;
+    if(!zoneBandContains(zi, clientX, clientY)) continue;
+    const lo = zoneRings.find(function(r){ return r.zoneIdx === zi && r.edge === 'lo'; });
+    const hi = zoneRings.find(function(r){ return r.zoneIdx === zi && r.edge === 'hi'; });
+    if(!lo || !hi) continue;
     const span = Math.abs(hi.t - lo.t);
-    if (span < bestSpan || (span === bestSpan && zi > best)) {
+    if(span < bestSpan || (span === bestSpan && zi > best)){
       best = zi; bestSpan = span;
     }
   }
@@ -2824,36 +2811,36 @@ function zoneBandPickAt(clientX, clientY) {
 // Defers to the cage: if a cage handle is active or hovered, the cage
 // already owns the lock and must not be clobbered -- "the cage wins ties",
 // see the mutual-exclusion checks below.
-function zoneSetHoverLock(on) {
-  if (cageActive || cageHover >= 0) return;
+function zoneSetHoverLock(on){
+  if(cageActive || cageHover >= 0) return;
   controls.mouseButtons.LEFT = on ? null : ZONE_LEFT_BUTTON;
 }
 
-function zoneRingRebuildPlane(anchor) {
+function zoneRingRebuildPlane(anchor){
   zoneDragNormal.set(camera.position.x - controls.target.x, 0,
-    camera.position.z - controls.target.z);
-  if (zoneDragNormal.lengthSq() < 1e-9) zoneDragNormal.set(0, 0, 1);   // top-down guard
+                     camera.position.z - controls.target.z);
+  if(zoneDragNormal.lengthSq() < 1e-9) zoneDragNormal.set(0, 0, 1);   // top-down guard
   zoneDragNormal.normalize();
   zoneDragPlane.setFromNormalAndCoplanarPoint(zoneDragNormal, anchor);
 }
-function zoneUpdatePointerNDC(e) {
+function zoneUpdatePointerNDC(e){
   const rect = renderer.domElement.getBoundingClientRect();
   zonePointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   zonePointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 }
-function zoneRingAnchor(ring) {
+function zoneRingAnchor(ring){
   const pos = ring.line.geometry.attributes.position;
   return new THREE.Vector3(pos.getX(0), pos.getY(0), pos.getZ(0));
 }
 
-function zoneCursorForHover() {
-  if (zoneRingHover >= 0) return 'ns-resize';
-  if (zoneBandHover >= 0) return 'grab';
+function zoneCursorForHover(){
+  if(zoneRingHover >= 0) return 'ns-resize';
+  if(zoneBandHover >= 0) return 'grab';
   return '';
 }
 
-function zoneEndDrag() {
-  if (zoneRingActive < 0) return;
+function zoneEndDrag(){
+  if(zoneRingActive < 0) return;
   zoneRingActive = -1;
   zoneDragBody = false;
   window.__zoneRingDragActive = false;
@@ -2867,37 +2854,37 @@ function zoneEndDrag() {
   // localStorage/undo-history land exactly once per drag. Must run before
   // the refresh below so a re-synced ring set is never drawn from a design
   // that hasn't actually been persisted yet.
-  if (window.__zoneEdgeFlush) window.__zoneEdgeFlush();
+  if(window.__zoneEdgeFlush) window.__zoneEdgeFlush();
   // The refresh suppressed during the drag (designer.js's refreshZoneRings()
   // checks window.__zoneRingDragActive) runs once now, fully re-syncing ring
   // count/order/colour with design state.
-  if (window.__refreshZoneRings) window.__refreshZoneRings();
+  if(window.__refreshZoneRings) window.__refreshZoneRings();
   render();
 }
 
-(function bindZoneRingListeners() {
+(function bindZoneRingListeners(){
   const canvas = renderer.domElement;
 
-  canvas.addEventListener('pointerdown', function (e) {
-    if (zoneRingActive >= 0) return;
-    if (e.button !== 0) return;   // left only -- right-drag is orbit's pan, and a right-press
-    // here would otherwise be read by the contextmenu handler's
-    // __zoneRingDragActive check as "a drag owns the pointer",
-    // suppressing the right-click menu it is trying to open.
-    if (measureOn) return;                                        // measure owns the pointer
-    if (cageActive || cagePickAt(e.clientX, e.clientY) >= 0) return;  // cage wins ties
+  canvas.addEventListener('pointerdown', function(e){
+    if(zoneRingActive >= 0) return;
+    if(e.button !== 0) return;   // left only -- right-drag is orbit's pan, and a right-press
+                                  // here would otherwise be read by the contextmenu handler's
+                                  // __zoneRingDragActive check as "a drag owns the pointer",
+                                  // suppressing the right-click menu it is trying to open.
+    if(measureOn) return;                                        // measure owns the pointer
+    if(cageActive || cagePickAt(e.clientX, e.clientY) >= 0) return;  // cage wins ties
     let hit = zoneRingPickAt(e.clientX, e.clientY);
     let isBody = false;
-    if (hit < 0) {
+    if(hit < 0){
       const bandIdx = zoneBandPickAt(e.clientX, e.clientY);
-      if (bandIdx < 0) return;
-      hit = zoneRings.findIndex(function (r) { return r.zoneIdx === bandIdx && r.edge === 'lo'; });
-      if (hit < 0) return;
+      if(bandIdx < 0) return;
+      hit = zoneRings.findIndex(function(r){ return r.zoneIdx === bandIdx && r.edge === 'lo'; });
+      if(hit < 0) return;
       isBody = true;
     }
     e.preventDefault();
     const ring = zoneRings[hit];
-    const otherRing = zoneRings.find(function (r) { return r.zoneIdx === ring.zoneIdx && r !== ring; });
+    const otherRing = zoneRings.find(function(r){ return r.zoneIdx === ring.zoneIdx && r !== ring; });
     zoneDragSlide = isBody || e.shiftKey;
     // Grab offset is measured against the value setZoneEdge's slideBand path
     // actually treats its `t` argument as -- the BAND MID when sliding, the
@@ -2913,7 +2900,7 @@ function zoneEndDrag() {
     zoneUpdatePointerNDC(e);
     zoneRaycaster.setFromCamera(zonePointerNDC, camera);
     let grabOffset = 0;
-    if (zoneRaycaster.ray.intersectPlane(zoneDragPlane, zoneDragPoint) && window.__zoneTFromWorldY) {
+    if(zoneRaycaster.ray.intersectPlane(zoneDragPlane, zoneDragPoint) && window.__zoneTFromWorldY){
       grabOffset = window.__zoneTFromWorldY(zoneDragPoint.y) - grabBasis;
     }
 
@@ -2931,11 +2918,11 @@ function zoneEndDrag() {
     zoneRingSetHoverStyle();
   });
 
-  canvas.addEventListener('pointermove', function (e) {
-    if (zoneRingActive >= 0) return;   // mid-drag: the window listener below owns this
-    if (measureOn) return;
-    if (cageActive || cagePickAt(e.clientX, e.clientY) >= 0) {
-      if (zoneRingHover >= 0 || zoneBandHover >= 0) {
+  canvas.addEventListener('pointermove', function(e){
+    if(zoneRingActive >= 0) return;   // mid-drag: the window listener below owns this
+    if(measureOn) return;
+    if(cageActive || cagePickAt(e.clientX, e.clientY) >= 0){
+      if(zoneRingHover >= 0 || zoneBandHover >= 0){
         zoneRingHover = -1; zoneBandHover = -1;
         zoneRingSetHoverStyle();
         zoneSetHoverLock(false);
@@ -2948,7 +2935,7 @@ function zoneEndDrag() {
     // the pointerdown grab below -- an edge ring always wins near its own
     // boundary, the body owns the rest of the tinted region.
     const bandHit = hit < 0 ? zoneBandPickAt(e.clientX, e.clientY) : -1;
-    if (hit === zoneRingHover && bandHit === zoneBandHover) return;
+    if(hit === zoneRingHover && bandHit === zoneBandHover) return;
     zoneRingHover = hit;
     zoneBandHover = bandHit;
     zoneRingSetHoverStyle();
@@ -2960,9 +2947,9 @@ function zoneEndDrag() {
     render();
   });
 
-  canvas.addEventListener('pointerleave', function () {
-    if (zoneRingActive >= 0) return;
-    if (zoneRingHover < 0 && zoneBandHover < 0) return;
+  canvas.addEventListener('pointerleave', function(){
+    if(zoneRingActive >= 0) return;
+    if(zoneRingHover < 0 && zoneBandHover < 0) return;
     zoneRingHover = -1;
     zoneBandHover = -1;
     zoneRingSetHoverStyle();
@@ -2974,32 +2961,32 @@ function zoneEndDrag() {
   // move/up/cancel + blur all live on window, same reasoning as the cage's
   // own listeners: releasing (or losing focus) outside the canvas can never
   // leave controls.enabled stuck at false.
-  window.addEventListener('pointermove', function (e) {
-    if (zoneRingActive < 0) return;
+  window.addEventListener('pointermove', function(e){
+    if(zoneRingActive < 0) return;
     const ring = zoneRings[zoneRingActive];
-    if (!ring || !window.__zoneTFromWorldY || !window.__zoneRingDrag) return;
+    if(!ring || !window.__zoneTFromWorldY || !window.__zoneRingDrag) return;
 
     // Recomputed every move so an orbit mid-drag cannot strand the plane.
     zoneRingRebuildPlane(zoneRingAnchor(ring));
     zoneUpdatePointerNDC(e);
     zoneRaycaster.setFromCamera(zonePointerNDC, camera);
-    if (!zoneRaycaster.ray.intersectPlane(zoneDragPlane, zoneDragPoint)) return;   // ray near-parallel -- ignore
+    if(!zoneRaycaster.ray.intersectPlane(zoneDragPlane, zoneDragPoint)) return;   // ray near-parallel -- ignore
 
     const t = window.__zoneTFromWorldY(zoneDragPoint.y) - zoneDragGrabOffset;
     const result = window.__zoneRingDrag(ring.zoneIdx, ring.edge, t, zoneDragSlide);
-    if (!result) return;
+    if(!result) return;
 
     zoneRingApplyT(ring, ring.edge === 'lo' ? result.t_lo : result.t_hi);
-    if (zoneDragSlide) {
-      const other = zoneRings.find(function (r) { return r.zoneIdx === ring.zoneIdx && r !== ring; });
-      if (other) zoneRingApplyT(other, other.edge === 'lo' ? result.t_lo : result.t_hi);
+    if(zoneDragSlide){
+      const other = zoneRings.find(function(r){ return r.zoneIdx === ring.zoneIdx && r !== ring; });
+      if(other) zoneRingApplyT(other, other.edge === 'lo' ? result.t_lo : result.t_hi);
     }
     render();
   });
 
   window.addEventListener('pointerup', zoneEndDrag);
   window.addEventListener('pointercancel', zoneEndDrag);
-  window.addEventListener('blur', function () {
+  window.addEventListener('blur', function(){
     zoneRingHover = -1;
     zoneEndDrag();
     controls.enabled = true;
@@ -3012,10 +2999,10 @@ function zoneEndDrag() {
   // always leaves enough span for lo's own restore to fit under the
   // minimum-span clamp). Mirrors the cage's own Escape-reverts-a-drag
   // behaviour exactly.
-  window.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    if (measureOn) return;              // Esc belongs to the measure tool while it is open
-    if (zoneRingActive < 0 || !zoneDragRevert || !window.__zoneRingDrag) return;
+  window.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    if(measureOn) return;              // Esc belongs to the measure tool while it is open
+    if(zoneRingActive < 0 || !zoneDragRevert || !window.__zoneRingDrag) return;
     window.__zoneRingDrag(zoneDragRevert.zoneIdx, 'hi', zoneDragRevert.t_hi, false);
     window.__zoneRingDrag(zoneDragRevert.zoneIdx, 'lo', zoneDragRevert.t_lo, false);
     zoneEndDrag();
@@ -3032,10 +3019,10 @@ function zoneEndDrag() {
 // Hoisted to module scope (was a zoneLabelsRebuild-local closure) so
 // zoneLabelSyncRing below can reuse the exact same mm-text formatting during
 // a live drag, instead of re-deriving it.
-function zoneLabelSetText(el, mm, metaText) {
+function zoneLabelSetText(el, mm, metaText){
   el.textContent = '';
   el.appendChild(document.createTextNode(mm.toFixed(2) + ' mm'));
-  if (metaText) {
+  if(metaText){
     const meta = document.createElement('span');
     meta.className = 'zone-tag-meta';
     meta.textContent = metaText;
@@ -3051,9 +3038,9 @@ function zoneLabelSetText(el, mm, metaText) {
 // (== designer.js's setZoneEdge) -- the SAME single funnel the in-model ring
 // drag and the modal axis drag already share -- so a typed value can never
 // disagree with what a drag would have clamped it to.
-function zoneLabelBeginEdit(label) {
-  if (label.zoneIdx < 0) return;
-  if (label.el.querySelector('input')) return;   // already editing this chip
+function zoneLabelBeginEdit(label){
+  if(label.zoneIdx < 0) return;
+  if(label.el.querySelector('input')) return;   // already editing this chip
   const el = label.el;
   const mm = window.__zoneMmFromT ? window.__zoneMmFromT(label.t) : 0;
   el.textContent = '';
@@ -3066,17 +3053,17 @@ function zoneLabelBeginEdit(label) {
   zoneLabelEditingEl = el;   // zoneLabelsSync's collision-cull skips this element -- see its own comment
 
   let settled = false;
-  function settle(commit) {
-    if (settled) return;   // Enter settles directly; the blur it triggers must not settle twice
+  function settle(commit){
+    if(settled) return;   // Enter settles directly; the blur it triggers must not settle twice
     settled = true;
-    if (zoneLabelEditingEl === el) zoneLabelEditingEl = null;
-    if (commit) {
+    if(zoneLabelEditingEl === el) zoneLabelEditingEl = null;
+    if(commit){
       const v = parseFloat(inp.value);
       // Reject, never clamp, anything that isn't a real finite number --
       // the same rule the modal row's own From/To (mm) inputs already
       // follow (designer.js's numField handlers: bad input is refused, not
       // silently coerced into something that then flows onward).
-      if (!Number.isNaN(v) && Number.isFinite(v) && window.__zoneTFromMm && window.__zoneRingDrag) {
+      if(!Number.isNaN(v) && Number.isFinite(v) && window.__zoneTFromMm && window.__zoneRingDrag){
         window.__zoneRingDrag(label.zoneIdx, label.edge, window.__zoneTFromMm(v), false);
         // setZoneEdge (designer.js) just persisted, re-armed the debounced
         // preview, and -- since neither drag flag is set here -- ran its
@@ -3091,20 +3078,20 @@ function zoneLabelBeginEdit(label) {
     // so no rebuild is coming to do this for us.
     zoneLabelSetText(el, window.__zoneMmFromT ? window.__zoneMmFromT(label.t) : 0, null);
   }
-  inp.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); settle(true); }
-    else if (e.key === 'Escape') { e.preventDefault(); settle(false); }
+  inp.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); settle(true); }
+    else if(e.key === 'Escape'){ e.preventDefault(); settle(false); }
     e.stopPropagation();   // never let Enter/Escape reach a global shortcut
-    // (undo, the ring-drag Escape-revert, etc.)
+                            // (undo, the ring-drag Escape-revert, etc.)
   });
-  inp.addEventListener('blur', function () { settle(true); });   // click-away commits, like a normal inline edit
+  inp.addEventListener('blur', function(){ settle(true); });   // click-away commits, like a normal inline edit
   inp.focus();
   inp.select();
 }
 
-function zoneLabelsRebuild() {
-  if (!zoneRings.length) { zoneLabels = []; if (zoneLabelHost) zoneLabelHost.innerHTML = ''; return; }
-  if (!zoneLabelHost) {
+function zoneLabelsRebuild(){
+  if(!zoneRings.length){ zoneLabels = []; if(zoneLabelHost) zoneLabelHost.innerHTML = ''; return; }
+  if(!zoneLabelHost){
     zoneLabelHost = document.createElement('div');
     zoneLabelHost.className = 'zone-tags';
     wrap.appendChild(zoneLabelHost);
@@ -3112,15 +3099,15 @@ function zoneLabelsRebuild() {
   zoneLabelHost.innerHTML = '';
   zoneLabels = [];
 
-  function makeChip(cls, color) {
+  function makeChip(cls, color){
     const el = document.createElement('div');
     el.className = cls;
-    if (color) el.style.color = color;
+    if(color) el.style.color = color;
     zoneLabelHost.appendChild(el);
     return el;
   }
-  zoneRings.forEach(function (ring, i) {
-    if (!ring.basis) return;
+  zoneRings.forEach(function(ring, i){
+    if(!ring.basis) return;
     const el = makeChip('zone-tag', ring.colorHex);
     const mm = window.__zoneMmFromT ? window.__zoneMmFromT(ring.t) : 0;
     zoneLabelSetText(el, mm, null);
@@ -3137,7 +3124,7 @@ function zoneLabelsRebuild() {
       prio: 1
     };
     zoneLabels.push(entry);
-    el.addEventListener('dblclick', function (e) {
+    el.addEventListener('dblclick', function(e){
       e.stopPropagation();   // never let it reach the canvas underneath (ring pick/orbit)
       zoneLabelBeginEdit(entry);
     });
@@ -3145,7 +3132,7 @@ function zoneLabelsRebuild() {
 
   const baseArr = zoneRingPositionsAt(0), topArr = zoneRingPositionsAt(1);
   const baseBasis = zoneBasisFromPositions(baseArr), topBasis = zoneBasisFromPositions(topArr);
-  if (baseBasis) {
+  if(baseBasis){
     const el = makeChip('zone-tag zone-tag-scale', null);
     zoneLabelSetText(el, window.__zoneMmFromT ? window.__zoneMmFromT(0) : 0, 'base');
     // prio 2, below a zone chip's prio 1 (see that push above): the wall's
@@ -3155,7 +3142,7 @@ function zoneLabelsRebuild() {
     // real edge from ever being reachable.
     zoneLabels.push({ el: el, basis: baseBasis, t: 0, zoneIdx: -1, edge: null, prio: 2 });
   }
-  if (topBasis) {
+  if(topBasis){
     const el = makeChip('zone-tag zone-tag-scale', null);
     zoneLabelSetText(el, window.__zoneMmFromT ? window.__zoneMmFromT(1) : 0, 'top');
     zoneLabels.push({ el: el, basis: topBasis, t: 1, zoneIdx: -1, edge: null, prio: 2 });
@@ -3172,7 +3159,7 @@ function zoneLabelsRebuild() {
 // chip if array ordering ever changes. Called from zoneRingApplyT, which
 // every drag path (axis-drag, in-model edge-drag, in-model band-slide)
 // already funnels through, so this needs no new call sites of its own.
-function zoneLabelSyncRing(ring) {
+function zoneLabelSyncRing(ring){
   // A ring's basis can legitimately come back null near an edge (t->0/1,
   // zoneRingPositionsAt running off the sampled wall buffer) -- mirrors the
   // guard zoneLabelsRebuild already has for the same reason (its own
@@ -3182,9 +3169,9 @@ function zoneLabelSyncRing(ring) {
   // reprojection (render(), via l.basis.cx/.cz/.r) would then dereference
   // and crash on -- exactly what __zoneRingsMoveZone's new call into this
   // function (the modal axis drag path) started hitting at extreme t.
-  if (!ring.basis) return;
-  const l = zoneLabels.find(function (o) { return o.zoneIdx === ring.zoneIdx && o.edge === ring.edge; });
-  if (!l) return;
+  if(!ring.basis) return;
+  const l = zoneLabels.find(function(o){ return o.zoneIdx === ring.zoneIdx && o.edge === ring.edge; });
+  if(!l) return;
   l.t = ring.t;
   l.basis = ring.basis;
   const mm = window.__zoneMmFromT ? window.__zoneMmFromT(ring.t) : 0;
@@ -3194,13 +3181,13 @@ function zoneLabelSyncRing(ring) {
 // Reprojects every label to the current camera, every render() -- same
 // per-frame DOM-tracks-a-3D-point idiom as the measure tag / cage tag.
 // Exposed as window.__zoneLabelSync for the same TDZ reason those use.
-function zoneLabelsSync() {
-  if (!zoneLabelHost) return;
-  if (!zoneLabels.length) { zoneLabelHost.style.display = 'none'; return; }
+function zoneLabelsSync(){
+  if(!zoneLabelHost) return;
+  if(!zoneLabels.length){ zoneLabelHost.style.display = 'none'; return; }
   zoneLabelHost.style.display = '';
 
   const meta = window.__previewWallMeta;
-  if (!meta) { zoneLabels.forEach(function (l) { l.el.style.display = 'none'; }); return; }
+  if(!meta){ zoneLabels.forEach(function(l){ l.el.style.display = 'none'; }); return; }
 
   // Screen-right direction in world XZ, once per sync -- every chip anchors
   // to its ring's silhouette edge along this same direction, so the whole
@@ -3208,7 +3195,7 @@ function zoneLabelsSync() {
   // model.
   let fx = camera.position.x - controls.target.x, fz = camera.position.z - controls.target.z;
   const flen = Math.hypot(fx, fz);
-  if (flen < 1e-6) { fx = 0; fz = 1; } else { fx /= flen; fz /= flen; }
+  if(flen < 1e-6){ fx = 0; fz = 1; } else { fx /= flen; fz /= flen; }
   const rightX = fz, rightZ = -fx;
 
   const rect = renderer.domElement.getBoundingClientRect();
@@ -3216,29 +3203,29 @@ function zoneLabelsSync() {
   const placed = [];   // {sy} of chips already placed, for the collision cull
 
   const hoveredZone = zoneRingActive >= 0 ? zoneRings[zoneRingActive].zoneIdx
-    : (zoneRingHover >= 0 ? zoneRings[zoneRingHover].zoneIdx : zoneBandHover);
+                     : (zoneRingHover >= 0 ? zoneRings[zoneRingHover].zoneIdx : zoneBandHover);
 
-  const ordered = zoneLabels.slice().sort(function (a, b) {
+  const ordered = zoneLabels.slice().sort(function(a, b){
     const pa = (hoveredZone >= 0 && a.zoneIdx === hoveredZone) ? 0 : a.prio;
     const pb = (hoveredZone >= 0 && b.zoneIdx === hoveredZone) ? 0 : b.prio;
     return pa - pb;
   });
 
-  ordered.forEach(function (l) {
+  ordered.forEach(function(l){
     const y = meta.wallOff + l.t * meta.height;   // EXACT -- not the ring's own sampled Y,
-    // so the printed number and the chip's
-    // height can never disagree.
-    v.set(l.basis.cx + rightX * l.basis.r, y, l.basis.cz + rightZ * l.basis.r).project(camera);
-    if (v.z < -1 || v.z > 1) { l.el.style.display = 'none'; return; }
-    const sx = rect.left + (v.x + 1) / 2 * rect.width;
-    const sy = rect.top + (1 - v.y) / 2 * rect.height;
+                                                   // so the printed number and the chip's
+                                                   // height can never disagree.
+    v.set(l.basis.cx + rightX*l.basis.r, y, l.basis.cz + rightZ*l.basis.r).project(camera);
+    if(v.z < -1 || v.z > 1){ l.el.style.display = 'none'; return; }
+    const sx = rect.left + (v.x+1)/2*rect.width;
+    const sy = rect.top + (1-v.y)/2*rect.height;
 
     // Also immune to the collision cull below while its inline edit <input>
     // is open -- getting hidden mid-edit would strand a focused, invisible
     // input the user is actively typing into.
     const isHovered = (hoveredZone >= 0 && l.zoneIdx === hoveredZone) || l.el === zoneLabelEditingEl;
-    for (let i = 0; i < placed.length; i++) {
-      if (!isHovered && Math.abs(placed[i] - sy) < ZONE_LABEL_GAP_PX) {
+    for(let i = 0; i < placed.length; i++){
+      if(!isHovered && Math.abs(placed[i] - sy) < ZONE_LABEL_GAP_PX){
         l.el.style.display = 'none';
         return;
       }
@@ -3249,35 +3236,35 @@ function zoneLabelsSync() {
     l.el.style.top = Math.round(sy) + 'px';
     let left = sx + ZONE_LABEL_OFF_PX;
     const w = l.el.offsetWidth;
-    if (left + w > rect.left + rect.width - 6) left = sx - w - ZONE_LABEL_OFF_PX;
+    if(left + w > rect.left + rect.width - 6) left = sx - w - ZONE_LABEL_OFF_PX;
     left = Math.max(rect.left + 6, left);
     l.el.style.left = Math.round(left - rect.left) + 'px';
 
-    if (l.el === zoneLabelEditingEl) return;   // its only child is the <input> -- nothing below to sync
+    if(l.el === zoneLabelEditingEl) return;   // its only child is the <input> -- nothing below to sync
     // Derived facts (span, zone number) only on the HOVERED/DRAGGED zone's
     // HI chip -- present on engagement, never competing with the mm.
     const metaSpan = l.el.querySelector('.zone-tag-meta');
-    if (metaSpan && l.zoneIdx === -1) return;   // scale chip keeps its own fixed meta text
-    if (isHovered && l.edge === 'hi') {
-      const lo = zoneLabels.find(function (o) { return o.zoneIdx === l.zoneIdx && o.edge === 'lo'; });
+    if(metaSpan && l.zoneIdx === -1) return;   // scale chip keeps its own fixed meta text
+    if(isHovered && l.edge === 'hi'){
+      const lo = zoneLabels.find(function(o){ return o.zoneIdx === l.zoneIdx && o.edge === 'lo'; });
       const span = lo ? Math.abs(l.t - lo.t) * meta.height : 0;
       const text = 'span ' + span.toFixed(2) + ' mm, zone ' + (l.zoneIdx + 1);
-      if (metaSpan) metaSpan.textContent = text;
+      if(metaSpan) metaSpan.textContent = text;
       else {
         const s = document.createElement('span');
         s.className = 'zone-tag-meta';
         s.textContent = text;
         l.el.appendChild(s);
       }
-    } else if (metaSpan) {
+    } else if(metaSpan){
       metaSpan.remove();
     }
   });
 }
 window.__zoneLabelSync = zoneLabelsSync;
 
-window.showZoneRings = function (zonesList) {
-  if (!zonesList || !zonesList.length || (typeof viewerModeActive === 'function' && viewerModeActive())) {
+window.showZoneRings = function(zonesList){
+  if(!zonesList || !zonesList.length || (typeof viewerModeActive === 'function' && viewerModeActive())){
     window.hideZoneRings();
     return;
   }
@@ -3287,18 +3274,18 @@ window.showZoneRings = function (zonesList) {
   // window.__zoneRingDragActive before ever calling this).
   const wasHoverIdx = zoneRingHover >= 0 ? zoneRings[zoneRingHover] : null;
   const wasBandHover = zoneBandHover;
-  if (zoneRingGroup) {
-    zoneRings.forEach(function (r) { r.line.geometry.dispose(); r.line.material.dispose(); });
+  if(zoneRingGroup){
+    zoneRings.forEach(function(r){ r.line.geometry.dispose(); r.line.material.dispose(); });
     scene.remove(zoneRingGroup);
   }
   zoneRingGroup = new THREE.Group();
   zoneRings = [];
-  zonesList.forEach(function (zi) {
+  zonesList.forEach(function(zi){
     const color = new THREE.Color(zi.color);
-    [['lo', zi.t_lo], ['hi', zi.t_hi]].forEach(function (pair) {
+    [['lo', zi.t_lo], ['hi', zi.t_hi]].forEach(function(pair){
       const edge = pair[0], t = pair[1];
       const posArr = zoneRingPositionsAt(t);
-      if (!posArr) return;
+      if(!posArr) return;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
       const mat = new THREE.LineBasicMaterial({
@@ -3307,8 +3294,8 @@ window.showZoneRings = function (zonesList) {
       });
       const line = new THREE.LineLoop(geo, mat);
       line.renderOrder = 21;   // one above the cage dots' 20 -- a ring is a
-      // coarser target and must not hide behind
-      // the semi-transparent draft.
+                                // coarser target and must not hide behind
+                                // the semi-transparent draft.
       zoneRingGroup.add(line);
       // ring.color is the ring's OWN, un-lerped colour -- zoneRingSetHoverStyle
       // below lerps material.color toward white and must always have this to
@@ -3322,15 +3309,15 @@ window.showZoneRings = function (zonesList) {
   // Re-resolve hover by (zoneIdx, edge)/(zoneIdx) rather than array index --
   // the rebuild may have changed ordering/count.
   zoneRingHover = -1;
-  if (wasHoverIdx) {
-    for (let i = 0; i < zoneRings.length; i++) {
-      if (zoneRings[i].zoneIdx === wasHoverIdx.zoneIdx && zoneRings[i].edge === wasHoverIdx.edge) {
+  if(wasHoverIdx){
+    for(let i = 0; i < zoneRings.length; i++){
+      if(zoneRings[i].zoneIdx === wasHoverIdx.zoneIdx && zoneRings[i].edge === wasHoverIdx.edge){
         zoneRingHover = i; break;
       }
     }
   }
   zoneBandHover = -1;
-  if (wasBandHover >= 0 && zoneRings.some(function (r) { return r.zoneIdx === wasBandHover; })) {
+  if(wasBandHover >= 0 && zoneRings.some(function(r){ return r.zoneIdx === wasBandHover; })){
     zoneBandHover = wasBandHover;
   }
   zoneRingSetHoverStyle();
@@ -3348,11 +3335,11 @@ window.showZoneRings = function (zonesList) {
 // live rings to move, e.g. the design is out of zone-overrides scope, the
 // zone is disabled, or the modal just opened and showZoneRings() hasn't run
 // yet -- the caller falls back to the full refresh in that case.
-window.__zoneRingsMoveZone = function (zoneIdx, tLo, tHi) {
-  if (!zoneRings.length) return false;
+window.__zoneRingsMoveZone = function(zoneIdx, tLo, tHi){
+  if(!zoneRings.length) return false;
   let matched = false;
-  zoneRings.forEach(function (r) {
-    if (r.zoneIdx !== zoneIdx) return;
+  zoneRings.forEach(function(r){
+    if(r.zoneIdx !== zoneIdx) return;
     matched = true;
     zoneRingApplyT(r, r.edge === 'lo' ? tLo : tHi);
     // zoneRingApplyT's OWN call to zoneLabelSyncRing is gated on
@@ -3363,13 +3350,13 @@ window.__zoneRingsMoveZone = function (zoneIdx, tLo, tHi) {
     // no double call, since the in-model path never reaches this function.
     zoneLabelSyncRing(r);
   });
-  if (matched) render();
+  if(matched) render();
   return matched;
 };
 
-window.hideZoneRings = function () {
-  if (zoneRingGroup) {
-    zoneRings.forEach(function (r) { r.line.geometry.dispose(); r.line.material.dispose(); });
+window.hideZoneRings = function(){
+  if(zoneRingGroup){
+    zoneRings.forEach(function(r){ r.line.geometry.dispose(); r.line.material.dispose(); });
     scene.remove(zoneRingGroup);
     zoneRingGroup = null;
   }
@@ -3381,18 +3368,18 @@ window.hideZoneRings = function () {
   window.__zoneRingDragActive = false;
   zoneSetHoverLock(false);
   zoneLabels = [];
-  if (zoneLabelHost) zoneLabelHost.innerHTML = '';
+  if(zoneLabelHost) zoneLabelHost.innerHTML = '';
   render();
 };
 
 // Test/debug hook, mirroring window.__cageDebug's shape and purpose.
-window.__zoneDebug = function () {
+window.__zoneDebug = function(){
   const rect = renderer.domElement.getBoundingClientRect();
-  function screenOf(ring) {
-    if (!ring.pos) return null;
+  function screenOf(ring){
+    if(!ring.pos) return null;
     const v = new THREE.Vector3(ring.pos[0], ring.pos[1], ring.pos[2]).project(camera);
-    if (v.z < -1 || v.z > 1) return null;
-    return [rect.left + (v.x + 1) / 2 * rect.width, rect.top + (1 - v.y) / 2 * rect.height];
+    if(v.z < -1 || v.z > 1) return null;
+    return [rect.left + (v.x+1)/2*rect.width, rect.top + (1-v.y)/2*rect.height];
   }
   return {
     canvas: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
@@ -3401,16 +3388,16 @@ window.__zoneDebug = function () {
     dragActive: zoneRingActive >= 0, dragBody: zoneDragBody, dragSlide: zoneDragSlide,
     controlsEnabled: controls.enabled,
     hoverLocked: controls.mouseButtons.LEFT === null,
-    rings: zoneRings.map(function (r) {
+    rings: zoneRings.map(function(r){
       return { zoneIdx: r.zoneIdx, edge: r.edge, t: r.t, k0: r.k0, screen: screenOf(r) };
     }),
-    labels: zoneLabels.map(function (l) {
+    labels: zoneLabels.map(function(l){
       return {
         text: l.el.textContent, visible: l.el.style.display !== 'none',
-        color: l.el.style.color, screen: [parseFloat(l.el.style.left) || 0, parseFloat(l.el.style.top) || 0]
+        color: l.el.style.color, screen: [parseFloat(l.el.style.left)||0, parseFloat(l.el.style.top)||0]
       };
     }),
-    bandPickAt: function (x, y) { return zoneBandPickAt(x, y); }
+    bandPickAt: function(x, y){ return zoneBandPickAt(x, y); }
   };
 };
 
@@ -3472,9 +3459,9 @@ const msNDC = new THREE.Vector2();
 const msPoint = new THREE.Vector3();
 const msProj = new THREE.Vector3();
 
-function measureKey(x, y, z) {
-  return Math.floor(x / MEASURE_CELL) + ',' + Math.floor(y / MEASURE_CELL) + ',' +
-    Math.floor(z / MEASURE_CELL);
+function measureKey(x, y, z){
+  return Math.floor(x/MEASURE_CELL) + ',' + Math.floor(y/MEASURE_CELL) + ',' +
+         Math.floor(z/MEASURE_CELL);
 }
 
 // Which flat [x0,y0,z0,x1,y1,z1,...] segment array the measure tool reads
@@ -3483,40 +3470,40 @@ function measureKey(x, y, z) {
 // same layout and world-space coordinates (previewPositions is exactly what
 // showPreview() draws), so every function below can stay agnostic of which
 // one it got.
-function measureSourceArr() {
+function measureSourceArr(){
   return viewerModeActive() ? extArr : previewPositions;
 }
 
-function measureBuildGrid() {
+function measureBuildGrid(){
   msX = msY = msZ = msSeg = null;
   msGrid = null;
   const arr = measureSourceArr();
-  if (!arr || arr.length < 6) return;
+  if(!arr || arr.length < 6) return;
   const nSeg = arr.length / 6;
   const xs = [], ys = [], zs = [], sg = [];
-  for (let s = 0; s < nSeg; s++) {
-    const b = s * 6;
-    const ax = arr[b], ay = arr[b + 1], az = arr[b + 2];
-    const dx = arr[b + 3] - ax, dy = arr[b + 4] - ay, dz = arr[b + 5] - az;
+  for(let s = 0; s < nSeg; s++){
+    const b = s*6;
+    const ax = arr[b], ay = arr[b+1], az = arr[b+2];
+    const dx = arr[b+3]-ax, dy = arr[b+4]-ay, dz = arr[b+5]-az;
     // Long moves (a calibration disk's straight fills) would otherwise only
     // register at their endpoints, and clicking the middle of one would snap
     // the marker to an end. Subdivide anything longer than MEASURE_STEP.
-    const n = Math.max(1, Math.ceil(Math.sqrt(dx * dx + dy * dy + dz * dz) / MEASURE_STEP));
-    for (let k = 0; k < n; k++) {
-      const t = k / n;
-      xs.push(ax + dx * t); ys.push(ay + dy * t); zs.push(az + dz * t); sg.push(s);
+    const n = Math.max(1, Math.ceil(Math.sqrt(dx*dx+dy*dy+dz*dz) / MEASURE_STEP));
+    for(let k = 0; k < n; k++){
+      const t = k/n;
+      xs.push(ax+dx*t); ys.push(ay+dy*t); zs.push(az+dz*t); sg.push(s);
     }
   }
-  const lb = (nSeg - 1) * 6;                        // close with the final vertex
-  xs.push(arr[lb + 3]); ys.push(arr[lb + 4]); zs.push(arr[lb + 5]); sg.push(nSeg - 1);
+  const lb = (nSeg-1)*6;                        // close with the final vertex
+  xs.push(arr[lb+3]); ys.push(arr[lb+4]); zs.push(arr[lb+5]); sg.push(nSeg-1);
 
   msX = new Float32Array(xs); msY = new Float32Array(ys); msZ = new Float32Array(zs);
   msSeg = new Uint32Array(sg);
   msGrid = new Map();
-  for (let i = 0; i < msX.length; i++) {
+  for(let i = 0; i < msX.length; i++){
     const key = measureKey(msX[i], msY[i], msZ[i]);
     const cell = msGrid.get(key);
-    if (cell) cell.push(i); else msGrid.set(key, [i]);
+    if(cell) cell.push(i); else msGrid.set(key, [i]);
   }
 }
 
@@ -3524,11 +3511,11 @@ function measureBuildGrid() {
 // has not drawn yet would report a number for something the user cannot see.
 // A fresh InstancedBufferGeometry starts at Infinity (= draw everything).
 // Design mode has no scrubber -- the whole draft is always on screen.
-function measureDrawnSegs() {
-  if (!viewerModeActive()) return previewPositions ? previewPositions.length / 6 : 0;
-  if (!pathObj || !extArr) return 0;
+function measureDrawnSegs(){
+  if(!viewerModeActive()) return previewPositions ? previewPositions.length/6 : 0;
+  if(!pathObj || !extArr) return 0;
   const n = pathObj.count;
-  const all = extArr.length / 6;
+  const all = extArr.length/6;
   return (n == null || !isFinite(n)) ? all : Math.min(n, all);
 }
 
@@ -3536,9 +3523,9 @@ function measureDrawnSegs() {
 // tolerance is defined in CSS pixels and converted through this, so it stays a
 // constant on-screen size at every zoom level instead of getting unusably tight
 // when you zoom out.
-function measureMmPerPx(dist) {
+function measureMmPerPx(dist){
   const h = wrap.clientHeight || 1;
-  return 2 * dist * Math.tan(camera.fov * Math.PI / 360) / h;
+  return 2 * dist * Math.tan(camera.fov*Math.PI/360) / h;
 }
 
 // Slab test: [entry, exit] parameters of `ray` through the drawn model's
@@ -3550,37 +3537,37 @@ function measureMmPerPx(dist) {
 // mode has no such record: previewBounds is computed straight off the draft's
 // own vertices in showPreview(), which are already world-space, so no BED
 // conversion applies there.
-function measureRaySpan(ray, pad) {
+function measureRaySpan(ray, pad){
   let lo, hi;
-  if (viewerModeActive()) {
-    if (!lastData) return null;
+  if(viewerModeActive()){
+    if(!lastData) return null;
     const d = lastData;
     // World Z runs OPPOSITE printer Y (wz = cy - printerY), so the printer-Y
     // span [miny, maxy] maps to the world-Z span [cy-maxy, cy-miny] -- max and
     // min swap sides. Subtracting cy from each without the flip gave the
     // mirror-image slab, which for an off-centre model does not contain the
     // model at all and made every measure pick miss.
-    lo = [d.minx - BED_X / 2 - pad, d.minz - pad, BED_Y / 2 - d.maxy - pad];
-    hi = [d.maxx - BED_X / 2 + pad, d.maxz + pad, BED_Y / 2 - d.miny + pad];
+    lo = [d.minx-BED_X/2-pad, d.minz-pad, BED_Y/2-d.maxy-pad];
+    hi = [d.maxx-BED_X/2+pad, d.maxz+pad, BED_Y/2-d.miny+pad];
   } else {
-    if (!previewBounds) return null;
+    if(!previewBounds) return null;
     const b = previewBounds;
-    lo = [b.minx - pad, b.miny - pad, b.minz - pad];
-    hi = [b.maxx + pad, b.maxy + pad, b.maxz + pad];
+    lo = [b.minx-pad, b.miny-pad, b.minz-pad];
+    hi = [b.maxx+pad, b.maxy+pad, b.maxz+pad];
   }
   const o = [ray.origin.x, ray.origin.y, ray.origin.z];
   const v = [ray.direction.x, ray.direction.y, ray.direction.z];
   let t0 = 0, t1 = Infinity;
-  for (let a = 0; a < 3; a++) {
-    if (Math.abs(v[a]) < 1e-9) {
-      if (o[a] < lo[a] || o[a] > hi[a]) return null;   // parallel and outside the slab
+  for(let a = 0; a < 3; a++){
+    if(Math.abs(v[a]) < 1e-9){
+      if(o[a] < lo[a] || o[a] > hi[a]) return null;   // parallel and outside the slab
       continue;
     }
-    let ta = (lo[a] - o[a]) / v[a], tb = (hi[a] - o[a]) / v[a];
-    if (ta > tb) { const s = ta; ta = tb; tb = s; }
-    if (ta > t0) t0 = ta;
-    if (tb < t1) t1 = tb;
-    if (t0 > t1) return null;
+    let ta = (lo[a]-o[a])/v[a], tb = (hi[a]-o[a])/v[a];
+    if(ta > tb){ const s = ta; ta = tb; tb = s; }
+    if(ta > t0) t0 = ta;
+    if(tb < t1) t1 = tb;
+    if(t0 > t1) return null;
   }
   return [t0, t1];
 }
@@ -3588,21 +3575,21 @@ function measureRaySpan(ray, pad) {
 // Closest point on extrude segment `s` to `ray`, clamped to the segment ends.
 // Standard closest-approach between two lines; the ray direction is unit
 // length, so its own squared length drops out of the denominator.
-function measureClosestOnSeg(s, ray, out) {
+function measureClosestOnSeg(s, ray, out){
   const arr = measureSourceArr();
-  const b = s * 6;
-  const ax = arr[b], ay = arr[b + 1], az = arr[b + 2];
-  const ux = arr[b + 3] - ax, uy = arr[b + 4] - ay, uz = arr[b + 5] - az;
+  const b = s*6;
+  const ax = arr[b], ay = arr[b+1], az = arr[b+2];
+  const ux = arr[b+3]-ax, uy = arr[b+4]-ay, uz = arr[b+5]-az;
   const o = ray.origin, d = ray.direction;
-  const wx = ax - o.x, wy = ay - o.y, wz = az - o.z;
-  const uu = ux * ux + uy * uy + uz * uz;
-  const ud = ux * d.x + uy * d.y + uz * d.z;
-  const uw = ux * wx + uy * wy + uz * wz;
-  const dw = d.x * wx + d.y * wy + d.z * wz;
-  const den = uu - ud * ud;
-  let f = (den > 1e-9) ? (ud * dw - uw) / den : 0;
-  if (f < 0) f = 0; else if (f > 1) f = 1;
-  return out.set(ax + ux * f, ay + uy * f, az + uz * f);
+  const wx = ax-o.x, wy = ay-o.y, wz = az-o.z;
+  const uu = ux*ux + uy*uy + uz*uz;
+  const ud = ux*d.x + uy*d.y + uz*d.z;
+  const uw = ux*wx + uy*wy + uz*wz;
+  const dw = d.x*wx + d.y*wy + d.z*wz;
+  const den = uu - ud*ud;
+  let f = (den > 1e-9) ? (ud*dw - uw)/den : 0;
+  if(f < 0) f = 0; else if(f > 1) f = 1;
+  return out.set(ax+ux*f, ay+uy*f, az+uz*f);
 }
 
 // Nearest toolpath point under (clientX, clientY), or null. Marches the camera
@@ -3610,15 +3597,15 @@ function measureClosestOnSeg(s, ray, out) {
 // G-code file is well over 100k segments, and a full projection sweep on every
 // pointermove would make the hover ghost stutter. Front-most wins, which is
 // what "the point I am looking at" means on a surface.
-function measurePick(clientX, clientY) {
-  if (!msGrid) measureBuildGrid();
-  if (!msGrid) return null;
+function measurePick(clientX, clientY){
+  if(!msGrid) measureBuildGrid();
+  if(!msGrid) return null;
   const drawn = measureDrawnSegs();
-  if (drawn <= 0) return null;             // scrubbed to 0% -- nothing is on screen
+  if(drawn <= 0) return null;             // scrubbed to 0% -- nothing is on screen
 
   const rect = renderer.domElement.getBoundingClientRect();
-  msNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-  msNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  msNDC.x = ((clientX-rect.left)/rect.width)*2 - 1;
+  msNDC.y = -((clientY-rect.top)/rect.height)*2 + 1;
   msRaycaster.setFromCamera(msNDC, camera);
   const ray = msRaycaster.ray;
 
@@ -3626,36 +3613,36 @@ function measurePick(clientX, clientY) {
   // right out, 14 px is several millimetres of world space, and a pick aimed at
   // the silhouette edge would otherwise never enter the box to start marching.
   const mmPerPx = measureMmPerPx(camera.position.distanceTo(controls.target));
-  const span = measureRaySpan(ray, MEASURE_CELL * 2 + MEASURE_PICK_PX * mmPerPx);
-  if (!span) return null;
+  const span = measureRaySpan(ray, MEASURE_CELL*2 + MEASURE_PICK_PX*mmPerPx);
+  if(!span) return null;
   const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z;
   const dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
 
   const seen = new Set();                 // each cell is scanned once per pick
   let best = -1, bestT = Infinity;
-  for (let t = Math.max(span[0], 0); t <= span[1]; t += MEASURE_CELL) {
-    const ix = Math.floor((ox + dx * t) / MEASURE_CELL);
-    const iy = Math.floor((oy + dy * t) / MEASURE_CELL);
-    const iz = Math.floor((oz + dz * t) / MEASURE_CELL);
-    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
-      const key = (ix + a) + ',' + (iy + b) + ',' + (iz + c);
-      if (seen.has(key)) continue;
+  for(let t = Math.max(span[0], 0); t <= span[1]; t += MEASURE_CELL){
+    const ix = Math.floor((ox+dx*t)/MEASURE_CELL);
+    const iy = Math.floor((oy+dy*t)/MEASURE_CELL);
+    const iz = Math.floor((oz+dz*t)/MEASURE_CELL);
+    for(let a = -1; a <= 1; a++) for(let b = -1; b <= 1; b++) for(let c = -1; c <= 1; c++){
+      const key = (ix+a) + ',' + (iy+b) + ',' + (iz+c);
+      if(seen.has(key)) continue;
       seen.add(key);
       const cell = msGrid.get(key);
-      if (!cell) continue;
-      for (let m = 0; m < cell.length; m++) {
+      if(!cell) continue;
+      for(let m = 0; m < cell.length; m++){
         const i = cell[m];
-        if (msSeg[i] >= drawn) continue;             // not drawn at this scrub position
-        const wx = msX[i] - ox, wy = msY[i] - oy, wz = msZ[i] - oz;
-        const along = wx * dx + wy * dy + wz * dz;
-        if (along <= 0 || along >= bestT) continue;  // behind the camera, or already beaten
-        const px = wx - dx * along, py = wy - dy * along, pz = wz - dz * along;
-        if (Math.sqrt(px * px + py * py + pz * pz) > MEASURE_PICK_PX * measureMmPerPx(along)) continue;
+        if(msSeg[i] >= drawn) continue;             // not drawn at this scrub position
+        const wx = msX[i]-ox, wy = msY[i]-oy, wz = msZ[i]-oz;
+        const along = wx*dx + wy*dy + wz*dz;
+        if(along <= 0 || along >= bestT) continue;  // behind the camera, or already beaten
+        const px = wx-dx*along, py = wy-dy*along, pz = wz-dz*along;
+        if(Math.sqrt(px*px+py*py+pz*pz) > MEASURE_PICK_PX*measureMmPerPx(along)) continue;
         bestT = along; best = i;
       }
     }
   }
-  if (best < 0) return null;
+  if(best < 0) return null;
 
   // Refine onto the exact segment the winning sample came from, so the reading
   // is the toolpath itself and not the sampling lattice.
@@ -3678,15 +3665,15 @@ function measurePick(clientX, clientY) {
 const CTX_DRAG_PX = 4;       // pointer travel past which a right-press counts as a pan, not a click
 
 let ctxDownX = 0, ctxDownY = 0, ctxDownButton = -1;
-renderer.domElement.addEventListener('pointerdown', function (e) {
+renderer.domElement.addEventListener('pointerdown', function(e){
   ctxDownButton = e.button;
   ctxDownX = e.clientX; ctxDownY = e.clientY;
 }, true);
 
 const ctxMenuEl = document.getElementById('canvas-ctx-menu');
 
-function hideCtxMenu() {
-  if (ctxMenuEl) ctxMenuEl.style.display = 'none';
+function hideCtxMenu(){
+  if(ctxMenuEl) ctxMenuEl.style.display = 'none';
 }
 
 // Context-aware: right-clicking a spot already inside a zone's band leads
@@ -3697,8 +3684,8 @@ function hideCtxMenu() {
 // the user actually wants to set a texture (see openModal's own comment in
 // designer.js for why every add used to force it open, and the friction
 // that caused).
-function openCtxMenu(clientX, clientY) {
-  if (!ctxMenuEl || !window.__openZoneModal) return;
+function openCtxMenu(clientX, clientY){
+  if(!ctxMenuEl || !window.__openZoneModal) return;
   // Force a fresh pick grid: msGrid only rebuilds itself when null (see
   // measurePick's own comment), so a right-click right after editing a
   // slider would otherwise pick against the PREVIOUS draft's geometry.
@@ -3708,57 +3695,50 @@ function openCtxMenu(clientX, clientY) {
     ? window.__zoneTFromWorldY(hit.point.y) : null;
   const bandIdx = zoneBandPickAt(clientX, clientY);
 
-  if (seedT == null && bandIdx < 0) {
-    if (window.__openPresetMenu) {
-      window.__openPresetMenu(clientX, clientY);
-      return;
-    }
-  }
-
   ctxMenuEl.innerHTML = '';
 
-  function addItem(label, swatchColor, onClick, disabled) {
+  function addItem(label, swatchColor, onClick, disabled){
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'ctx-item';
-    if (disabled) item.disabled = true;
+    if(disabled) item.disabled = true;
     const dot = document.createElement('span');
     dot.className = swatchColor ? 'zo-row-swatch' : 'zo-dot active';
-    if (swatchColor) dot.style.background = swatchColor;
+    if(swatchColor) dot.style.background = swatchColor;
     item.appendChild(dot);
     item.appendChild(document.createTextNode(label));
-    if (!disabled) item.addEventListener('click', function () { hideCtxMenu(); onClick(); });
+    if(!disabled) item.addEventListener('click', function(){ hideCtxMenu(); onClick(); });
     ctxMenuEl.appendChild(item);
     return item;
   }
-  function addSep() {
+  function addSep(){
     const sep = document.createElement('div');
     sep.className = 'ctx-sep';
     ctxMenuEl.appendChild(sep);
   }
 
-  if (bandIdx >= 0) {
-    const ring = zoneRings.find(function (r) { return r.zoneIdx === bandIdx; });
+  if(bandIdx >= 0){
+    const ring = zoneRings.find(function(r){ return r.zoneIdx === bandIdx; });
     const color = ring ? ring.colorHex : ZONE_PALETTE[0];
-    addItem('Edit zone ' + (bandIdx + 1) + ' textures...', color, function () {
+    addItem('Edit zone ' + (bandIdx+1) + ' textures...', color, function(){
       window.__zoneOpenModalAt(bandIdx);
     });
-    if (window.__zoneRemove) {
-      addItem('Remove zone ' + (bandIdx + 1), color, function () {
+    if(window.__zoneRemove){
+      addItem('Remove zone ' + (bandIdx+1), color, function(){
         window.__zoneRemove(bandIdx);
       });
     }
     addSep();
   }
 
-  if (seedT != null && window.__zoneAddAt) {
+  if(seedT != null && window.__zoneAddAt){
     const canAdd = !window.__zoneCanAdd || window.__zoneCanAdd();
-    addItem(canAdd ? 'Add zone here' : 'Add zone here (max 8)', null, function () {
+    addItem(canAdd ? 'Add zone here' : 'Add zone here (max 8)', null, function(){
       window.__zoneAddAt(seedT);
     }, !canAdd);
   }
 
-  addItem('Zone Overrides…', null, function () {
+  addItem('Zone Overrides…', null, function(){
     window.__openZoneModal(null);
   });
 
@@ -3769,50 +3749,35 @@ function openCtxMenu(clientX, clientY) {
   const mw = ctxMenuEl.offsetWidth, mh = ctxMenuEl.offsetHeight;
   const margin = 8;
   let x = clientX, y = clientY;
-  if (x + mw + margin > window.innerWidth) x = window.innerWidth - mw - margin;
-  if (y + mh + margin > window.innerHeight) y = window.innerHeight - mh - margin;
+  if(x + mw + margin > window.innerWidth) x = window.innerWidth - mw - margin;
+  if(y + mh + margin > window.innerHeight) y = window.innerHeight - mh - margin;
   ctxMenuEl.style.left = Math.max(margin, Math.round(x)) + 'px';
   ctxMenuEl.style.top = Math.max(margin, Math.round(y)) + 'px';
 }
 
-if (ctxMenuEl) {
-  renderer.domElement.addEventListener('contextmenu', function (e) {
+if(ctxMenuEl){
+  renderer.domElement.addEventListener('contextmenu', function(e){
     e.preventDefault();
-    if (viewerModeActive()) return;                    // Design-mode tool only
-    if (measureOn) return;                              // measure tool owns the pointer
+    if(viewerModeActive()) return;                    // Design-mode tool only
+    if(measureOn) return;                              // measure tool owns the pointer
     // Test the explicit drag flags, NOT controls.mouseButtons.LEFT -- that
     // also goes null on a mere HOVER (cageSetHoverLock/zoneSetHoverLock), so
     // testing it here would suppress the menu just because the pointer rests
     // on a cage handle or a Zone Overrides ring, not only during a real drag.
-    if (window.__silDragActive || window.__zoneRingDragActive) return;
+    if(window.__silDragActive || window.__zoneRingDragActive) return;
     const moved = Math.abs(e.clientX - ctxDownX) > CTX_DRAG_PX ||
-      Math.abs(e.clientY - ctxDownY) > CTX_DRAG_PX;
-    if (ctxDownButton === 2 && moved) return;            // right-drag pan, not a click
+                  Math.abs(e.clientY - ctxDownY) > CTX_DRAG_PX;
+    if(ctxDownButton === 2 && moved) return;            // right-drag pan, not a click
     openCtxMenu(e.clientX, e.clientY);
   });
-  document.addEventListener('pointerdown', function (e) {
-    if (ctxMenuEl.style.display !== 'none' && !ctxMenuEl.contains(e.target)) hideCtxMenu();
-    if (window.__closePresetMenu) {
-      const presetMenu = document.getElementById('preset-context-menu');
-      if (presetMenu && presetMenu.style.display !== 'none' && !presetMenu.contains(e.target)) {
-        window.__closePresetMenu();
-      }
-    }
+  document.addEventListener('pointerdown', function(e){
+    if(ctxMenuEl.style.display !== 'none' && !ctxMenuEl.contains(e.target)) hideCtxMenu();
   }, true);
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') {
-      hideCtxMenu();
-      if (window.__closePresetMenu) window.__closePresetMenu();
-    }
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') hideCtxMenu();
   });
-  renderer.domElement.addEventListener('wheel', function () {
-    hideCtxMenu();
-    if (window.__closePresetMenu) window.__closePresetMenu();
-  }, { passive: true });
-  controls.addEventListener('change', function () {
-    hideCtxMenu();
-    if (window.__closePresetMenu) window.__closePresetMenu();
-  });
+  renderer.domElement.addEventListener('wheel', hideCtxMenu, { passive: true });
+  controls.addEventListener('change', hideCtxMenu);
 }
 
 // One horizontal cross-section through `p`, using samples within +/-`band` of
@@ -3826,30 +3791,30 @@ if (ctxMenuEl) {
 // radius from the centre outwards, and the search happily returned an infill
 // line near the middle and called it the far wall. Calipers close on the
 // outside of a part, so the outside is what gets traced.
-function measureRingAt(p, band, drawn) {
+function measureRingAt(p, band, drawn){
   const n = msX.length;
   let sx = 0, sz = 0, count = 0;
-  for (let i = 0; i < n; i++) {
-    if (msSeg[i] >= drawn) continue;
-    if (Math.abs(msY[i] - p.y) > band) continue;
+  for(let i = 0; i < n; i++){
+    if(msSeg[i] >= drawn) continue;
+    if(Math.abs(msY[i]-p.y) > band) continue;
     sx += msX[i]; sz += msZ[i]; count++;
   }
-  if (count < 3) return null;
-  const cx = sx / count, cz = sz / count;
+  if(count < 3) return null;
+  const cx = sx/count, cz = sz/count;
 
   const outR = new Float64Array(MEASURE_BINS);
   const outX = new Float64Array(MEASURE_BINS);
   const outY = new Float64Array(MEASURE_BINS);
   const outZ = new Float64Array(MEASURE_BINS);
   const used = new Uint8Array(MEASURE_BINS);
-  for (let i = 0; i < n; i++) {
-    if (msSeg[i] >= drawn) continue;
-    if (Math.abs(msY[i] - p.y) > band) continue;
-    const dx = msX[i] - cx, dz = msZ[i] - cz;
+  for(let i = 0; i < n; i++){
+    if(msSeg[i] >= drawn) continue;
+    if(Math.abs(msY[i]-p.y) > band) continue;
+    const dx = msX[i]-cx, dz = msZ[i]-cz;
     const r = Math.hypot(dx, dz);
-    let b = Math.floor((Math.atan2(dz, dx) + Math.PI) / (2 * Math.PI) * MEASURE_BINS);
-    if (b < 0) b = 0; else if (b >= MEASURE_BINS) b = MEASURE_BINS - 1;
-    if (!used[b] || r > outR[b]) {
+    let b = Math.floor((Math.atan2(dz, dx) + Math.PI) / (2*Math.PI) * MEASURE_BINS);
+    if(b < 0) b = 0; else if(b >= MEASURE_BINS) b = MEASURE_BINS-1;
+    if(!used[b] || r > outR[b]){
       used[b] = 1; outR[b] = r; outX[b] = msX[i]; outY[b] = msY[i]; outZ[b] = msZ[i];
     }
   }
@@ -3857,52 +3822,52 @@ function measureRingAt(p, band, drawn) {
   // Nearest occupied sector to `ang`, plus how far off it is in radians. An
   // empty sector means the section genuinely has no wall in that direction at
   // this height, which the caller reports rather than papering over.
-  function nearestBin(ang) {
-    const binW = 2 * Math.PI / MEASURE_BINS;
+  function nearestBin(ang){
+    const binW = 2*Math.PI/MEASURE_BINS;
     // Wrap into [0, MEASURE_BINS) first. Callers pass theta+PI for the far
     // side, which runs past 2*PI, and an unwrapped target made the distance
     // below come out NEGATIVE -- which then slid under every "is the section
     // closed" threshold unchallenged.
-    let target = ((ang + Math.PI) / (2 * Math.PI) * MEASURE_BINS) % MEASURE_BINS;
-    if (target < 0) target += MEASURE_BINS;
+    let target = ((ang + Math.PI) / (2*Math.PI) * MEASURE_BINS) % MEASURE_BINS;
+    if(target < 0) target += MEASURE_BINS;
     let best = -1, bestOff = Infinity;
-    for (let b = 0; b < MEASURE_BINS; b++) {
-      if (!used[b]) continue;
+    for(let b = 0; b < MEASURE_BINS; b++){
+      if(!used[b]) continue;
       let off = Math.abs((b + 0.5) - target);
-      if (off > MEASURE_BINS / 2) off = MEASURE_BINS - off;
-      if (off < bestOff) { bestOff = off; best = b; }
+      if(off > MEASURE_BINS/2) off = MEASURE_BINS - off;
+      if(off < bestOff){ bestOff = off; best = b; }
     }
     // Discount half a sector: a fully covered section still lands up to half a
     // bin off the exact direction purely from binning, and reporting that as a
     // gap would overstate how open the section is.
-    return { bin: best, off: Math.max(0, bestOff * binW - binW / 2) };
+    return { bin:best, off: Math.max(0, bestOff*binW - binW/2) };
   }
 
-  const radius = Math.hypot(p.x - cx, p.z - cz);
-  const theta = Math.atan2(p.z - cz, p.x - cx);
+  const radius = Math.hypot(p.x-cx, p.z-cz);
+  const theta = Math.atan2(p.z-cz, p.x-cx);
   const near = nearestBin(theta);
   const far = nearestBin(theta + Math.PI);
 
   let coverage = 0, outerMin = Infinity, outerMax = -Infinity;
-  for (let b = 0; b < MEASURE_BINS; b++) {
-    if (!used[b]) continue;
+  for(let b = 0; b < MEASURE_BINS; b++){
+    if(!used[b]) continue;
     coverage++;
-    if (outR[b] < outerMin) outerMin = outR[b];
-    if (outR[b] > outerMax) outerMax = outR[b];
+    if(outR[b] < outerMin) outerMin = outR[b];
+    if(outR[b] > outerMax) outerMax = outR[b];
   }
 
   return {
-    cx: cx, cz: cz, radius: radius, band: band, count: count,
+    cx:cx, cz:cz, radius:radius, band:band, count:count,
     nearR: near.bin >= 0 ? outR[near.bin] : radius,
-    farR: far.bin >= 0 ? outR[far.bin] : 0,
-    gap: far.bin >= 0 ? far.off : Math.PI,
+    farR:  far.bin  >= 0 ? outR[far.bin]  : 0,
+    gap:   far.bin  >= 0 ? far.off : Math.PI,
     nearPt: near.bin >= 0
       ? new THREE.Vector3(outX[near.bin], outY[near.bin], outZ[near.bin])
       : p.clone(),
     opp: far.bin >= 0
       ? new THREE.Vector3(outX[far.bin], outY[far.bin], outZ[far.bin])
       : new THREE.Vector3(cx, p.y, cz),
-    coverage: coverage, bins: MEASURE_BINS,
+    coverage:coverage, bins:MEASURE_BINS,
     outerMin: coverage ? outerMin : 0, outerMax: coverage ? outerMax : 0
   };
 }
@@ -3918,27 +3883,27 @@ function measureRingAt(p, band, drawn) {
 // side is genuinely covered -- and the band that was used is printed on the
 // card, because a reading smeared over 2 mm of height is a different claim
 // from one taken over 0.2 mm.
-function measureRing(p) {
+function measureRing(p){
   // lastData is only used below for its (optional) layer height, to pick a
   // starting band size -- it is not required for the ring search itself.
   // Gating the whole function on it meant Design mode, which has no
   // lastData until a file is actually loaded, could never form a
   // cross-section at all.
-  if (!msX) return null;
+  if(!msX) return null;
   const drawn = measureDrawnSegs();
-  if (drawn <= 0) return null;
+  if(drawn <= 0) return null;
   const lh = (lastData && lastData.meta && lastData.meta.layerHeight) || null;
   // Half a layer is the floor: a spiral vase climbs one layer height per
   // revolution, so a thinner band cannot contain a whole turn even on a
   // perfectly flat-layered print.
-  let band = lh ? Math.max(lh * 0.55, 0.15) : 0.5;
+  let band = lh ? Math.max(lh*0.55, 0.15) : 0.5;
   let out = null;
-  for (; ;) {
+  for(;;){
     const got = measureRingAt(p, band, drawn);
-    if (got) out = got;
-    if (got && got.count >= MEASURE_MIN_RING && got.gap <= MEASURE_OPP_RAD) return got;
-    if (band >= MEASURE_BAND_MAX) break;
-    band = Math.min(band * 2, MEASURE_BAND_MAX);
+    if(got) out = got;
+    if(got && got.count >= MEASURE_MIN_RING && got.gap <= MEASURE_OPP_RAD) return got;
+    if(band >= MEASURE_BAND_MAX) break;
+    band = Math.min(band*2, MEASURE_BAND_MAX);
   }
   return out;   // best effort; the caller reports the gap instead of a diameter
 }
@@ -3948,33 +3913,29 @@ function measureRing(p) {
 // only see when it happens to fall on the near side of the model is not much of
 // a measurement. renderOrder keeps them above the toolpath.
 
-function measureLineMaterial() {
-  if (measureLineMat) return measureLineMat;
-  measureLineMat = new LineMaterial({
-    color: MEASURE_COL, linewidth: 2,
-    worldUnits: false, depthTest: false, transparent: true
-  });
-  measureLineMat.resolution.set(wrap.clientWidth || 1, wrap.clientHeight || 1);
+function measureLineMaterial(){
+  if(measureLineMat) return measureLineMat;
+  measureLineMat = new LineMaterial({ color:MEASURE_COL, linewidth:2,
+    worldUnits:false, depthTest:false, transparent:true });
+  measureLineMat.resolution.set(wrap.clientWidth||1, wrap.clientHeight||1);
   return measureLineMat;
 }
 
-function measureDot(p, ghost) {
+function measureDot(p, ghost){
   const m = new THREE.Mesh(
     new THREE.SphereGeometry(ghost ? 0.55 : 0.8, 12, 8),
-    new THREE.MeshBasicMaterial({
-      color: MEASURE_COL, depthTest: false,
-      transparent: true, opacity: ghost ? 0.45 : 1.0
-    }));
+    new THREE.MeshBasicMaterial({ color:MEASURE_COL, depthTest:false,
+      transparent:true, opacity: ghost ? 0.45 : 1.0 }));
   m.position.copy(p);
   m.renderOrder = 1000;
   return m;
 }
 
 // `pts` is a polyline; LineSegmentsGeometry wants explicit endpoint pairs.
-function measureLine(pts) {
+function measureLine(pts){
   const segs = [];
-  for (let i = 0; i + 1 < pts.length; i++) {
-    segs.push(pts[i].x, pts[i].y, pts[i].z, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z);
+  for(let i = 0; i+1 < pts.length; i++){
+    segs.push(pts[i].x, pts[i].y, pts[i].z, pts[i+1].x, pts[i+1].y, pts[i+1].z);
   }
   const g = new LineSegmentsGeometry();
   g.setPositions(segs);
@@ -3983,95 +3944,95 @@ function measureLine(pts) {
   return l;
 }
 
-function measureEnsureGroup() {
-  if (!measureGroup) {
+function measureEnsureGroup(){
+  if(!measureGroup){
     measureGroup = new THREE.Group();
     scene.add(measureGroup);
   }
   return measureGroup;
 }
 
-function measureClearOverlay() {
-  if (!measureGroup) return;
-  while (measureGroup.children.length) {
+function measureClearOverlay(){
+  if(!measureGroup) return;
+  while(measureGroup.children.length){
     const c = measureGroup.children[0];
     measureGroup.remove(c);
-    if (c.geometry) c.geometry.dispose();
+    if(c.geometry) c.geometry.dispose();
     // The line material is shared and cached for the page lifetime; marker
     // materials are one per marker and must go with them.
-    if (c.material && c.material !== measureLineMat) c.material.dispose();
+    if(c.material && c.material !== measureLineMat) c.material.dispose();
   }
 }
 
-function measureSetTag(pos, text) {
+function measureSetTag(pos, text){
   measureTagPos = pos;
-  if (!measureTagEl) {
+  if(!measureTagEl){
     measureTagEl = document.createElement('div');
     measureTagEl.className = 'measure-tag';
     wrap.appendChild(measureTagEl);
   }
-  if (text != null) measureTagEl.textContent = text;
+  if(text != null) measureTagEl.textContent = text;
 }
 
 // Re-projects the floating tag. Called from render() through window.__measureSync
 // so it tracks orbit, zoom and resize without a loop of its own.
-function measureSync() {
-  if (measureLineMat) measureLineMat.resolution.set(wrap.clientWidth || 1, wrap.clientHeight || 1);
-  if (!measureTagEl) return;
-  if (!measureOn || !measureTagPos) { measureTagEl.style.display = 'none'; return; }
+function measureSync(){
+  if(measureLineMat) measureLineMat.resolution.set(wrap.clientWidth||1, wrap.clientHeight||1);
+  if(!measureTagEl) return;
+  if(!measureOn || !measureTagPos){ measureTagEl.style.display = 'none'; return; }
   msProj.copy(measureTagPos).project(camera);
-  if (msProj.z < -1 || msProj.z > 1) { measureTagEl.style.display = 'none'; return; }
+  if(msProj.z < -1 || msProj.z > 1){ measureTagEl.style.display = 'none'; return; }
   measureTagEl.style.display = '';
-  measureTagEl.style.left = ((msProj.x + 1) / 2 * wrap.clientWidth) + 'px';
-  measureTagEl.style.top = ((1 - msProj.y) / 2 * wrap.clientHeight) + 'px';
+  measureTagEl.style.left = ((msProj.x+1)/2*wrap.clientWidth) + 'px';
+  measureTagEl.style.top  = ((1-msProj.y)/2*wrap.clientHeight) + 'px';
 }
 window.__measureSync = measureSync;
 
-function measureMid(a, b) {
-  return new THREE.Vector3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+function measureMid(a, b){
+  return new THREE.Vector3((a.x+b.x)/2, (a.y+b.y)/2, (a.z+b.z)/2);
 }
 
-function measureRedraw() {
+function measureRedraw(){
   measureClearOverlay();
   measureTagPos = null;
-  if (measureOn) {
+  if(measureOn){
     const g = measureEnsureGroup();
-    if (measureMode === 'span') {
-      for (let i = 0; i < measurePts.length; i++) g.add(measureDot(measurePts[i], false));
-      if (measurePts.length >= 2) {
+    if(measureMode === 'span'){
+      for(let i = 0; i < measurePts.length; i++) g.add(measureDot(measurePts[i], false));
+      if(measurePts.length >= 2){
         g.add(measureLine([measurePts[0], measurePts[1]]));
         measureSetTag(measureMid(measurePts[0], measurePts[1]),
-          measurePts[0].distanceTo(measurePts[1]).toFixed(2) + ' mm');
-      } else if (measurePts.length === 1 && measureHoverPt) {
+                      measurePts[0].distanceTo(measurePts[1]).toFixed(2) + ' mm');
+      } else if(measurePts.length === 1 && measureHoverPt){
         // Rubber band: the span updates live as the cursor moves, so you can
         // see the number before committing the second point.
         g.add(measureDot(measureHoverPt, true));
         g.add(measureLine([measurePts[0], measureHoverPt]));
         measureSetTag(measureMid(measurePts[0], measureHoverPt),
-          measurePts[0].distanceTo(measureHoverPt).toFixed(2) + ' mm');
-      } else if (measureHoverPt) {
+                      measurePts[0].distanceTo(measureHoverPt).toFixed(2) + ' mm');
+      } else if(measureHoverPt){
         g.add(measureDot(measureHoverPt, true));
       }
     } else {
-      if (measureHoverPt && !measurePts.length) g.add(measureDot(measureHoverPt, true));
-      if (measurePts.length) {
+      if(measureHoverPt && !measurePts.length) g.add(measureDot(measureHoverPt, true));
+      if(measurePts.length){
         const p = measurePts[0], r = measureRingInfo;
         g.add(measureDot(p, false));
-        if (r) {
+        if(r){
           const axis = new THREE.Vector3(r.cx, p.y, r.cz);
           const closed = r.gap <= MEASURE_OPP_RAD && r.radius > 0.05;
           // Axis tick: a short cross on the section centre, so it is obvious
           // which point the radius is being measured from.
-          g.add(measureLine([new THREE.Vector3(r.cx - 1.5, p.y, r.cz),
-          new THREE.Vector3(r.cx + 1.5, p.y, r.cz)]));
-          g.add(measureLine([new THREE.Vector3(r.cx, p.y, r.cz - 1.5),
-          new THREE.Vector3(r.cx, p.y, r.cz + 1.5)]));
+          g.add(measureLine([new THREE.Vector3(r.cx-1.5, p.y, r.cz),
+                             new THREE.Vector3(r.cx+1.5, p.y, r.cz)]));
+          g.add(measureLine([new THREE.Vector3(r.cx, p.y, r.cz-1.5),
+                             new THREE.Vector3(r.cx, p.y, r.cz+1.5)]));
           // The diameter is drawn across the outer wall, which is where it is
           // measured -- when the pick is on that wall the two coincide, and
           // when it is not (a pick on a solid base's infill) the line shows
           // plainly that the span is not the one through the picked point.
           g.add(measureLine(closed ? [r.nearPt, axis, r.opp] : [p, axis]));
-          if (closed) {
+          if(closed){
             g.add(measureDot(r.opp, true));
             measureSetTag(axis, 'd ' + (r.nearR + r.farR).toFixed(2) + ' mm');
           } else {
@@ -4087,7 +4048,7 @@ function measureRedraw() {
 
 // ---- readout ---------------------------------------------------------------
 
-function measureFmt(v) { return v.toFixed(2) + ' mm'; }
+function measureFmt(v){ return v.toFixed(2) + ' mm'; }
 
 // Printer coordinates. The scene is bed-centred with Y up; the machine is
 // corner-origin with Z up. Always report what the machine would call the point,
@@ -4098,23 +4059,23 @@ function measureFmt(v) { return v.toFixed(2) + ' mm'; }
 // mirror-image Y for every point, and this readout is documented as safe to
 // type straight into G-code, so it was handing back a coordinate on the wrong
 // side of the bed.
-function measureFmtPt(p) {
-  return (p.x + BED_X / 2).toFixed(1) + ', ' + (BED_Y / 2 - p.z).toFixed(1) + ', ' + p.y.toFixed(1);
+function measureFmtPt(p){
+  return (p.x+BED_X/2).toFixed(1) + ', ' + (BED_Y/2-p.z).toFixed(1) + ', ' + p.y.toFixed(1);
 }
 
-function measureRow(label, value, primary) {
+function measureRow(label, value, primary){
   return '<div class="mrow' + (primary ? ' is-primary' : '') + '"><span>' + label +
-    '</span><b>' + value + '</b></div>';
+         '</span><b>' + value + '</b></div>';
 }
 
-function measureSetHint(text) {
+function measureSetHint(text){
   const el = document.getElementById('measure-hint');
-  if (el) el.textContent = text;
+  if(el) el.textContent = text;
 }
 
-function measureRenderCard() {
+function measureRenderCard(){
   const body = document.getElementById('measure-read');
-  if (!body) return;
+  if(!body) return;
   const modeIsViewer = viewerModeActive();
   // Line width is read off the loaded G-code's own header. In Design mode
   // there is no G-code yet -- reusing a value left over from a PREVIOUS
@@ -4125,41 +4086,41 @@ function measureRenderCard() {
   const src = modeIsViewer ? 'toolpath' : 'draft';
   let html = '', hint = '';
 
-  if (measureMode === 'span') {
-    if (measurePts.length < 2) {
+  if(measureMode === 'span'){
+    if(measurePts.length < 2){
       html = '<div class="measure-empty">Click two points on the model to span ' +
-        'between them. Picks snap to the nearest ' + src + ' point.</div>';
+             'between them. Picks snap to the nearest ' + src + ' point.</div>';
       hint = measurePts.length ? 'Click the second point.' : 'Click the first point.';
     } else {
       const a = measurePts[0], b = measurePts[1];
       // World X/Z are the machine's X/Y; world Y is the machine's Z.
-      const dx = b.x - a.x, dz = b.z - a.z, dh = b.y - a.y;
+      const dx = b.x-a.x, dz = b.z-a.z, dh = b.y-a.y;
       html = measureRow('From X,Y,Z', measureFmtPt(a)) +
-        measureRow('To X,Y,Z', measureFmtPt(b)) +
-        measureRow('Distance', measureFmt(Math.sqrt(dx * dx + dz * dz + dh * dh)), true) +
-        measureRow('Delta X', measureFmt(dx)) +
-        measureRow('Delta Y', measureFmt(dz)) +
-        measureRow('Delta Z (height)', measureFmt(dh)) +
-        measureRow('In the XY plane', measureFmt(Math.hypot(dx, dz))) +
-        '<div class="measure-note">' + (modeIsViewer ? 'Toolpath' : 'Draft') +
-        ' centreline, not the outside of the wall. ' + (lw
-          ? 'The printed bead stands ' + (lw / 2).toFixed(2) + ' mm beyond it on each side.'
-          : (modeIsViewer
-            ? 'This file declares no line width, so the bead offset is unknown.'
-            : 'Generate G-code to see the bead offset -- this draft has no line width yet.')) +
-        '</div>';
+             measureRow('To X,Y,Z', measureFmtPt(b)) +
+             measureRow('Distance', measureFmt(Math.sqrt(dx*dx+dz*dz+dh*dh)), true) +
+             measureRow('Delta X', measureFmt(dx)) +
+             measureRow('Delta Y', measureFmt(dz)) +
+             measureRow('Delta Z (height)', measureFmt(dh)) +
+             measureRow('In the XY plane', measureFmt(Math.hypot(dx, dz))) +
+             '<div class="measure-note">' + (modeIsViewer ? 'Toolpath' : 'Draft') +
+             ' centreline, not the outside of the wall. ' + (lw
+               ? 'The printed bead stands ' + (lw/2).toFixed(2) + ' mm beyond it on each side.'
+               : (modeIsViewer
+                 ? 'This file declares no line width, so the bead offset is unknown.'
+                 : 'Generate G-code to see the bead offset -- this draft has no line width yet.')) +
+             '</div>';
       hint = 'Click again to start a new span.';
     }
   } else {
-    if (!measurePts.length) {
+    if(!measurePts.length){
       html = '<div class="measure-empty">Click a point on the wall. Reports the ' +
-        'radius out to it and the diameter across the model at that height.</div>';
+             'radius out to it and the diameter across the model at that height.</div>';
       hint = 'Click a point on the wall.';
-    } else if (!measureRingInfo) {
+    } else if(!measureRingInfo){
       html = '<div class="measure-empty">Not enough of the model is drawn at this ' +
-        'height to form a cross-section. ' +
-        (modeIsViewer ? 'Scrub the timeline further along, or pick a point ' +
-          'lower down.' : 'Pick a point lower down.') + '</div>';
+             'height to form a cross-section. ' +
+             (modeIsViewer ? 'Scrub the timeline further along, or pick a point ' +
+               'lower down.' : 'Pick a point lower down.') + '</div>';
       hint = 'No cross-section here.';
     } else {
       const p = measurePts[0], r = measureRingInfo;
@@ -4171,16 +4132,16 @@ function measureRenderCard() {
       // than letting the two numbers sit together implying they match.
       const inside = closed && r.radius < r.nearR - 0.05;
       html = measureRow('Point X,Y,Z', measureFmtPt(p)) +
-        // printerY = cy - worldZ, as measureFmtPt above -- r.cz is a
-        // world-space centre and needs the same inverse, not an offset.
-        measureRow('Section centre', (r.cx + BED_X / 2).toFixed(1) + ', ' +
-          (BED_Y / 2 - r.cz).toFixed(1)) +
-        measureRow('Radius to pick', measureFmt(r.radius), !closed);
-      if (closed) {
+             // printerY = cy - worldZ, as measureFmtPt above -- r.cz is a
+             // world-space centre and needs the same inverse, not an offset.
+             measureRow('Section centre', (r.cx+BED_X/2).toFixed(1) + ', ' +
+                                          (BED_Y/2-r.cz).toFixed(1)) +
+             measureRow('Radius to pick', measureFmt(r.radius), !closed);
+      if(closed){
         html += measureRow('Diameter', measureFmt(dia), true);
-        if (lw) {
+        if(lw){
           html += measureRow('Outer / inner',
-            (dia + lw).toFixed(2) + ' / ' + (dia - lw).toFixed(2) + ' mm');
+            (dia+lw).toFixed(2) + ' / ' + (dia-lw).toFixed(2) + ' mm');
         }
       }
       html += '<div class="measure-note">Cross-section at Z ' + p.y.toFixed(2) +
@@ -4189,30 +4150,30 @@ function measureRenderCard() {
         'axis. Outer wall traced in ' + r.coverage + ' of ' + r.bins +
         ' sectors, ranging ' + r.outerMin.toFixed(2) + ' to ' + r.outerMax.toFixed(2) +
         ' mm from that centre, so the section is ' +
-        ((r.outerMax - r.outerMin) <= 0.05
+        ((r.outerMax-r.outerMin) <= 0.05
           ? 'round to within the reading.'
           : 'not round -- the diameter depends on which way you measure.');
-      if (!closed) {
+      if(!closed){
         html += r.radius <= 0.05
           ? ' No diameter: that pick is on the section centre, so there is no ' +
-          'direction to measure across. Pick a point on the wall.'
+            'direction to measure across. Pick a point on the wall.'
           : ' No diameter: the section has no wall opposite the pick at this ' +
-          'height (nearest is ' + (r.gap * 180 / Math.PI).toFixed(0) +
-          ' deg off), so there is nothing to measure across to.';
+            'height (nearest is ' + (r.gap*180/Math.PI).toFixed(0) +
+            ' deg off), so there is nothing to measure across to.';
       } else {
-        if (inside) {
+        if(inside){
           html += ' The diameter is measured across the outer wall, which your ' +
-            'pick is ' + (r.nearR - r.radius).toFixed(2) + ' mm inside of, so it ' +
-            'is not twice the radius above.';
+                  'pick is ' + (r.nearR-r.radius).toFixed(2) + ' mm inside of, so it ' +
+                  'is not twice the radius above.';
         }
         html += lw
           ? ' Outer and inner add and remove one full ' + lw.toFixed(2) +
-          ' mm line width -- derived from the file header, not measured.'
+            ' mm line width -- derived from the file header, not measured.'
           : (modeIsViewer
             ? ' This file declares no line width, so the outer and inner wall ' +
-            'diameters cannot be derived.'
+              'diameters cannot be derived.'
             : ' This draft has no line width yet, so the outer and inner wall ' +
-            'diameters cannot be derived -- generate G-code to get them.');
+              'diameters cannot be derived -- generate G-code to get them.');
       }
       html += '</div>';
       hint = 'Click elsewhere to move the measurement.';
@@ -4224,25 +4185,25 @@ function measureRenderCard() {
 
 // ---- interaction -----------------------------------------------------------
 
-function measureAddPoint(clientX, clientY) {
+function measureAddPoint(clientX, clientY){
   const hit = measurePick(clientX, clientY);
-  if (!hit) {
+  if(!hit){
     measureSetHint('Nothing there -- click on the ' +
       (viewerModeActive() ? 'toolpath' : 'draft') + ' itself.');
     return;
   }
-  if (measureMode === 'ring') {
+  if(measureMode === 'ring'){
     measurePts = [hit.point];
     measureRingInfo = measureRing(hit.point);
   } else {
-    if (measurePts.length >= 2) measurePts = [];
+    if(measurePts.length >= 2) measurePts = [];
     measurePts.push(hit.point);
   }
   measureRedraw();
   measureRenderCard();
 }
 
-function measureClear() {
+function measureClear(){
   measurePts = [];
   measureRingInfo = null;
   measureRedraw();
@@ -4251,24 +4212,24 @@ function measureClear() {
 
 // Hover is throttled to one pick per frame: pointermove fires far faster than
 // the overlay needs rebuilding, and each rebuild allocates geometry.
-function measureQueueHover(x, y) {
-  if (!measureOn) return;
+function measureQueueHover(x, y){
+  if(!measureOn) return;
   measureHoverX = x; measureHoverY = y;
-  if (measureHoverRAF) return;
-  measureHoverRAF = requestAnimationFrame(function () {
+  if(measureHoverRAF) return;
+  measureHoverRAF = requestAnimationFrame(function(){
     measureHoverRAF = 0;
-    if (!measureOn) return;
+    if(!measureOn) return;
     const hit = measurePick(measureHoverX, measureHoverY);
     const p = hit ? hit.point : null;
-    if (!p && !measureHoverPt) return;                                    // still nothing
-    if (p && measureHoverPt && p.distanceToSquared(measureHoverPt) < 1e-6) return;
+    if(!p && !measureHoverPt) return;                                    // still nothing
+    if(p && measureHoverPt && p.distanceToSquared(measureHoverPt) < 1e-6) return;
     measureHoverPt = p;
     measureRedraw();
   });
 }
 
-function measureBindListeners() {
-  if (measureListenersBound) return;
+function measureBindListeners(){
+  if(measureListenersBound) return;
   measureListenersBound = true;
   const canvas = renderer.domElement;
 
@@ -4276,39 +4237,39 @@ function measureBindListeners() {
   // on pointerup and only when the pointer barely moved. Orbit, pan and zoom
   // all keep working untouched while the tool is active -- nothing here ever
   // takes controls.enabled away, which is what makes this tool safe to leave on.
-  canvas.addEventListener('pointerdown', function (e) {
-    if (!measureOn || e.button !== 0) return;
+  canvas.addEventListener('pointerdown', function(e){
+    if(!measureOn || e.button !== 0) return;
     measureDownOK = true; measureDownX = e.clientX; measureDownY = e.clientY;
   });
-  canvas.addEventListener('pointerup', function (e) {
-    if (!measureOn || !measureDownOK || e.button !== 0) return;
+  canvas.addEventListener('pointerup', function(e){
+    if(!measureOn || !measureDownOK || e.button !== 0) return;
     measureDownOK = false;
-    if (Math.abs(e.clientX - measureDownX) > MEASURE_CLICK_PX ||
-      Math.abs(e.clientY - measureDownY) > MEASURE_CLICK_PX) return;   // that was an orbit
+    if(Math.abs(e.clientX-measureDownX) > MEASURE_CLICK_PX ||
+       Math.abs(e.clientY-measureDownY) > MEASURE_CLICK_PX) return;   // that was an orbit
     measureAddPoint(e.clientX, e.clientY);
   });
-  canvas.addEventListener('pointermove', function (e) { measureQueueHover(e.clientX, e.clientY); });
-  canvas.addEventListener('pointerleave', function () {
+  canvas.addEventListener('pointermove', function(e){ measureQueueHover(e.clientX, e.clientY); });
+  canvas.addEventListener('pointerleave', function(){
     measureDownOK = false;
-    if (!measureOn || !measureHoverPt) return;
+    if(!measureOn || !measureHoverPt) return;
     measureHoverPt = null;
     measureRedraw();
   });
 }
 
-function measureSetOn(on) {
-  if (measureOn === on) return;
+function measureSetOn(on){
+  if(measureOn === on) return;
   measureOn = on;
   document.getElementById('tool-measure').setAttribute('aria-pressed', on ? 'true' : 'false');
   document.getElementById('measure-card').style.display = on ? '' : 'none';
   renderer.domElement.style.cursor = on ? 'crosshair' : '';
-  if (on) {
+  if(on){
     // The measure tool owns the canvas's pointer from here (the cage's own
     // hover and pointerdown handlers both bail out while it is on), so a cage
     // readout left over from the last hover would sit there un-updatable.
     cageHideTag();
     measureBindListeners();
-    if (!msGrid) measureBuildGrid();
+    if(!msGrid) measureBuildGrid();
     // Place the card fresh below wherever the rail currently is, unless the
     // user has already dragged the card somewhere of its own (see the
     // "measure card: drag / lock / reset" IIFE below) -- so opening the tool
@@ -4325,13 +4286,13 @@ function measureSetOn(on) {
 
 // A new file invalidates everything the tool knows: the pick grid was built
 // from the old path, and a measurement taken on it means nothing here.
-function measureReload() {
+function measureReload(){
   msGrid = null; msX = msY = msZ = msSeg = null;
   measurePts = [];
   measureHoverPt = null;
   measureRingInfo = null;
   syncCanvasChromeForMode();
-  if (measureOn) measureBuildGrid();
+  if(measureOn) measureBuildGrid();
   measureRedraw();
   measureRenderCard();
 }
@@ -4347,7 +4308,7 @@ function measureReload() {
 // floating over the design view, describing G-code the user is no longer
 // looking at. Its display is restored (not forced) when returning to the
 // viewer so the card's own collapsed/expanded state survives.
-function syncCanvasChromeForMode() {
+function syncCanvasChromeForMode(){
   const show = viewerModeActive() && !!extArr;
 
   // Zone Overrides' interactive on-model rings + mm chips are a Design-mode
@@ -4359,7 +4320,7 @@ function syncCanvasChromeForMode() {
   // geometrically stale (built from the Designer's own draft wall sample,
   // not the real toolpath) and visibly detached from it. Same "ownership
   // belongs to the mode switch" rule as the toolpath visibility below.
-  if (viewerModeActive() && window.hideZoneRings) window.hideZoneRings();
+  if(viewerModeActive() && window.hideZoneRings) window.hideZoneRings();
 
   // The measure rail is an instrument of BOTH modes now -- G-code Viewer
   // measures the loaded toolpath, Design measures the live draft -- so it is
@@ -4369,8 +4330,8 @@ function syncCanvasChromeForMode() {
   // was no longer showing.
   const measureAvailable = viewerModeActive() ? !!extArr : !!previewPositions;
   const rail = document.getElementById('tool-rail');
-  if (rail) rail.style.display = measureAvailable ? '' : 'none';
-  if (!measureAvailable && measureOn) measureSetOn(false);
+  if(rail) rail.style.display = measureAvailable ? '' : 'none';
+  if(!measureAvailable && measureOn) measureSetOn(false);
   // Whichever array measureSourceArr() reads from just changed with the mode,
   // so drop the grid and any in-progress pick -- otherwise a measurement taken
   // on the OTHER mode's geometry keeps floating over this one (same failure
@@ -4383,7 +4344,7 @@ function syncCanvasChromeForMode() {
   measureRenderCard();
 
   const tele = document.getElementById('telemetry-card');
-  if (tele) tele.style.display = show ? '' : 'none';
+  if(tele) tele.style.display = show ? '' : 'none';
 
   // The machine-readout strip and the filename label are the same kind of
   // thing and were missed: load() revealed them and nothing put them back, so
@@ -4392,21 +4353,12 @@ function syncCanvasChromeForMode() {
   // is live, so dragging it there drove playback of a print the canvas was no
   // longer showing, and the layer readout kept counting against it.
   const tl = document.getElementById('tl-wrap');
-  if (tl) tl.style.display = show ? '' : 'none';
+  if(tl) tl.style.display = show ? '' : 'none';
   // .has-timeline widens --overlay-bottom to clear that strip; with the strip
   // hidden the clearance has to go too, or the nav cube floats 92px above
   // nothing (the exact fault the class was added to fix, in mirror image).
-  if (wrap) wrap.classList.toggle('has-timeline', show);
-  if (gcodeTitleEl) gcodeTitleEl.style.display = show ? 'block' : 'none';
-
-  const ov = document.getElementById('overlay');
-  if (ov) {
-    if (viewerModeActive() && !lastData) {
-      ov.style.display = '';
-    } else {
-      ov.style.display = 'none';
-    }
-  }
+  if(wrap) wrap.classList.toggle('has-timeline', show);
+  if(gcodeTitleEl) gcodeTitleEl.style.display = show ? 'block' : 'none';
 
   // The toolpath IN the scene has to follow the mode as well -- it is not
   // chrome, but it is on the same shared canvas and the rule is the same.
@@ -4419,19 +4371,19 @@ function syncCanvasChromeForMode() {
   // looking at the generated G-code in DESIGN mode, still clipped to wherever
   // the scrub was left, with the nozzle marker parked mid-print. Ownership
   // belongs to the mode switch, not to whether some other feature ran.
-  if (show) {
-    if (pathObj) pathObj.visible = true;
-    if (travelObj) travelObj.visible = document.getElementById('t-travel').checked;
+  if(show){
+    if(pathObj) pathObj.visible = true;
+    if(travelObj) travelObj.visible = document.getElementById('t-travel').checked;
     // Re-derive the marker and the readouts from the progress we left at, so
     // returning to the viewer resumes where the scrub was rather than showing
     // a marker-less path until the next scrub.
-    if (lastData) setProgress(progress);
+    if(lastData) setProgress(progress);
   } else {
     // A running playback would undo every line above on its next frame, and
     // it has no business animating a canvas that is showing the design.
     stopPlay();
-    if (pathObj) pathObj.visible = false;
-    if (travelObj) travelObj.visible = false;
+    if(pathObj) pathObj.visible = false;
+    if(travelObj) travelObj.visible = false;
     nozzle.visible = false;
   }
   render();
@@ -4441,19 +4393,19 @@ function syncCanvasChromeForMode() {
 window.__syncCanvasChrome = syncCanvasChromeForMode;
 window.__measureAppMode = syncCanvasChromeForMode;
 
-document.getElementById('tool-measure').addEventListener('click', function () {
+document.getElementById('tool-measure').addEventListener('click', function(){
   measureSetOn(!measureOn);
 });
-document.getElementById('measure-close').addEventListener('click', function () {
+document.getElementById('measure-close').addEventListener('click', function(){
   measureSetOn(false);
 });
 document.getElementById('measure-clear').addEventListener('click', measureClear);
-document.querySelectorAll('.measure-mode').forEach(function (btn) {
-  btn.addEventListener('click', function () {
+document.querySelectorAll('.measure-mode').forEach(function(btn){
+  btn.addEventListener('click', function(){
     const m = btn.getAttribute('data-mmode');
-    if (m === measureMode) return;
+    if(m === measureMode) return;
     measureMode = m;
-    document.querySelectorAll('.measure-mode').forEach(function (b) {
+    document.querySelectorAll('.measure-mode').forEach(function(b){
       const on = (b === btn);
       b.classList.toggle('is-on', on);
       b.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -4462,21 +4414,21 @@ document.querySelectorAll('.measure-mode').forEach(function (btn) {
   });
 });
 
-window.addEventListener('keydown', function (e) {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (typingInField(e)) return;
-  if (e.key === 'm' || e.key === 'M') {
+window.addEventListener('keydown', function(e){
+  if(e.ctrlKey || e.metaKey || e.altKey) return;
+  if(typingInField(e)) return;
+  if(e.key === 'm' || e.key === 'M'){
     const rail = document.getElementById('tool-rail');
     // The rail's own display already tracks "is there anything to measure in
     // THIS mode right now" (syncCanvasChromeForMode), so checking it alone is
     // enough in both G-code Viewer and Design.
-    if (!rail || rail.style.display === 'none') return;   // nothing to measure
+    if(!rail || rail.style.display === 'none') return;   // nothing to measure
     measureSetOn(!measureOn);
     e.preventDefault();
-  } else if (e.key === 'Escape' && measureOn) {
+  } else if(e.key === 'Escape' && measureOn){
     // First Esc drops the measurement, second closes the tool, so an accidental
     // pick is cheap to undo without losing the tool you are in the middle of.
-    if (measurePts.length) measureClear(); else measureSetOn(false);
+    if(measurePts.length) measureClear(); else measureSetOn(false);
   }
 });
 
@@ -4484,29 +4436,29 @@ window.addEventListener('keydown', function (e) {
 // screen click, so the arithmetic can be checked against a model whose real
 // dimensions are known without having to land a pixel-perfect click. Snaps to
 // the nearest toolpath point exactly as a click does.
-window.__measureAt = function (px, py, pz) {
-  if (!msGrid) measureBuildGrid();
-  if (!msX) return null;
+window.__measureAt = function(px, py, pz){
+  if(!msGrid) measureBuildGrid();
+  if(!msX) return null;
   // Same printer -> world transform parseGcode uses, negation included
   // (wz = cy - printerY). This hook exists to check measurement arithmetic
   // against known dimensions, so it has to land on the same point a click
   // would; the un-negated form snapped to the mirror-image point instead.
-  const wx = px - BED_X / 2, wy = pz, wz = BED_Y / 2 - py;
+  const wx = px - BED_X/2, wy = pz, wz = BED_Y/2 - py;
   const drawn = measureDrawnSegs();
   let best = -1, bestD = Infinity;
-  for (let i = 0; i < msX.length; i++) {
-    if (msSeg[i] >= drawn) continue;
-    const dx = msX[i] - wx, dy = msY[i] - wy, dz = msZ[i] - wz;
-    const d = dx * dx + dy * dy + dz * dz;
-    if (d < bestD) { bestD = d; best = i; }
+  for(let i = 0; i < msX.length; i++){
+    if(msSeg[i] >= drawn) continue;
+    const dx = msX[i]-wx, dy = msY[i]-wy, dz = msZ[i]-wz;
+    const d = dx*dx + dy*dy + dz*dz;
+    if(d < bestD){ bestD = d; best = i; }
   }
-  if (best < 0) return null;
+  if(best < 0) return null;
   const p = new THREE.Vector3(msX[best], msY[best], msZ[best]);
-  if (measureMode === 'ring') {
+  if(measureMode === 'ring'){
     measurePts = [p];
     measureRingInfo = measureRing(p);
   } else {
-    if (measurePts.length >= 2) measurePts = [];
+    if(measurePts.length >= 2) measurePts = [];
     measurePts.push(p);
   }
   measureRedraw();
@@ -4515,13 +4467,13 @@ window.__measureAt = function (px, py, pz) {
 };
 
 // Test/automation hook, same shape as __previewState / __viewFlags.
-window.__measureState = function () {
+window.__measureState = function(){
   return {
     on: measureOn,
     mode: measureMode,
-    points: measurePts.map(function (p) {
+    points: measurePts.map(function(p){
       // Printer coords, same inverse as measureFmtPt: printerY = cy - worldZ.
-      return [+(p.x + BED_X / 2).toFixed(3), +(BED_Y / 2 - p.z).toFixed(3), +p.y.toFixed(3)];
+      return [+(p.x+BED_X/2).toFixed(3), +(BED_Y/2-p.z).toFixed(3), +p.y.toFixed(3)];
     }),
     samples: msX ? msX.length : 0,
     cells: msGrid ? msGrid.size : 0,
@@ -4533,7 +4485,7 @@ window.__measureState = function () {
       coverage: measureRingInfo.coverage,
       outerMin: +measureRingInfo.outerMin.toFixed(3),
       outerMax: +measureRingInfo.outerMax.toFixed(3),
-      gapDeg: +(measureRingInfo.gap * 180 / Math.PI).toFixed(2)
+      gapDeg: +(measureRingInfo.gap*180/Math.PI).toFixed(2)
     } : null
   };
 };
@@ -4569,11 +4521,11 @@ const LOCK_GLYPH_OPEN = '<svg viewBox="0 0 24 24" width="11" height="11" fill="n
 // reposition before the card's own setup has run), and a plain module-scope
 // `let` rather than a `window.__` export because both IIFEs, and
 // measureSetOn() above, already share this module's scope.
-let measureRepositionCard = function () { };
+let measureRepositionCard = function(){};
 
-(function () {
+(function(){
   const rail = document.getElementById('tool-rail');
-  if (!rail) return;   // defensive: markup shape changed elsewhere
+  if(!rail) return;   // defensive: markup shape changed elsewhere
 
   // `armed` is the gap between "pointer went down on the rail" and "this is a
   // drag": the press is recorded but nothing moves until the pointer has
@@ -4588,7 +4540,7 @@ let measureRepositionCard = function () { };
   // RAIL_REACH_PAD px reachable on every side so a bad drag can never strand
   // the rail (and with it, the only way to reopen the measure tool) somewhere
   // the user can't click back from.
-  function clamp(left, top) {
+  function clamp(left, top){
     const w = rail.offsetWidth || 56;
     const minLeft = RAIL_REACH_PAD - w;
     const maxLeft = Math.max(minLeft, wrap.clientWidth - RAIL_REACH_PAD);
@@ -4599,32 +4551,32 @@ let measureRepositionCard = function () { };
     };
   }
 
-  function applyPos(left, top) {
+  function applyPos(left, top){
     const c = clamp(left, top);
     rail.style.right = 'auto';
     rail.style.left = c.left + 'px';
     rail.style.top = c.top + 'px';
   }
 
-  function savePos() {
+  function savePos(){
     try {
       localStorage.setItem(RAIL_POS_KEY, JSON.stringify({
         left: parseFloat(rail.style.left), top: parseFloat(rail.style.top)
       }));
-    } catch (e) { }
+    } catch(e){}
   }
 
   // The double-click reset below has no visible affordance, so this is its
   // only discoverability: a title only appears once there is something to
   // reset, on the rail itself rather than #tool-measure so it doesn't
   // compete with that button's own "(M)" shortcut hint.
-  function updateResetHint() {
+  function updateResetHint(){
     rail.title = hasCustomPos ? 'Double-click to reset to the edge' : '';
   }
 
-  function endDrag() {
+  function endDrag(){
     armed = false;
-    if (!dragging) return;
+    if(!dragging) return;
     dragging = false;
     // The browser fires a click after the pointerup that ended this drag, on
     // whatever is under the pointer -- which is #tool-measure, the rail's only
@@ -4635,15 +4587,15 @@ let measureRepositionCard = function () { };
     // consume the flag and the NEXT genuine click on Measure would be eaten.
     // A click is dispatched in the same turn as the pointerup that spawned it,
     // well before a zero-delay timer, so this only ever clears a stale flag.
-    setTimeout(function () { suppressClick = false; }, 0);
+    setTimeout(function(){ suppressClick = false; }, 0);
     rail.classList.remove('rail-dragging');
     savePos();
     updateResetHint();
     measureRepositionCard();   // the card follows, unless it has its own custom spot
   }
 
-  rail.addEventListener('pointerdown', function (e) {
-    if (e.button !== 0) return;
+  rail.addEventListener('pointerdown', function(e){
+    if(e.button !== 0) return;
     const railRect = rail.getBoundingClientRect();
     const wrapRect = wrap.getBoundingClientRect();
     dragOrigLeft = railRect.left - wrapRect.left;
@@ -4660,13 +4612,13 @@ let measureRepositionCard = function () { };
 
   // move/up/cancel + blur all live on window, the same freeze-safety pattern
   // the measure card, shape-cage and nav-cube drags in this file use.
-  window.addEventListener('pointermove', function (e) {
-    if (!armed) return;
+  window.addEventListener('pointermove', function(e){
+    if(!armed) return;
     const dx = e.clientX - dragStartX, dy = e.clientY - dragStartY;
-    if (!dragging) {
+    if(!dragging){
       // Under the threshold this is still a click in progress: leave the rail
       // exactly where it is, so releasing now moves nothing.
-      if (Math.abs(dx) <= RAIL_DRAG_SLOP && Math.abs(dy) <= RAIL_DRAG_SLOP) return;
+      if(Math.abs(dx) <= RAIL_DRAG_SLOP && Math.abs(dy) <= RAIL_DRAG_SLOP) return;
       dragging = true;
       hasCustomPos = true;
       rail.classList.add('rail-dragging');
@@ -4681,15 +4633,15 @@ let measureRepositionCard = function () { };
   // Capture phase on the RAIL runs before the bubble-phase click listener
   // #tool-measure registers (see the measureSetOn toggle above), so stopping
   // the event here keeps it from ever reaching that handler.
-  rail.addEventListener('click', function (e) {
-    if (!suppressClick) return;
+  rail.addEventListener('click', function(e){
+    if(!suppressClick) return;
     suppressClick = false;
     e.stopPropagation();
     e.preventDefault();
   }, true);
 
-  window.addEventListener('resize', function () {
-    if (hasCustomPos) {
+  window.addEventListener('resize', function(){
+    if(hasCustomPos){
       applyPos(parseFloat(rail.style.left) || 0, parseFloat(rail.style.top) || 0);
       savePos();
     }
@@ -4706,20 +4658,20 @@ let measureRepositionCard = function () { };
   // tab, still sitting on the old dragged position in memory -- can resave
   // that stale position on its own next resize and undo the reset from
   // outside this page entirely.
-  rail.addEventListener('dblclick', function () {
-    if (!hasCustomPos) return;
+  rail.addEventListener('dblclick', function(){
+    if(!hasCustomPos) return;
     hasCustomPos = false;
     rail.style.left = '';
     rail.style.top = '';
     rail.style.right = '';
-    try { localStorage.removeItem(RAIL_POS_KEY); } catch (e) { }
+    try { localStorage.removeItem(RAIL_POS_KEY); } catch(e){}
     updateResetHint();
     measureRepositionCard();
   });
 
   let storedPos = null;
-  try { storedPos = JSON.parse(localStorage.getItem(RAIL_POS_KEY) || 'null'); } catch (e) { }
-  if (storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)) {
+  try { storedPos = JSON.parse(localStorage.getItem(RAIL_POS_KEY) || 'null'); } catch(e){}
+  if(storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)){
     hasCustomPos = true;
     applyPos(storedPos.left, storedPos.top);
   }
@@ -4747,11 +4699,11 @@ const MEASURE_CARD_W = 246;      // mirrors .measure-card's width in style.css
 const MEASURE_REACH_PAD = 28;    // px of the card that must stay reachable, however far it is dragged
 const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the card, when following it
 
-(function () {
+(function(){
   const card = document.getElementById('measure-card');
   const head = card ? card.querySelector('.measure-head') : null;
   const closeBtn = document.getElementById('measure-close');
-  if (!card || !head || !closeBtn) return;   // defensive: markup shape changed elsewhere
+  if(!card || !head || !closeBtn) return;   // defensive: markup shape changed elsewhere
 
   const css = document.createElement('style');
   css.textContent =
@@ -4760,14 +4712,14 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
     '.measure-head.measure-locked{cursor:default;}' +
     '.measure-head-actions{display:flex;align-items:center;gap:2px;}' +
     '.measure-drag-btn{display:inline-flex;align-items:center;justify-content:center;' +
-    'background:none;border:none;color:var(--ink);cursor:pointer;' +
-    'font-size:12px;min-width:22px;min-height:22px;padding:2px 5px;line-height:1;' +
-    'border-radius:var(--radius-sm);font-family:var(--font-ui);opacity:.75;' +
-    'transition:color .15s,background-color .15s,opacity .15s,transform .1s ease;}' +
+      'background:none;border:none;color:var(--ink);cursor:pointer;' +
+      'font-size:12px;min-width:22px;min-height:22px;padding:2px 5px;line-height:1;' +
+      'border-radius:var(--radius-sm);font-family:var(--font-ui);opacity:.75;' +
+      'transition:color .15s,background-color .15s,opacity .15s,transform .1s ease;}' +
     '.measure-drag-btn:active{transform:scale(0.95);}' +
     '.measure-drag-btn:hover{opacity:1;color:var(--ink);background:var(--surface-raised);}' +
     '.measure-drag-btn[aria-pressed="true"]{opacity:1;color:var(--measure);' +
-    'background:var(--measure-dim);}';
+      'background:var(--measure-dim);}';
   document.head.appendChild(css);
 
   // Grouping reset+lock+close in their own flex box (instead of dropping them
@@ -4802,7 +4754,7 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
   let hasCustomPos = false;   // false = follow the rail; true = the user dragged it
   let dragStartX = 0, dragStartY = 0, dragOrigLeft = 0, dragOrigTop = 0;
 
-  function updateLockUI() {
+  function updateLockUI(){
     lockBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
     lockBtn.title = locked ? 'Unlock card position' : 'Lock card position (prevents dragging)';
     lockBtn.setAttribute('aria-label', lockBtn.title);
@@ -4816,7 +4768,7 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
   // above the wrap's top edge and never letting the whole card slide past the
   // bottom. This is what stands between a bad drag and a card the user can
   // never click again -- see the CLAUDE.md-adjacent brief for why that matters.
-  function clamp(left, top) {
+  function clamp(left, top){
     const minLeft = MEASURE_REACH_PAD - MEASURE_CARD_W;
     const maxLeft = Math.max(minLeft, wrap.clientWidth - MEASURE_REACH_PAD);
     const maxTop = Math.max(0, wrap.clientHeight - MEASURE_REACH_PAD);
@@ -4826,7 +4778,7 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
     };
   }
 
-  function applyPos(left, top) {
+  function applyPos(left, top){
     const c = clamp(left, top);
     card.style.right = 'auto';
     card.style.bottom = 'auto';
@@ -4834,12 +4786,12 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
     card.style.top = c.top + 'px';
   }
 
-  function savePos() {
+  function savePos(){
     try {
       localStorage.setItem(MEASURE_POS_KEY, JSON.stringify({
         left: parseFloat(card.style.left), top: parseFloat(card.style.top)
       }));
-    } catch (e) { }
+    } catch(e){}
   }
 
   // Right-aligns the card under the rail's current bottom-right corner --
@@ -4847,9 +4799,9 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
   // covering it) the old fixed CSS default had, just anchored to wherever
   // the rail actually is instead of a corner that stops meaning anything
   // once the rail itself can move.
-  function positionBelowRail() {
+  function positionBelowRail(){
     const rail = document.getElementById('tool-rail');
-    if (!rail) return;
+    if(!rail) return;
     const railRect = rail.getBoundingClientRect();
     const wrapRect = wrap.getBoundingClientRect();
     applyPos(
@@ -4858,30 +4810,30 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
     );
   }
 
-  function repositionIfFollowing() {
-    if (hasCustomPos || locked) return;   // a custom spot, or a locked one, holds still
+  function repositionIfFollowing(){
+    if(hasCustomPos || locked) return;   // a custom spot, or a locked one, holds still
     positionBelowRail();
   }
   measureRepositionCard = repositionIfFollowing;
 
-  function resetPos() {
+  function resetPos(){
     hasCustomPos = false;
     // Reset only clears the remembered position; a reload without this would
     // put the card right back where it was, which is not what "reset" means.
-    try { localStorage.removeItem(MEASURE_POS_KEY); } catch (e) { }
+    try { localStorage.removeItem(MEASURE_POS_KEY); } catch(e){}
     positionBelowRail();
   }
 
-  function endDrag() {
-    if (!dragging) return;
+  function endDrag(){
+    if(!dragging) return;
     dragging = false;
     head.classList.remove('measure-dragging');
     savePos();
   }
 
-  head.addEventListener('pointerdown', function (e) {
-    if (locked || e.button !== 0) return;
-    if (e.target.closest('button')) return;   // reset/lock/close live in this same strip
+  head.addEventListener('pointerdown', function(e){
+    if(locked || e.button !== 0) return;
+    if(e.target.closest('button')) return;   // reset/lock/close live in this same strip
     const cardRect = card.getBoundingClientRect();
     const wrapRect = wrap.getBoundingClientRect();
     dragOrigLeft = cardRect.left - wrapRect.left;
@@ -4904,8 +4856,8 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
   // released (or the window loses focus) anywhere other than exactly over the
   // card, the drag still has to end, or the card is stuck following the
   // pointer with no way to let go of it.
-  window.addEventListener('pointermove', function (e) {
-    if (!dragging) return;
+  window.addEventListener('pointermove', function(e){
+    if(!dragging) return;
     applyPos(dragOrigLeft + (e.clientX - dragStartX), dragOrigTop + (e.clientY - dragStartY));
   });
   window.addEventListener('pointerup', endDrag);
@@ -4918,8 +4870,8 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
   // measureRepositionCard(), but only once the rail itself has a custom
   // position to reclamp -- this covers the "rail is still at its CSS
   // default" case, which that handler skips).
-  window.addEventListener('resize', function () {
-    if (hasCustomPos) {
+  window.addEventListener('resize', function(){
+    if(hasCustomPos){
       applyPos(parseFloat(card.style.left) || 0, parseFloat(card.style.top) || 0);
       savePos();
     } else {
@@ -4928,10 +4880,10 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
   });
 
   resetBtn.addEventListener('click', resetPos);
-  lockBtn.addEventListener('click', function () {
+  lockBtn.addEventListener('click', function(){
     locked = !locked;
     updateLockUI();
-    try { localStorage.setItem(MEASURE_LOCK_KEY, locked ? '1' : '0'); } catch (e) { }
+    try { localStorage.setItem(MEASURE_LOCK_KEY, locked ? '1' : '0'); } catch(e){}
   });
 
   // Restore persisted position/lock at load. The card is display:none at this
@@ -4939,13 +4891,13 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
   // width (MEASURE_CARD_W) and the wrap's own size, neither of which depend
   // on the card's own layout, so restoring while hidden is safe.
   let storedPos = null;
-  try { storedPos = JSON.parse(localStorage.getItem(MEASURE_POS_KEY) || 'null'); } catch (e) { }
-  if (storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)) {
+  try { storedPos = JSON.parse(localStorage.getItem(MEASURE_POS_KEY) || 'null'); } catch(e){}
+  if(storedPos && isFinite(storedPos.left) && isFinite(storedPos.top)){
     hasCustomPos = true;
     applyPos(storedPos.left, storedPos.top);
   }
   let storedLock = null;
-  try { storedLock = localStorage.getItem(MEASURE_LOCK_KEY); } catch (e) { }
+  try { storedLock = localStorage.getItem(MEASURE_LOCK_KEY); } catch(e){}
   locked = storedLock === '1';
   updateLockUI();
 })();
@@ -4964,8 +4916,8 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
 // completely: it sits on top in z-order, so every pointer event inside its
 // 96x96 box belongs to it and never reaches OrbitControls underneath.
 const navCanvas = document.getElementById('navcube');
-const navRenderer = new THREE.WebGLRenderer({ canvas: navCanvas, alpha: true, antialias: true });
-navRenderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const navRenderer = new THREE.WebGLRenderer({ canvas: navCanvas, alpha:true, antialias:true });
+navRenderer.setPixelRatio(Math.min(devicePixelRatio,2));
 navRenderer.setSize(132, 132, false);   // false: leave the CSS size (style.css #navcube) alone
 
 const navScene = new THREE.Scene();
@@ -5007,8 +4959,8 @@ const NAV_CAM_DIST = 6.9;
 // top-down view while staying just off the singularity.
 const NAV_EPS = 0.02;
 const NAV_FACES = [
-  { key: 'right', label: 'Right', dir: new THREE.Vector3(1, 0, 0) },
-  { key: 'left', label: 'Left', dir: new THREE.Vector3(-1, 0, 0) },
+  { key:'right',  label:'Right',  dir:new THREE.Vector3( 1, 0, 0) },
+  { key:'left',   label:'Left',   dir:new THREE.Vector3(-1, 0, 0) },
   // The epsilon's sign picks which way is up on screen in a top-down view.
   // A camera offset toward world -Z (i.e. +NAV_EPS on the dir's Z, since the
   // camera sits along +dir) makes screen-up land on world -Z, which under the
@@ -5022,15 +4974,15 @@ const NAV_FACES = [
   // which is exactly where screen-up now lands, so the labels read the right
   // way up unrotated. (They were spun by PI when screen-up was world +Z,
   // without which "Top" read as "doL".)
-  { key: 'top', label: 'Top', dir: new THREE.Vector3(0, 1, NAV_EPS).normalize() },
-  { key: 'bottom', label: 'Bottom', dir: new THREE.Vector3(0, -1, NAV_EPS).normalize() },
+  { key:'top',    label:'Top',    dir:new THREE.Vector3( 0, 1, NAV_EPS).normalize() },
+  { key:'bottom', label:'Bottom', dir:new THREE.Vector3( 0,-1, NAV_EPS).normalize() },
   // Front/Back swapped POSITION in this array, not just their `dir` vectors:
   // slot 4 is BoxGeometry's +Z material group and slot 5 its -Z, so the label
   // baked into each slot has to be the one whose outward normal that slot
   // carries. Swapping only the vectors would have painted "Back" on the front
   // face while still flying the camera to the right place.
-  { key: 'front', label: 'Front', dir: new THREE.Vector3(0, 0, 1) },
-  { key: 'back', label: 'Back', dir: new THREE.Vector3(0, 0, -1) },
+  { key:'front',  label:'Front',  dir:new THREE.Vector3( 0, 0, 1) },
+  { key:'back',   label:'Back',   dir:new THREE.Vector3( 0, 0,-1) },
 ];
 
 // Face textures are drawn with the 2D canvas API -- no external font/image
@@ -5038,7 +4990,7 @@ const NAV_FACES = [
 // face (idle + hover) are baked up front and swapped wholesale on hover
 // rather than tinted at render time, so the hover colour is exactly --accent
 // with no blending artifacts against the label text.
-function navFaceTexture(label, hovered, spin) {
+function navFaceTexture(label, hovered, spin){
   const S = 256;
   const c = document.createElement('canvas');
   c.width = S; c.height = S;
@@ -5055,7 +5007,7 @@ function navFaceTexture(label, hovered, spin) {
   g.fillRect(0, 0, S, S);
   g.strokeStyle = hovered ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)';
   g.lineWidth = 8;
-  g.strokeRect(4, 4, S - 8, S - 8);
+  g.strokeRect(4, 4, S-8, S-8);
   g.fillStyle = '#ffffff';
   // 60px of a 256px texture on a face that projects to ~57px (at the 132px
   // frame / NAV_CAM_DIST=6.9 pairing -- widened for the axis triad, see the
@@ -5066,14 +5018,14 @@ function navFaceTexture(label, hovered, spin) {
   g.textBaseline = 'middle';
   // Applied to the glyph only -- the fill and border are rotationally
   // symmetric, so spinning them would be a no-op. See `spin` in NAV_FACES.
-  if (spin) {
-    g.translate(S / 2, S / 2);
+  if(spin){
+    g.translate(S/2, S/2);
     g.rotate(spin);
-    g.translate(-S / 2, -S / 2);
+    g.translate(-S/2, -S/2);
   }
-  g.fillText(label, S / 2, S / 2);
+  g.fillText(label, S/2, S/2);
   const tex = new THREE.CanvasTexture(c);
-  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  if(THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
@@ -5082,11 +5034,11 @@ const navTexHover = NAV_FACES.map(f => navFaceTexture(f.label, true, f.spin));
 // MeshBasicMaterial (unlit): a gizmo's faces must show their true assigned
 // colour regardless of viewing angle, not get shaded darker/lighter by a
 // light direction the user has no control over.
-const navMats = NAV_FACES.map((f, i) => new THREE.MeshBasicMaterial({ map: navTexIdle[i] }));
+const navMats = NAV_FACES.map((f,i) => new THREE.MeshBasicMaterial({ map:navTexIdle[i] }));
 const navGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
 const navCube = new THREE.Mesh(navGeo, navMats);
 navCube.add(new THREE.LineSegments(new THREE.EdgesGeometry(navGeo),
-  new THREE.LineBasicMaterial({ color: 0x14171a })));   // dark seam between faces, decorative only
+  new THREE.LineBasicMaterial({ color:0x14171a })));   // dark seam between faces, decorative only
 navScene.add(navCube);
 
 // ---- axis triad -------------------------------------------------------
@@ -5110,16 +5062,16 @@ const TRIAD_ORIGIN = new THREE.Vector3(-0.95, -0.95, 0.95);   // just outside th
 const TRIAD_LEN = 0.9;
 const TRIAD_LABEL_GAP = 0.18;   // label sprite sits this far past the line tip, clear of it
 const TRIAD_AXES = [
-  { dir: new THREE.Vector3(1, 0, 0), color: '#e8483f', label: 'X' },   // printer X -> world +X
-  { dir: new THREE.Vector3(0, 0, -1), color: '#4cc264', label: 'Y' },  // printer Y -> world -Z (negated)
-  { dir: new THREE.Vector3(0, 1, 0), color: '#4a90e8', label: 'Z' },   // printer Z (up) -> world +Y
+  { dir:new THREE.Vector3(1,0,0), color:'#e8483f', label:'X' },   // printer X -> world +X
+  { dir:new THREE.Vector3(0,0,-1), color:'#4cc264', label:'Y' },  // printer Y -> world -Z (negated)
+  { dir:new THREE.Vector3(0,1,0), color:'#4a90e8', label:'Z' },   // printer Z (up) -> world +Y
 ];
 
 // Canvas-drawn sprite, same no-external-font/image reasoning as
 // navFaceTexture above. Drawn at 128px and scaled down via sprite.scale
 // (0.5) rather than drawn small, so the GPU supersamples instead of
 // rasterising an already-jagged glyph.
-function navAxisLabelSprite(text, color) {
+function navAxisLabelSprite(text, color){
   const S = 128;
   const c = document.createElement('canvas');
   c.width = S; c.height = S;
@@ -5128,19 +5080,19 @@ function navAxisLabelSprite(text, color) {
   g.font = '700 88px Inter, sans-serif';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.fillText(text, S / 2, S / 2 + 4);
+  g.fillText(text, S/2, S/2 + 4);
   const tex = new THREE.CanvasTexture(c);
-  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+  if(THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex }));
   sprite.scale.set(0.5, 0.5, 1);
   return sprite;
 }
 
-for (const axis of TRIAD_AXES) {
+for(const axis of TRIAD_AXES){
   const end = TRIAD_ORIGIN.clone().addScaledVector(axis.dir, TRIAD_LEN);
   const line = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([TRIAD_ORIGIN, end]),
-    new THREE.LineBasicMaterial({ color: axis.color }));
+    new THREE.LineBasicMaterial({ color:axis.color }));
   navScene.add(line);
   const label = navAxisLabelSprite(axis.label, axis.color);
   label.position.copy(TRIAD_ORIGIN).addScaledVector(axis.dir, TRIAD_LEN + TRIAD_LABEL_GAP);
@@ -5154,7 +5106,7 @@ let navAnimHandle = 0;
 const navRaycaster = new THREE.Raycaster();
 const navNDC = new THREE.Vector2();
 
-function navPickIndex(clientX, clientY) {
+function navPickIndex(clientX, clientY){
   const rect = navCanvas.getBoundingClientRect();
   navNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   navNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
@@ -5170,14 +5122,14 @@ function navPickIndex(clientX, clientY) {
   return (hit && hit.face) ? hit.face.materialIndex : -1;
 }
 
-function navApplyHover() {
-  for (let i = 0; i < navMats.length; i++) {
+function navApplyHover(){
+  for(let i = 0; i < navMats.length; i++){
     navMats[i].map = (i === navHoverIdx) ? navTexHover[i] : navTexIdle[i];
     navMats[i].needsUpdate = true;
   }
 }
 
-function navRenderCube() {
+function navRenderCube(){
   navRenderer.render(navScene, navCamera);
 }
 
@@ -5187,9 +5139,9 @@ function navRenderCube() {
 // from the main render() via the window.__* guard pattern (see the comment
 // on window.__measureSync above) so it tracks orbit/zoom/resize for free,
 // with no extra render loop of its own.
-function navSyncCamera() {
+function navSyncCamera(){
   const dir = camera.position.clone().sub(controls.target);
-  if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1);   // degenerate camera-at-target guard
+  if(dir.lengthSq() < 1e-8) dir.set(0, 0, 1);   // degenerate camera-at-target guard
   dir.normalize().multiplyScalar(NAV_CAM_DIST);
   navCamera.position.copy(dir);
   navCamera.up.copy(camera.up);
@@ -5203,10 +5155,10 @@ window.__navCubeSync = navSyncCamera;
 // snap). `instant` skips the animation -- used by the automation hook below
 // so tests don't have to wait out a tween -- and reduced-motion users get
 // the same instant jump for the real click path.
-function navAnimateTo(toPos, instant) {
+function navAnimateTo(toPos, instant){
   cancelAnimationFrame(navAnimHandle);
   const reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  if (instant || reduced) {
+  if(instant || reduced){
     camera.position.copy(toPos);
     controls.update();
     render();
@@ -5215,20 +5167,20 @@ function navAnimateTo(toPos, instant) {
   const fromPos = camera.position.clone();
   const DUR = 350;
   const t0 = performance.now();
-  function step(now) {
+  function step(now){
     const p = Math.min(1, (now - t0) / DUR);
-    const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;   // ease-in-out quad
+    const e = p < 0.5 ? 2*p*p : 1 - Math.pow(-2*p+2, 2)/2;   // ease-in-out quad
     camera.position.lerpVectors(fromPos, toPos, e);
     controls.update();
     render();
-    if (p < 1) navAnimHandle = requestAnimationFrame(step);
+    if(p < 1) navAnimHandle = requestAnimationFrame(step);
   }
   navAnimHandle = requestAnimationFrame(step);
 }
 
-function navGoToFace(idx, instant) {
+function navGoToFace(idx, instant){
   const f = NAV_FACES[idx];
-  if (!f) return;
+  if(!f) return;
   navLastView = f.key;
   // Asking for a named view is asking the camera to STOP there, so auto-spin
   // has to yield. Without this the click looked like it did nothing at all:
@@ -5237,10 +5189,10 @@ function navGoToFace(idx, instant) {
   // spinLoop's own rAF loop kept turning the camera long after the tween
   // finished. The checkbox is cleared too, so the control still reports the
   // truth about what the camera is doing.
-  if (controls.autoRotate) {
+  if(controls.autoRotate){
     controls.autoRotate = false;
     const spin = document.getElementById('t-spin');
-    if (spin) spin.checked = false;
+    if(spin) spin.checked = false;
   }
   const dist = camera.position.distanceTo(controls.target);
   const toPos = controls.target.clone().add(f.dir.clone().multiplyScalar(dist));
@@ -5268,7 +5220,7 @@ const NAV_DRAG_K = 0.008;        // rad of camera rotation per px of pointer mov
 // +Y axis, which is "up" in this app's world space, so clamping it to
 // [0.02, PI-0.02] keeps the orbit just off the poles -- the same singularity
 // NAV_EPS sidesteps for the Top/Bottom face snap above.
-function navOrbitBy(dx, dy) {
+function navOrbitBy(dx, dy){
   const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
   sph.theta -= dx * NAV_DRAG_K;
   sph.phi = Math.max(0.02, Math.min(Math.PI - 0.02, sph.phi - dy * NAV_DRAG_K));
@@ -5277,14 +5229,14 @@ function navOrbitBy(dx, dy) {
   render();   // re-syncs the cube for free, same as navAnimateTo's step()
 }
 
-navCanvas.addEventListener('pointerdown', function (e) {
-  if (e.button !== 0) return;
+navCanvas.addEventListener('pointerdown', function(e){
+  if(e.button !== 0) return;
   // Best-effort: capture keeps the drag alive if the pointer leaves the
   // canvas mid-gesture, but its absence must not skip the state setup below
   // -- an environment where capture throws (seen from synthetic/automated
   // pointer events, which have no browser-tracked "active pointer" to
   // capture) would otherwise silently break dragging entirely.
-  try { navCanvas.setPointerCapture(e.pointerId); } catch (err) { /* no active pointer to capture */ }
+  try { navCanvas.setPointerCapture(e.pointerId); } catch(err){ /* no active pointer to capture */ }
   navDragButtonDown = true;
   navDragMoved = false;
   navDragStartX = navDragLastX = e.clientX;
@@ -5293,30 +5245,30 @@ navCanvas.addEventListener('pointerdown', function (e) {
   // A press is a request for a specific orientation, same as a face-snap
   // click -- auto-spin has to yield for the same reason given in the
   // comment inside navGoToFace above, so it does not fight the drag.
-  if (controls.autoRotate) {
+  if(controls.autoRotate){
     controls.autoRotate = false;
     const spin = document.getElementById('t-spin');
-    if (spin) spin.checked = false;
+    if(spin) spin.checked = false;
   }
 });
-navCanvas.addEventListener('pointermove', function (e) {
-  if (navDragButtonDown) {
+navCanvas.addEventListener('pointermove', function(e){
+  if(navDragButtonDown){
     const dx = e.clientX - navDragLastX, dy = e.clientY - navDragLastY;
     navDragLastX = e.clientX; navDragLastY = e.clientY;
-    if (!navDragMoved) {
+    if(!navDragMoved){
       const totalX = e.clientX - navDragStartX, totalY = e.clientY - navDragStartY;
-      if (Math.hypot(totalX, totalY) > NAV_DRAG_THRESHOLD) {
+      if(Math.hypot(totalX, totalY) > NAV_DRAG_THRESHOLD){
         navDragMoved = true;
         navDragging = true;
         navDragCount++;
         navCanvas.style.cursor = 'grabbing';
       }
     }
-    if (navDragMoved) navOrbitBy(dx, dy);
+    if(navDragMoved) navOrbitBy(dx, dy);
     return;
   }
   const idx = navPickIndex(e.clientX, e.clientY);
-  if (idx !== navHoverIdx) {
+  if(idx !== navHoverIdx){
     navHoverIdx = idx;
     navApplyHover();
     // 'grab', not 'default': the whole canvas is drag-enabled now, not just
@@ -5325,35 +5277,35 @@ navCanvas.addEventListener('pointermove', function (e) {
     navRenderCube();
   }
 });
-function navEndDrag(e) {
-  if (!navDragButtonDown) return;
+function navEndDrag(e){
+  if(!navDragButtonDown) return;
   navDragButtonDown = false;
   navDragging = false;
   navCanvas.style.cursor = 'grab';
-  if (e && e.pointerId !== undefined) {
-    try { navCanvas.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+  if(e && e.pointerId !== undefined){
+    try { navCanvas.releasePointerCapture(e.pointerId); } catch(err){ /* already released */ }
   }
 }
-navCanvas.addEventListener('pointerup', function (e) {
-  if (e.button !== 0) return;
+navCanvas.addEventListener('pointerup', function(e){
+  if(e.button !== 0) return;
   const wasDrag = navDragMoved;
   navDragMoved = false;
   navEndDrag(e);
   // Only a press that never crossed the drag threshold snaps a face -- a
   // real drag already did its job by orbiting the camera, and actioning a
   // face on top of that would fight the orientation the drag just set.
-  if (!wasDrag) {
+  if(!wasDrag){
     const idx = navPickIndex(e.clientX, e.clientY);
-    if (idx >= 0) navGoToFace(idx);
+    if(idx >= 0) navGoToFace(idx);
   }
 });
-navCanvas.addEventListener('pointercancel', function (e) { navDragMoved = false; navEndDrag(e); });
-window.addEventListener('blur', function () { navDragMoved = false; navEndDrag(); });
-navCanvas.addEventListener('pointerleave', function () {
-  if (navHoverIdx !== -1) {
+navCanvas.addEventListener('pointercancel', function(e){ navDragMoved = false; navEndDrag(e); });
+window.addEventListener('blur', function(){ navDragMoved = false; navEndDrag(); });
+navCanvas.addEventListener('pointerleave', function(){
+  if(navHoverIdx !== -1){
     navHoverIdx = -1;
     navApplyHover();
-    if (!navDragButtonDown) navCanvas.style.cursor = 'grab';
+    if(!navDragButtonDown) navCanvas.style.cursor = 'grab';
     navRenderCube();
   }
 });
@@ -5361,7 +5313,7 @@ navCanvas.addEventListener('pointerleave', function () {
 navSyncCamera();   // first frame -- render() already ran once, before this section existed
 
 // Test/automation hooks, same shape as __measureState / __measureAt.
-window.__navCubeState = function () {
+window.__navCubeState = function(){
   return {
     faces: NAV_FACES.map(f => f.key),
     hovered: (navHoverIdx >= 0 && NAV_FACES[navHoverIdx]) ? NAV_FACES[navHoverIdx].key : null,
@@ -5370,9 +5322,9 @@ window.__navCubeState = function () {
     dragCount: navDragCount
   };
 };
-window.__navCubeClick = function (key) {
+window.__navCubeClick = function(key){
   const idx = NAV_FACES.findIndex(f => f.key === key);
-  if (idx < 0) return null;
+  if(idx < 0) return null;
   navGoToFace(idx, true);   // instant: automation shouldn't have to wait out the tween
   return window.__navCubeState();
 };
@@ -5380,7 +5332,7 @@ window.__navCubeClick = function (key) {
 // than dispatching real pointer events, since pointer capture + a movement
 // threshold are awkward to drive from a test harness. Counts as one drag
 // gesture, matching what a real press-move-release does.
-window.__navCubeDrag = function (dx, dy) {
+window.__navCubeDrag = function(dx, dy){
   navDragging = true;
   navDragCount++;
   navOrbitBy(dx, dy);

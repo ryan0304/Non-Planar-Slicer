@@ -122,7 +122,7 @@
   //     more than one of those three can in principle overlap.
   //   is-busy-determinate: driven from showGenProgress/hideGenProgress
   //     (search "gen-progress-fill"), in step with the real progress bar.
-  var headerMarkEl = document.getElementById('brand-mark-topbar');
+  var headerMarkEl = document.getElementById('brand-mark-header');
   var MARK_BUSY_STATUS_IDS = { 'stl-status':1, 'pm-drop-status':1, 'printer-meta-status':1 };
   var markBusyCount = 0;
   function markBusyBegin(){
@@ -773,10 +773,7 @@
           var ov = document.getElementById('overlay');
           if(ov) ov.style.display = 'none';
           if(design.sil3d) refreshShapeCage();
-          // Don't rebuild zone rings while a drag is live -- it causes
-          // flickering. The drag-end path (zoneEndDrag / flushZoneEdgePersist)
-          // already calls refreshZoneRings() once the gesture is over.
-          if(typeof refreshZoneRings === 'function' && !window.__zoneRingDragActive) refreshZoneRings();
+          if(typeof refreshZoneRings === 'function') refreshZoneRings();
         }
         // The fabric draft resolves build_loop_fabric's own clamps; report
         // anything it had to cut. No-op for every non-fabric design.
@@ -833,7 +830,7 @@
     var dragging = false, startX = 0, startPanelW = 0;
     function onMove(e){
       if(!dragging) return;
-      var dx = e.clientX - startX;   // dragging right grows the panel (left sidebar)
+      var dx = startX - e.clientX;   // dragging left grows the panel
       var w = Math.min(MAX_W, Math.max(MIN_W, startPanelW + dx));
       panel.style.width = w + 'px';
       panel.style.flexBasis = w + 'px';
@@ -1067,7 +1064,6 @@
   registerSection('shape', document.getElementById('sec-head-shape'), document.getElementById('sec-body-shape'), true);
   registerSection('asymmetry', document.getElementById('sec-head-asymmetry'), document.getElementById('sec-body-asymmetry'), false);
   registerSection('importstl', document.getElementById('sec-head-importstl'), document.getElementById('import-panel'), false);
-  registerSection('silhouette', document.getElementById('sec-head-silhouette'), document.getElementById('sec-body-silhouette'), false);
   registerSection('zwaves', document.getElementById('sec-head-zwaves'), document.getElementById('sec-body-zwaves'), false);
   registerSection('texturepattern', document.getElementById('sec-head-texturepattern'), document.getElementById('sec-body-texturepattern'), true);
   registerSection('cooling', document.getElementById('sec-head-cooling'), document.getElementById('sec-body-cooling'), true);
@@ -1502,12 +1498,6 @@
     var zTxt = (meta && typeof meta.z_max === 'number') ? meta.z_max : '?';
     var ampTxt = (typeof cap === 'number') ? fmtMm(cap) : '?';
     el.textContent = bedTxt + ' — Z' + zTxt + ' — amp <= ' + ampTxt + 'mm';
-
-    var hintEl = document.getElementById('bed-dimensions-hint');
-    if (hintEl) {
-      var hintBed = bed ? (bed[0] + ' × ' + bed[1]) : '?';
-      hintEl.textContent = 'Bed: ' + hintBed + ' mm. Z up to ' + zTxt + ' mm.';
-    }
   }
 
   // Brief, dismissable "what changed" notice in the machine bar -- shown
@@ -1580,24 +1570,16 @@
       host.style.display = 'none';
       return;
     }
-    
+    host.style.display = '';
     var src = document.getElementById('printer-meta-source');
+    if(src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
     var warn = document.getElementById('printer-meta-warn');
-    var hasSrc = !!src;
-    var hasWarn = (meta.warnings > 0);
-    
-    if (!hasSrc && !hasWarn) {
-      host.style.display = 'none';
-    } else {
-      host.style.display = '';
-      if(src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
-      if(warn){
-        if(hasWarn){
-          warn.style.display = '';
-          warn.textContent = meta.warnings + (meta.warnings === 1 ? ' warning' : ' warnings');
-        } else {
-          warn.style.display = 'none';
-        }
+    if(warn){
+      if(meta.warnings > 0){
+        warn.style.display = '';
+        warn.textContent = meta.warnings + (meta.warnings === 1 ? ' warning' : ' warnings');
+      } else {
+        warn.style.display = 'none';
       }
     }
   }
@@ -2686,135 +2668,6 @@
     famSel.title = o ? o.textContent : '';
   }
   famSel.addEventListener('change', syncFilamentTitle);
-
-  // ---- filament combo: a button+list mirror of the real <select> above,
-  // same pattern as #printer-combo but flat (no groups) -- this never holds
-  // its own state, only reads/writes famSel, so the two can never disagree.
-  (function(){
-    var btn = document.getElementById('filament-combo-btn');
-    var label = document.getElementById('filament-combo-label');
-    var list = document.getElementById('filament-combo-list');
-    var combo = document.getElementById('filament-combo');
-    if(!btn || !label || !list || !combo) return;
-
-    function syncLabel(){
-      var o = famSel.options[famSel.selectedIndex];
-      label.textContent = o ? o.textContent : '(generic PLA)';
-    }
-    function closeList(){
-      list.classList.remove('open');
-      btn.setAttribute('aria-expanded', 'false');
-    }
-    function openList(){
-      list.innerHTML = '';
-      Array.prototype.forEach.call(famSel.options, function(o, i){
-        var item = document.createElement('div');
-        item.className = 'mb-combo-option';
-        item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', i === famSel.selectedIndex ? 'true' : 'false');
-        item.textContent = o.textContent;
-        item.addEventListener('click', function(){
-          famSel.selectedIndex = i;
-          famSel.dispatchEvent(new Event('change'));
-          syncLabel();
-          closeList();
-          btn.focus();
-        });
-        list.appendChild(item);
-      });
-      list.classList.add('open');
-      btn.setAttribute('aria-expanded', 'true');
-    }
-    btn.addEventListener('click', function(){
-      if(list.classList.contains('open')) closeList(); else openList();
-    });
-    document.addEventListener('pointerdown', function(e){
-      if(list.classList.contains('open') && !combo.contains(e.target)) closeList();
-    });
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && list.classList.contains('open')) closeList();
-    });
-    famSel.addEventListener('change', syncLabel);
-    syncLabel();
-  })();
-
-  // ---- filament settings modal: temperature/cooling overrides for the
-  // currently selected filament (#d-filament above, plus the overhang/fan
-  // fields bound further down). No server-side custom-filament storage
-  // exists yet (unlike printers' /api/printer/*) so "Save as custom" has
-  // nothing to save into -- hidden rather than left clickable-but-inert.
-  (function(){
-    var modal = document.getElementById('filament-modal');
-    var editBtn = document.getElementById('filament-edit-btn');
-    var addBtn = document.getElementById('filament-add-btn');
-    var closeBtn = document.getElementById('fm-modal-close');
-    var doneBtn = document.getElementById('fm-modal-done');
-    var backdrop = modal ? modal.querySelector('.pm-modal-backdrop') : null;
-    var customRow = document.getElementById('fm-custom-row');
-    if(!modal) return;
-    if(customRow) customRow.style.display = 'none';
-
-    function openModal(){ modal.style.display = 'flex'; }
-    function closeModal(){ modal.style.display = 'none'; }
-    if(editBtn) editBtn.addEventListener('click', openModal);
-    if(addBtn) addBtn.addEventListener('click', openModal);
-    if(closeBtn) closeBtn.addEventListener('click', closeModal);
-    if(doneBtn) doneBtn.addEventListener('click', closeModal);
-    if(backdrop) backdrop.addEventListener('click', closeModal);
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
-    });
-
-    function bindReset(btnId, fieldId){
-      var rbtn = document.getElementById(btnId);
-      var field = document.getElementById(fieldId);
-      if(!rbtn || !field) return;
-      rbtn.addEventListener('click', function(){
-        field.value = '';
-        field.dispatchEvent(new Event('input'));
-        field.dispatchEvent(new Event('change'));
-      });
-    }
-    bindReset('fm-reset-nozzle', 'd-nozzletemp');
-    bindReset('fm-reset-bed', 'd-bedtemp');
-  })();
-
-  // ---- shared hover tooltip for .fm-hover-target / .fm-info-btn, both
-  // marked up with data-tip (plain text) or data-tip-html (the info-button
-  // form, which needs the <br>/<code>/<span> already baked into the string).
-  // Positioning mirrors the parameter tooltip's own position() -- flip off
-  // the viewport edge rather than overflow it.
-  (function(){
-    var tip = document.getElementById('fm-tooltip');
-    if(!tip) return;
-    var targets = document.querySelectorAll('.fm-hover-target, .fm-info-btn');
-    function show(el){
-      var html = el.getAttribute('data-tip-html');
-      var text = el.getAttribute('data-tip');
-      if(html){ tip.innerHTML = html; }
-      else if(text){ tip.textContent = text; }
-      else { return; }
-      tip.style.display = 'block';
-      var ar = el.getBoundingClientRect();
-      var margin = 8, gap = 6;
-      tip.style.left = '0px'; tip.style.top = '0px';
-      var tw = tip.offsetWidth, th = tip.offsetHeight;
-      var x = ar.left;
-      if(x + tw + margin > window.innerWidth) x = window.innerWidth - tw - margin;
-      x = Math.max(margin, x);
-      var y = ar.bottom + gap;
-      if(y + th + margin > window.innerHeight) y = ar.top - gap - th;
-      tip.style.left = Math.round(x) + 'px';
-      tip.style.top = Math.round(Math.max(margin, y)) + 'px';
-    }
-    function hide(){ tip.style.display = 'none'; }
-    targets.forEach(function(el){
-      el.addEventListener('mouseenter', function(){ show(el); });
-      el.addEventListener('mouseleave', hide);
-      el.addEventListener('focus', function(){ show(el); });
-      el.addEventListener('blur', hide);
-    });
-  })();
 
   // ---- curve editor ------------------------------------------------------
   // Variable-count control points {t, v}. First point pinned to t=0, last to
@@ -4982,14 +4835,10 @@
       zoneEdgePersistPending = 'zoneaxis:' + idx;
       designRev++;
       updateStaleBadge();
-      // Skip schedulePreview() mid-drag: generatePreview() is heavy
-      // synchronous math (full spiral-path recompute) and running it at
-      // 60-120 Hz is what causes the ring-drag lag. The preview will fire
-      // once the drag ends (via flushZoneEdgePersist -> schedulePreview).
     } else {
       persistDesign('zoneaxis:' + idx);
-      schedulePreview();
     }
+    schedulePreview();
     var band = document.querySelector('#zo-axis .zo-axis-band[data-zone-idx="' + idx + '"]');
     var hLo = document.querySelector('#zo-axis .zo-axis-handle[data-zone-idx="' + idx + '"][data-edge="lo"]');
     var hHi = document.querySelector('#zo-axis .zo-axis-handle[data-zone-idx="' + idx + '"][data-edge="hi"]');
@@ -5036,10 +4885,6 @@
     // pointerup/pointercancel listeners above, keeps a flushed drag's undo
     // entry from folding into whatever the user does next.
     endHistRun();
-    // schedulePreview() was skipped on every move while the drag was live
-    // (see setZoneEdge) to avoid running generatePreview() at 60-120 Hz.
-    // Now that the drag is over, fire it once so the 3D preview updates.
-    schedulePreview();
   }
   window.__zoneEdgeFlush = flushZoneEdgePersist;
 
@@ -5131,30 +4976,15 @@
     // the in-model ring drag in viewer.js -- one code path, so the two
     // interactions can never disagree about a bound.
     var axisHost = document.getElementById('zo-axis');
-    var dragging = null;   // {idx, edge:'lo'|'hi'|'band', offset?:number}
+    var dragging = null;   // {idx, edge:'lo'|'hi'}
     if(axisHost){
       axisHost.addEventListener('pointerdown', function(e){
         var t = e.target;
-        if(!t.classList) return;
-        if(t.classList.contains('zo-axis-handle')) {
-          dragging = { idx: parseInt(t.getAttribute('data-zone-idx'), 10), edge: t.getAttribute('data-edge') };
-          t.classList.add('dragging');
-        } else if(t.classList.contains('zo-axis-band')) {
-          var idx = parseInt(t.getAttribute('data-zone-idx'), 10);
-          var zones = design.zone_overrides || [];
-          var z = zones[idx];
-          if(!z) return;
-          var mid = (z.t_lo + z.t_hi) / 2;
-          var rect = axisHost.getBoundingClientRect();
-          var pointerT = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
-          dragging = { idx: idx, edge: 'band', offset: mid - pointerT };
-          t.classList.add('dragging');
-        } else {
-          return;
-        }
+        if(!t.classList || !t.classList.contains('zo-axis-handle')) return;
+        dragging = { idx: parseInt(t.getAttribute('data-zone-idx'), 10), edge: t.getAttribute('data-edge') };
+        t.classList.add('dragging');
         zoneAxisDragging = true;
         e.preventDefault();
-        t.setPointerCapture(e.pointerId);
       });
     }
     function tAtClientY(clientY){
@@ -5163,19 +4993,14 @@
     }
     document.addEventListener('pointermove', function(e){
       if(!dragging) return;
-      if (dragging.edge === 'band') {
-        setZoneEdge(dragging.idx, 'lo', tAtClientY(e.clientY) + dragging.offset, true);
-      } else {
-        setZoneEdge(dragging.idx, dragging.edge, tAtClientY(e.clientY), e.shiftKey);
-      }
+      setZoneEdge(dragging.idx, dragging.edge, tAtClientY(e.clientY), e.shiftKey);
     });
-    document.addEventListener('pointerup', function(e){
+    document.addEventListener('pointerup', function(){
       if(!dragging) return;
       dragging = null;
       zoneAxisDragging = false;
-      if(axisHost) axisHost.querySelectorAll('.zo-axis-handle.dragging, .zo-axis-band.dragging').forEach(function(h){
+      if(axisHost) axisHost.querySelectorAll('.zo-axis-handle.dragging').forEach(function(h){
         h.classList.remove('dragging');
-        try { h.releasePointerCapture(e.pointerId); } catch(err){}
       });
       // Flush the persist setZoneEdge deferred during the drag (see its own
       // comment), THEN the one full ring/label re-sync for this drag --
@@ -5219,17 +5044,10 @@
   // server-side against the 320C absolute backstop). Previously these stored
   // whatever was typed, so the panel could show and send 400C to a printer
   // declaring 260C and let the server quietly cut it back.
-  function bindOptionalTemp(id, field, resetBtnId){
+  function bindOptionalTemp(id, field){
     var el = document.getElementById(id);
     if(!el) return;
-    var resetBtn = resetBtnId ? document.getElementById(resetBtnId) : null;
-    function syncOverrideMark(){
-      var overridden = design[field] != null;
-      el.classList.toggle('fm-overridden', overridden);
-      if(resetBtn) resetBtn.style.display = overridden ? '' : 'none';
-    }
     if(design[field] != null) el.value = design[field];
-    syncOverrideMark();
     function applyTemp(commit){
       var raw = parseFloat(el.value);
       if(el.value === '' || Number.isNaN(raw)){
@@ -5244,15 +5062,14 @@
         el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
         if(commit){ el.value = v; el.classList.remove('out-of-range'); }
       }
-      syncOverrideMark();
       persistDesign('num:' + id);
       if(commit) endHistRun();
     }
     el.addEventListener('input', function(){ applyTemp(false); });
     el.addEventListener('change', function(){ applyTemp(true); });
   }
-  bindOptionalTemp('d-nozzletemp', 'nozzle_temp', 'fm-reset-nozzle');
-  bindOptionalTemp('d-bedtemp', 'bed_temp', 'fm-reset-bed');
+  bindOptionalTemp('d-nozzletemp', 'nozzle_temp');
+  bindOptionalTemp('d-bedtemp', 'bed_temp');
 
   // Live "flow line width" readout mirroring serve.py: line_width = round(nozzle*1.125, 3),
   // or the explicit override. Purely informational; stale tracking is already handled
@@ -5737,55 +5554,13 @@
       var p = PRESETS[parseInt(sel.value)];
       if(!p) return;
       for(var k in p){ if(k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
+      // Presets define a complete shape, so drop any asymmetric cage
+      // deformation from the previous design (applyDesignToUI -> refreshShapeCage
+      // rebuilds a neutral all-1.0 grid if the 3D cage stays enabled).
       design.cage = null;
-      previewArmed = true;
       applyDesignToUI();
       sel.value = '';
     });
-    
-    // Populate the right-click preset context menu
-    var ctxItems = document.getElementById('preset-ctx-items');
-    var ctxMenu = document.getElementById('preset-context-menu');
-    if(ctxItems && ctxMenu){
-      PRESETS.forEach(function(p, i){
-        var btn = document.createElement('button');
-        btn.className = 'preset-ctx-item';
-        
-        var icon = document.createElement('div');
-        icon.className = 'pci-icon';
-        // Add a placeholder SVG for the icon
-        icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
-        
-        var label = document.createElement('span');
-        label.textContent = p.name;
-        
-        btn.appendChild(icon);
-        btn.appendChild(label);
-        
-        btn.addEventListener('click', function(){
-          for(var k in p){ if(k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
-          design.cage = null;
-          previewArmed = true; // <--- Force preview update
-          applyDesignToUI();
-          ctxMenu.style.display = 'none';
-        });
-        ctxItems.appendChild(btn);
-      });
-      
-      // Allow viewer.js to close the menu
-      window.__closePresetMenu = function(){
-        ctxMenu.style.display = 'none';
-      };
-      // Allow viewer.js to open the menu
-      window.__openPresetMenu = function(x, y){
-        const mw = 200; // estimated width
-        const margin = 8;
-        if(x + mw + margin > window.innerWidth) x = window.innerWidth - mw - margin;
-        ctxMenu.style.left = Math.max(margin, Math.round(x)) + 'px';
-        ctxMenu.style.top = Math.max(margin, Math.round(y)) + 'px';
-        ctxMenu.style.display = 'block';
-      };
-    }
   })();
 
   function applyDesignToUI(){
@@ -5955,16 +5730,6 @@
 
   document.getElementById('load-design-file').addEventListener('change', function(e){
     if(!e.target.files.length) return;
-    
-    var fname = e.target.files[0].name;
-    var fext = fname.toLowerCase().split('.').pop();
-    
-    if (fext === 'stl') {
-      uploadSTL(e.target.files[0]);
-      e.target.value = '';
-      return;
-    }
-    
     // Captured NOW, synchronously: reader.onload below fires asynchronously,
     // by which point `e.target.value = ''` (also below, runs synchronously
     // right after readAsText) has already cleared e.target.files -- reading
@@ -5972,6 +5737,7 @@
     // FileList, which the catch below would swallow into a "could not load"
     // alert, silently skipping applyDesignToUI() (and with it, e.g., a
     // printer switch the loaded file specified).
+    var fname = e.target.files[0].name;
     var reader = new FileReader();
     reader.onload = function(ev){
       try {
@@ -6091,36 +5857,34 @@
   var stlStatusEl = document.getElementById('stl-status');
   var stlUploadSeq = 0;
 
-  if (stlDrop && stlFile) {
-    stlDrop.addEventListener('click', function(){ stlFile.click(); });
-    // A div with role="button" gets no automatic Enter/Space activation --
-    // mirrors the #pm-drop handler above so both drop zones behave the same.
-    stlDrop.addEventListener('keydown', function(e){
-      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); stlFile.click(); }
-    });
-    stlFile.addEventListener('change', function(e){
-      if(e.target.files.length > 0) uploadSTL(e.target.files[0]);
-    });
+  stlDrop.addEventListener('click', function(){ stlFile.click(); });
+  // A div with role="button" gets no automatic Enter/Space activation --
+  // mirrors the #pm-drop handler above so both drop zones behave the same.
+  stlDrop.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); stlFile.click(); }
+  });
+  stlFile.addEventListener('change', function(e){
+    if(e.target.files.length > 0) uploadSTL(e.target.files[0]);
+  });
 
-    stlDrop.addEventListener('dragover', function(e){
-      e.preventDefault(); e.stopPropagation();
-      stlDrop.classList.add('drag-over');
-    });
-    stlDrop.addEventListener('dragleave', function(e){
-      stlDrop.classList.remove('drag-over');
-    });
-    stlDrop.addEventListener('drop', function(e){
-      e.preventDefault(); e.stopPropagation();
-      stlDrop.classList.remove('drag-over');
-      var files = e.dataTransfer.files;
-      for(var i=0; i<files.length; i++){
-        if(files[i].name.toLowerCase().slice(-4) === '.stl'){
-          uploadSTL(files[i]);
-          return;
-        }
+  stlDrop.addEventListener('dragover', function(e){
+    e.preventDefault(); e.stopPropagation();
+    stlDrop.classList.add('drag-over');
+  });
+  stlDrop.addEventListener('dragleave', function(e){
+    stlDrop.classList.remove('drag-over');
+  });
+  stlDrop.addEventListener('drop', function(e){
+    e.preventDefault(); e.stopPropagation();
+    stlDrop.classList.remove('drag-over');
+    var files = e.dataTransfer.files;
+    for(var i=0; i<files.length; i++){
+      if(files[i].name.toLowerCase().slice(-4) === '.stl'){
+        uploadSTL(files[i]);
+        return;
       }
-    });
-  }
+    }
+  });
 
   function uploadSTL(file){
     if(file.size > MESH_MAX_MB * 1024 * 1024){
@@ -6167,8 +5931,7 @@
   }
 
   function showMeshInfo(data, filename){
-    var drop = document.getElementById('stl-drop');
-    if (drop) drop.style.display = 'none';
+    document.getElementById('stl-drop').style.display = 'none';
     document.getElementById('mesh-info').style.display = 'block';
     document.getElementById('mesh-name').textContent = filename;
     document.getElementById('mesh-tris').textContent = data.triangles;
@@ -6244,11 +6007,10 @@
     meshState.mesh_id = null;
     meshState.filename = null;
     meshState.info = null;
-    var drop = document.getElementById('stl-drop');
-    if (drop) drop.style.display = '';
+    document.getElementById('stl-drop').style.display = '';
     document.getElementById('mesh-info').style.display = 'none';
     showMeshCheck(null);
-    if (stlFile) stlFile.value = '';
+    stlFile.value = '';
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
     if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
     // Clearing the mesh can turn loops back into fabric (loop-fabric hides
