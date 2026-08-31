@@ -1300,7 +1300,7 @@ input[type=radio]:active:not(:disabled) {
 
 .tool-rail {
   position: absolute;
-  right: 16px;
+  left: 16px;
   z-index: 6;
   top: min(max(50%, var(--overlay-top)), calc(100% - var(--overlay-bottom) - 64px));
   display: flex;
@@ -1344,6 +1344,10 @@ input[type=radio]:active:not(:disabled) {
   background: var(--surface-raised);
 }
 
+.tool-btn:active {
+  background: var(--line);
+}
+
 .tool-btn:focus-visible {
   outline: 2px solid var(--measure);
   outline-offset: 2px;
@@ -1368,7 +1372,7 @@ input[type=radio]:active:not(:disabled) {
 
 .measure-card {
   position: absolute;
-  right: 76px;
+  left: 16px;
   width: 246px;
   z-index: 6;
   bottom: var(--overlay-bottom);

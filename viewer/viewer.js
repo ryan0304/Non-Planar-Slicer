@@ -4853,7 +4853,7 @@ const MEASURE_RAIL_GAP = 8;      // px between the rail's bottom edge and the ca
     const railRect = rail.getBoundingClientRect();
     const wrapRect = wrap.getBoundingClientRect();
     applyPos(
-      (railRect.right - wrapRect.left) - MEASURE_CARD_W,
+      (railRect.left - wrapRect.left),
       (railRect.bottom - wrapRect.top) + MEASURE_RAIL_GAP
     );
   }
