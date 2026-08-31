@@ -74,6 +74,12 @@
             </div>
 
             <div class="group" id="design-group">
+
+              <div id="mode-bar" class="mode-bar">
+                <button class="mode-btn" data-mode="design" aria-pressed="false">Design</button>
+                <button class="mode-btn" data-mode="viewer" aria-pressed="false">G-code Viewer</button>
+              </div>
+
               <!-- ---- Persistent machine bar (Printer) ---- -->
               <div id="machine-bar" class="mb-bar">
                 <div class="mb-row1" style="flex-direction:column; align-items:flex-start; gap:4px;">
@@ -147,18 +153,16 @@
                 <div id="param-search-results" class="param-search-results" role="listbox"></div>
               </div>
 
-              <div id="mode-bar" class="mode-bar">
+              <!-- <div id="mode-bar" class="mode-bar">
                 <button class="mode-btn" data-mode="design" aria-pressed="false">Design</button>
                 <button class="mode-btn" data-mode="viewer" aria-pressed="false">G-code Viewer</button>
-              </div>
+              </div> -->
 
               <div id="preset-bar" style="display:none">
                 <select id="preset-select">
                   <option value="">0.20mm Standard</option>
                 </select>
               </div>
-
-
 
               <div id="step-bar" class="step-bar">
                 <button class="step-item" data-step="model"><span class="step-num">1</span><span
@@ -278,76 +282,6 @@
 
               <!-- ---- Step 2: Texture (Z waves + surface texture) ---- -->
               <div class="step-panel" id="step-texture">
-                <div style="display:flex; align-items:center; gap:8px;">
-                  <button id="point-edit-btn" class="btn btn-block pe-entry-btn" type="button"
-                    style="flex:1; margin:0;">
-                     <span id="pe-active-dot" class="pe-dot"></span>Point Edit Modifiers<span class="info-icon">i</span>&#8230;
-                  </button>
-                  <span class="fm-info-btn"
-                    data-tip-html="Physically deform and sculpt the final 3D toolpath.<br><br>Includes tools for Point Mask, Protection, Free-Form Deformation, Smooth, and Radial Push.">&#9432;</span>
-                </div>
-                <div class="hint" id="pe-scope-note" style="display:none;margin-top:4px">Point edit modifiers only
-                  apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
-
-                <hr>
-                <h3 class="section-heading" id="sec-head-silhouette">Silhouette Setting</h3>
-                <div id="sec-body-silhouette" style="display:none">
-                  <div class="cv-editor" id="sil-section">
-                    <div class="cv-head"><b>Silhouette</b><button type="button" class="cv-reset"
-                        id="sil-reset">reset</button></div>
-                    <div id="sil-mode-bar" class="sil-mode-bar">
-                      <button class="sil-mode-btn" data-silmode="sym" aria-pressed="false">Symmetrical</button>
-                      <button class="sil-mode-btn" data-silmode="asym" aria-pressed="false">Freeform (3D)</button>
-                    </div>
-                    <div id="sil-sym-panel">
-                      <canvas id="sil-curve" width="360" height="100"></canvas>
-                      <div id="sil-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span
-                          class="cv-readout-sub">hover or drag a point</span></div>
-                      <div class="hint" style="margin-top:2px">Scales the whole outline at each height. Double-click to
-                        add a point, right-click to remove, drag to shape. Shift = fine.</div>
-                    </div>
-                    <div id="sil-asym-panel" style="display:none">
-                      <div class="hint" style="margin-top:2px">Points appear ON THE MODEL (left) when this mode is
-                        active and a draft preview is visible. Hover a point to highlight it (orange), then drag to
-                        bulge or dent that local region. A point you have moved turns red.</div>
-                      <div class="hint" style="margin-top:4px"><b>Shift+click</b> (or Ctrl+click) each point to select
-                        several - selected points get a white ring. Drag any one of them to move the whole selection
-                        together, rigidly. A plain click with no modifier selects just that one point. Esc cancels a
-                        drag in progress, or clears the selection.</div>
-                      <div id="cage-selcount" class="sel-count">No points selected</div>
-                      <div class="btn-row mt-2">
-                        <button id="cage-clear-sel" class="btn" disabled>Clear selection</button>
-                        <button id="cage-reset-sel" class="btn" disabled>Reset selected</button>
-                      </div>
-                      <button id="cage-reset" class="btn btn-block mt-2">Reset all points</button>
-                      <div class="hint" id="cage-note" style="margin-top:4px">Applies to parametric designs (not loop
-                        fabric or STL mode).</div>
-                    </div>
-                  </div>
-                  <label class="row" style="margin-top:6px"><span>Smooth silhouette curvature</span><input
-                      type="checkbox" id="sil-smooth"></label>
-                </div>
-
-                <hr>
-                <h3 class="section-heading" id="sec-head-zwaves">Z waves</h3>
-                <div id="sec-body-zwaves" style="display:none">
-                  <div class="drow"><span>Z waves</span><input type="number" id="d-waves" min="0" max="12" step="1">
-                  </div>
-                  <div class="drow"><span>Z twist (turns)</span><input type="number" id="d-ztwist" min="0" max="2"
-                      step="0.25"></div>
-
-                  <div class="cv-editor">
-                    <div class="cv-head"><b>Wave amplitude over height</b><button type="button" class="cv-reset"
-                        id="amp-reset">reset</button></div>
-                    <canvas id="amp-curve" width="360" height="100"></canvas>
-                    <div id="amp-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span
-                        class="cv-readout-sub">hover or drag a point</span></div>
-                    <div id="slope-read" class="cv-note"></div>
-                  </div>
-                  <div class="limit-note" id="amp-limit-hint" style="margin-top:-2px"></div>
-                </div>
-
-                <hr>
                 <h3 class="section-heading" id="sec-head-texturepattern">Texture pattern</h3>
                 <div id="sec-body-texturepattern">
                   <div class="drow"><span>Texture pattern</span>
@@ -385,7 +319,6 @@
                       sideways, never Z &#8212; no probe risk, so it can be bold.</div>
                   </div>
 
-                  <hr>
                   <div id="loop-rows" style="display:none">
                     <div class="drow"><span>Loop style</span>
                       <select id="d-loop-style">
@@ -453,6 +386,78 @@
                   </div>
                 </div>
 
+                <hr>
+                <h3 class="section-heading" id="sec-head-zwaves">Z waves</h3>
+                <div id="sec-body-zwaves" style="display:none">
+                  <div class="drow"><span>Z waves</span><input type="number" id="d-waves" min="0" max="12" step="1">
+                  </div>
+                  <div class="drow"><span>Z twist (turns)</span><input type="number" id="d-ztwist" min="0" max="2"
+                      step="0.25"></div>
+
+                  <div class="cv-editor">
+                    <div class="cv-head"><b>Wave amplitude over height</b><button type="button" class="cv-reset"
+                        id="amp-reset">reset</button></div>
+                    <canvas id="amp-curve" width="360" height="100"></canvas>
+                    <div id="amp-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span
+                        class="cv-readout-sub">hover or drag a point</span></div>
+                    <div id="slope-read" class="cv-note"></div>
+                  </div>
+                  <div class="limit-note" id="amp-limit-hint" style="margin-top:-2px"></div>
+                </div>
+
+                <hr>
+                <h3 class="section-heading" id="sec-head-silhouette">Silhouette Setting</h3>
+                <div id="sec-body-silhouette" style="display:none">
+                  <div class="cv-editor" id="sil-section">
+                    <div class="cv-head"><b>Silhouette</b><button type="button" class="cv-reset"
+                        id="sil-reset">reset</button></div>
+                    <div id="sil-mode-bar" class="sil-mode-bar">
+                      <button class="sil-mode-btn" data-silmode="sym" aria-pressed="false">Symmetrical</button>
+                      <button class="sil-mode-btn" data-silmode="asym" aria-pressed="false">Freeform (3D)</button>
+                    </div>
+                    <div id="sil-sym-panel">
+                      <canvas id="sil-curve" width="360" height="100"></canvas>
+                      <div id="sil-readout" class="cv-readout"><b class="cv-readout-mm">--</b><span
+                          class="cv-readout-sub">hover or drag a point</span></div>
+                      <div class="hint" style="margin-top:2px">Scales the whole outline at each height. Double-click to
+                        add a point, right-click to remove, drag to shape. Shift = fine.</div>
+                    </div>
+                    <div id="sil-asym-panel" style="display:none">
+                      <div class="hint" style="margin-top:2px">Points appear ON THE MODEL (left) when this mode is
+                        active and a draft preview is visible. Hover a point to highlight it (orange), then drag to
+                        bulge or dent that local region. A point you have moved turns red.</div>
+                      <div class="hint" style="margin-top:4px"><b>Shift+click</b> (or Ctrl+click) each point to select
+                        several - selected points get a white ring. Drag any one of them to move the whole selection
+                        together, rigidly. A plain click with no modifier selects just that one point. Esc cancels a
+                        drag in progress, or clears the selection.</div>
+                      <div id="cage-selcount" class="sel-count">No points selected</div>
+                      <div class="btn-row mt-2">
+                        <button id="cage-clear-sel" class="btn" disabled>Clear selection</button>
+                        <button id="cage-reset-sel" class="btn" disabled>Reset selected</button>
+                      </div>
+                      <button id="cage-reset" class="btn btn-block mt-2">Reset all points</button>
+                      <div class="hint" id="cage-note" style="margin-top:4px">Applies to parametric designs (not loop
+                        fabric or STL mode).</div>
+                    </div>
+                  </div>
+                  <label class="row" style="margin-top:6px"><span>Smooth silhouette curvature</span><input
+                      type="checkbox" id="sil-smooth"></label>
+                </div>
+
+                <div class="group" style="padding: 12px; border-top: 1px solid var(--line);">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <button id="point-edit-btn" class="btn btn-block pe-entry-btn" type="button"
+                      style="flex:1; margin:0;">
+                      <span id="pe-active-dot" class="pe-dot"></span>Point Edit Modifiers<span
+                        class="info-icon">i</span>&#8230;
+                    </button>
+                    <span class="fm-info-btn"
+                      data-tip-html="Physically deform and sculpt the final 3D toolpath.<br><br>Includes tools for Point Mask, Protection, Free-Form Deformation, Smooth, and Radial Push.">&#9432;</span>
+                  </div>
+                  <div class="hint" id="pe-scope-note" style="display:none;margin-top:4px">Point edit modifiers only
+                    apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
+                </div>
+
                 <div class="group" style="padding: 12px; border-top: 1px solid var(--line);">
                   <div style="display:flex; align-items:center; gap:8px;">
                     <button id="zone-btn" class="btn btn-block zo-entry-btn" type="button" style="flex:1; margin:0;">
@@ -465,12 +470,7 @@
                     style="display:none; margin-top:6px; color:var(--warn)">Zone overrides only apply to the parametric
                     wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
                 </div>
-
-
-
-
               </div>
-
               <!-- ---- Step 3: Print ---- -->
               <div class="step-panel" id="step-print">
                 <div class="drow">
@@ -603,7 +603,7 @@
             </div>
 
             <div class="hint">
-              Bed: 235 &times; 235 mm. Z up to 160 mm. The path is colored low&#8594;high so you can
+              <span id="bed-dimensions-hint">Bed: 235 &times; 235 mm. Z up to 160 mm.</span> The path is colored low&#8594;high so you can
               see the non-planar Z modulation. Drag to orbit, scroll to zoom, right-drag to pan.
               <br><br>
               <b>Playback:</b> space = play/pause &middot; <b>&#8592; &#8594;</b> step one turn &middot; Home/End =

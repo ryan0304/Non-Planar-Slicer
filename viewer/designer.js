@@ -1502,6 +1502,12 @@
     var zTxt = (meta && typeof meta.z_max === 'number') ? meta.z_max : '?';
     var ampTxt = (typeof cap === 'number') ? fmtMm(cap) : '?';
     el.textContent = bedTxt + ' — Z' + zTxt + ' — amp <= ' + ampTxt + 'mm';
+
+    var hintEl = document.getElementById('bed-dimensions-hint');
+    if (hintEl) {
+      var hintBed = bed ? (bed[0] + ' × ' + bed[1]) : '?';
+      hintEl.textContent = 'Bed: ' + hintBed + ' mm. Z up to ' + zTxt + ' mm.';
+    }
   }
 
   // Brief, dismissable "what changed" notice in the machine bar -- shown
@@ -1574,16 +1580,24 @@
       host.style.display = 'none';
       return;
     }
-    host.style.display = '';
+    
     var src = document.getElementById('printer-meta-source');
-    if(src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
     var warn = document.getElementById('printer-meta-warn');
-    if(warn){
-      if(meta.warnings > 0){
-        warn.style.display = '';
-        warn.textContent = meta.warnings + (meta.warnings === 1 ? ' warning' : ' warnings');
-      } else {
-        warn.style.display = 'none';
+    var hasSrc = !!src;
+    var hasWarn = (meta.warnings > 0);
+    
+    if (!hasSrc && !hasWarn) {
+      host.style.display = 'none';
+    } else {
+      host.style.display = '';
+      if(src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
+      if(warn){
+        if(hasWarn){
+          warn.style.display = '';
+          warn.textContent = meta.warnings + (meta.warnings === 1 ? ' warning' : ' warnings');
+        } else {
+          warn.style.display = 'none';
+        }
       }
     }
   }
