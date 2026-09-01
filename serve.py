@@ -339,7 +339,7 @@ STAR_DEPTH_MIN, STAR_DEPTH_MAX = 0.0, 1.0
 # is deliberately NOT read directly by either quality check below, so it can
 # never regress into the module-constant defect slope_ceiling() replaced.
 QUALITY_SLOPE_DEFAULT = 0.25
-DEFAULT_FILAMENT = "R3D PETG"
+DEFAULT_FILAMENT = "PLA"
 
 # Mesh upload caps and cache.
 MESH_MAX_BYTES = 50 * 1024 * 1024     # 50 MB

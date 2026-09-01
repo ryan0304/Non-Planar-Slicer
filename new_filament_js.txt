@@ -1,0 +1,152 @@
+﻿  // ---- filament dropdown -------------------------------------------------
+  var famSel = document.getElementById('d-filament');
+  apiFetch('/api/filaments').then(function(r){ return r.json(); }).then(function(j){
+    famSel.innerHTML = '';
+    var opt = document.createElement('option'); opt.value=''; opt.textContent='(generic PLA)';
+    famSel.appendChild(opt);
+    (j.filaments||[]).forEach(function(n){
+      var o=document.createElement('option'); o.value=n; o.textContent=n; famSel.appendChild(o);
+    });
+    if(design.filament){ famSel.value = design.filament; }
+    else if(j.default){ famSel.value = j.default; design.filament = j.default; }
+    syncFilamentTitle();
+  }).catch(function(){ /* no orca: keep generic PLA */ });
+
+  // Orca filament names run past 400px, wider than the whole panel, and a
+  // <select> cannot ellipsize its own closed state -- so mirror the selection
+  // into the title attribute, making the full name reachable on hover.
+  function syncFilamentTitle(){
+    var o = famSel.options[famSel.selectedIndex];
+    famSel.title = o ? o.textContent : '';
+  }
+  famSel.addEventListener('change', syncFilamentTitle);
+
+  // ---- filament combo: a button+list mirror of the real <select> above,
+  // same pattern as #printer-combo but flat (no groups) -- this never holds
+  // its own state, only reads/writes famSel, so the two can never disagree.
+  (function(){
+    var btn = document.getElementById('filament-combo-btn');
+    var label = document.getElementById('filament-combo-label');
+    var list = document.getElementById('filament-combo-list');
+    var combo = document.getElementById('filament-combo');
+    if(!btn || !label || !list || !combo) return;
+
+    function syncLabel(){
+      var o = famSel.options[famSel.selectedIndex];
+      label.textContent = o ? o.textContent : '(generic PLA)';
+    }
+    function closeList(){
+      list.classList.remove('open');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    function openList(){
+      list.innerHTML = '';
+      Array.prototype.forEach.call(famSel.options, function(o, i){
+        var item = document.createElement('div');
+        item.className = 'mb-combo-option';
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', i === famSel.selectedIndex ? 'true' : 'false');
+        item.textContent = o.textContent;
+        item.addEventListener('click', function(){
+          famSel.selectedIndex = i;
+          famSel.dispatchEvent(new Event('change'));
+          syncLabel();
+          closeList();
+          btn.focus();
+        });
+        list.appendChild(item);
+      });
+      list.classList.add('open');
+      btn.setAttribute('aria-expanded', 'true');
+    }
+    btn.addEventListener('click', function(){
+      if(list.classList.contains('open')) closeList(); else openList();
+    });
+    document.addEventListener('pointerdown', function(e){
+      if(list.classList.contains('open') && !combo.contains(e.target)) closeList();
+    });
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && list.classList.contains('open')) closeList();
+    });
+    famSel.addEventListener('change', syncLabel);
+    syncLabel();
+  })();
+
+  // ---- filament settings modal: temperature/cooling overrides for the
+  // currently selected filament (#d-filament above, plus the overhang/fan
+  // fields bound further down). No server-side custom-filament storage
+  // exists yet (unlike printers' /api/printer/*) so "Save as custom" has
+  // nothing to save into -- hidden rather than left clickable-but-inert.
+  (function(){
+    var modal = document.getElementById('filament-modal');
+    var editBtn = document.getElementById('filament-edit-btn');
+    var addBtn = document.getElementById('filament-add-btn');
+    var closeBtn = document.getElementById('fm-modal-close');
+    var doneBtn = document.getElementById('fm-modal-done');
+    var backdrop = modal ? modal.querySelector('.pm-modal-backdrop') : null;
+    var customRow = document.getElementById('fm-custom-row');
+    if(!modal) return;
+    if(customRow) customRow.style.display = 'none';
+
+    function openModal(){ modal.style.display = 'flex'; }
+    function closeModal(){ modal.style.display = 'none'; }
+    if(editBtn) editBtn.addEventListener('click', openModal);
+    if(addBtn) addBtn.addEventListener('click', openModal);
+    if(closeBtn) closeBtn.addEventListener('click', closeModal);
+    if(doneBtn) doneBtn.addEventListener('click', closeModal);
+    if(backdrop) backdrop.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
+    });
+
+    function bindReset(btnId, fieldId){
+      var rbtn = document.getElementById(btnId);
+      var field = document.getElementById(fieldId);
+      if(!rbtn || !field) return;
+      rbtn.addEventListener('click', function(){
+        field.value = '';
+        field.dispatchEvent(new Event('input'));
+        field.dispatchEvent(new Event('change'));
+      });
+    }
+    bindReset('fm-reset-nozzle', 'd-nozzletemp');
+    bindReset('fm-reset-bed', 'd-bedtemp');
+  })();
+
+  // ---- shared hover tooltip for .fm-hover-target / .fm-info-btn, both
+  // marked up with data-tip (plain text) or data-tip-html (the info-button
+  // form, which needs the <br>/<code>/<span> already baked into the string).
+  // Positioning mirrors the parameter tooltip's own position() -- flip off
+  // the viewport edge rather than overflow it.
+  (function(){
+    var tip = document.getElementById('fm-tooltip');
+    if(!tip) return;
+    var targets = document.querySelectorAll('.fm-hover-target, .fm-info-btn');
+    function show(el){
+      var html = el.getAttribute('data-tip-html');
+      var text = el.getAttribute('data-tip');
+      if(html){ tip.innerHTML = html; }
+      else if(text){ tip.textContent = text; }
+      else { return; }
+      tip.style.display = 'block';
+      var ar = el.getBoundingClientRect();
+      var margin = 8, gap = 6;
+      tip.style.left = '0px'; tip.style.top = '0px';
+      var tw = tip.offsetWidth, th = tip.offsetHeight;
+      var x = ar.left;
+      if(x + tw + margin > window.innerWidth) x = window.innerWidth - tw - margin;
+      x = Math.max(margin, x);
+      var y = ar.bottom + gap;
+      if(y + th + margin > window.innerHeight) y = ar.top - gap - th;
+      tip.style.left = Math.round(x) + 'px';
+      tip.style.top = Math.round(Math.max(margin, y)) + 'px';
+    }
+    function hide(){ tip.style.display = 'none'; }
+    targets.forEach(function(el){
+      el.addEventListener('mouseenter', function(){ show(el); });
+      el.addEventListener('mouseleave', hide);
+      el.addEventListener('focus', function(){ show(el); });
+      el.addEventListener('blur', hide);
+    });
+  })();
+
