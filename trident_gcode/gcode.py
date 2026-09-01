@@ -326,6 +326,11 @@ class GcodeWriter:
         return self._moves
 
     @property
+    def position(self) -> tuple[float, float, float]:
+        """Current (x, y, z) of the toolhead, as tracked internally."""
+        return (self._x, self._y, self._z)
+
+    @property
     def layer_height_clamp_events(self) -> int:
         """How many extrude moves had their gap-aware layer_height_override
         clamped to the [0.25, 1.5]x nominal band. >0 means some geometry asked

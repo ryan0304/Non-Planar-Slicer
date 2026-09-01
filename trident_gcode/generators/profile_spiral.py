@@ -115,6 +115,7 @@ def build_profile_spiral(
     fan_overhang_max: float | None = None,
     fan_off_layers: int = 0,
     width_callback: Callable[[float], float] | None = None,
+    resume: bool = False,
 ) -> dict:
     """Emit a complete profile-spiral and return a report dict.
 
@@ -134,6 +135,16 @@ def build_profile_spiral(
         through as ``line_width_override``). None (default) = no per-point
         override, and the emitted G-code is byte-identical to the generator
         without this parameter.
+    resume : bool
+        False (default) reproduces today's output byte-for-byte. True skips
+        writer.header() and the initial writer.safe_lift() -- both are
+        "first thing after PRINT_START" primitives that must fire at most
+        once per print -- for a wall that continues an already-started
+        print (e.g. the non-planar phase of a hybrid planar-base print, see
+        trident_gcode/hybrid.py). The two writer.travel() calls and
+        writer.unretract() that follow are kept unconditionally: they
+        already move generically from wherever the toolhead currently is to
+        this wall's true start point, through the normal bounds check.
     """
     if len(contours) != len(heights):
         raise ValueError(
@@ -242,7 +253,8 @@ def build_profile_spiral(
     ) if adhesion else []
 
     # ---- emit G-code -------------------------------------------------------
-    writer.header()
+    if not resume:
+        writer.header()
 
     # Determine start position.
     if base_seq:
@@ -252,7 +264,8 @@ def build_profile_spiral(
         s0x, s0y = cx + bottom[0][0], cy + bottom[0][1]
         sz = wall_off + heights[0]
     writer.comment("move to profile spiral start")
-    writer.safe_lift(sz + travel_z_clearance)
+    if not resume:
+        writer.safe_lift(sz + travel_z_clearance)
     writer.travel(s0x, s0y, sz + travel_z_clearance)
     writer.travel(s0x, s0y, sz)
     writer.unretract()

@@ -58,6 +58,23 @@
   /* Reserved colors for tools/cages */
   --cage: #ffc24c;
 
+  /* Imported-mesh terracotta -- reserved for the user's uploaded STL when
+     drawn as a solid THREE.Mesh in the 3-D viewport (viewer.js's Design-tab
+     draft preview: window.setMeshBasePreview). --cage (above) is ALSO drawn
+     in that same viewport, as the Freeform cage handles -- this file's own
+     rule (see the zone-palette comment below) is that two things sharing a
+     viewport must separate by more than hue alone. Hue 20deg sits only
+     20deg from --cage's 40deg (and 14deg from --warn's 34deg), so
+     lightness/saturation carry the real separation, the same technique the
+     zone palette below relies on: --cage is sat 100% / light 65% (a bright
+     amber panel-chrome colour); this token is sat 67% / light 50% -- a
+     visibly darker, duller clay/terracotta, not a near-miss on the same
+     bright amber. Contrast on --bg: 4.90:1 (passes the 4.5:1 AA floor; not a
+     safety token, so the stricter 5.8:1 bar does not apply). The JS mirror
+     is MESH_COLOR in viewer.js -- keep the two in step. Do not reuse
+     elsewhere. */
+  --mesh: #d4622a;
+
   /* Zone-band magenta -- reserved for Zone Overrides (the entry button, its
      modal chrome, the height-axis bands, the floating right-click context
      menu and the 3-D band highlight; the JS mirror is ZONE_COL in
@@ -84,10 +101,15 @@
      mirror is ZONE_PALETTE in viewer.js, keep the two in step.
 
      The hue wheel is genuinely crowded once every other reserved token is
-     excluded (--danger 0deg, --warn 34deg, --cage 40deg, --ok 157deg,
-     --measure 188deg, --accent-family ~197-255deg, --accent-purple 255deg,
-     --zone itself 316deg) -- only two gaps exceed 45deg (40->157 green, and
-     255->316 violet/magenta). --zone-c1 IS --zone: a one-zone design (the
+     excluded (--danger 0deg, --mesh 20deg, --warn 34deg, --cage 40deg, --ok
+     157deg, --measure 188deg, --accent-family ~197-255deg, --accent-purple
+     255deg, --zone itself 316deg) -- only two gaps exceed 45deg (40->157
+     green, and 255->316 violet/magenta). --mesh sits in the crowded
+     0-40deg cluster with --danger/--warn/--cage, which is exactly why it
+     leans on lightness/saturation instead (see --mesh's own comment above);
+     it does not touch either of the two zone-palette gaps below.
+
+     --zone-c1 IS --zone: a one-zone design (the
      common case) looks exactly like v1, and slot 1 does double duty as both
      the subsystem's chrome colour and the first zone's identity colour.
      Slots 6-8 (up to ZONE_MAX) cycle back through 1-3 -- the row swatch,
@@ -568,6 +590,35 @@ canvas {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+/* Settings bar on the RIGHT: OrcaSlicer planar-base controls (see
+   #planar-panel in index.html). A near-twin of .panel above -- same surface,
+   same fixed-width-then-stacks responsive behaviour -- but the hairline
+   border sits on its LEFT edge (index-panel border) since it faces the
+   opposite direction across the canvas. Kept as its own rule rather than
+   sharing .panel's class so the two can never accidentally diverge in a way
+   that also silently changes the left sidebar (#panel is still selected by
+   ID elsewhere, e.g. the splitter drag in designer.js, so class reuse here
+   would have been a needless entanglement risk for no real benefit). */
+.planar-panel {
+  width: 280px;
+  flex: 0 0 280px;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Rows moved in from #mesh-info (see index.html's comment on #planar-panel)
+   carried this sizing along: keeps a label like "Infill pattern" or the
+   info-icon-bearing "Blend height (mm)" from being squeezed by flex-shrink
+   in a panel this narrow, matching #mesh-info's identical rule below. */
+.planar-panel .drow>span:first-child {
+  flex: 0 0 auto;
 }
 
 .panel-scroll {
@@ -2649,8 +2700,11 @@ input[type=radio]:active:not(:disabled) {
   }
 }
 
-/* ---- section separators inside step panels ---- */
-.step-panel hr {
+/* ---- section separators inside step panels (and the right-hand Planar
+   base bar, which stacks the same heading+body sections but is not itself
+   a .step-panel -- see #planar-panel in index.html) ---- */
+.step-panel hr,
+.planar-panel hr {
   border: none;
   border-top: 1px solid var(--line);
   margin: var(--sp-3) 0 var(--sp-2);
@@ -4392,6 +4446,16 @@ body.hints-hidden .hint {
     width: auto;
     flex: 1 1 auto;
     border-right: none;
+    border-top: 1px solid var(--line);
+  }
+
+  /* Same stack-below-the-canvas treatment as .panel above, so a narrow
+     window never has the fixed-width right bar fighting the viewport for
+     space -- see the .planar-panel comment near .panel's own rule. */
+  .planar-panel {
+    width: auto;
+    flex: 1 1 auto;
+    border-left: none;
     border-top: 1px solid var(--line);
   }
 

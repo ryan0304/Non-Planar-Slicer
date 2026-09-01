@@ -44,15 +44,39 @@ def load_stl(path: str) -> list[Triangle]:
     return _load_binary(data, count)
 
 
+def _nonfinite_error(index: int) -> ValueError:
+    """The one message both loaders raise, so the rule reads the same either way.
+
+    NaN/Infinity must be rejected here and never clamped: every comparison
+    against NaN is False, so a NaN vertex survives min()/max() clamping, slides
+    through :func:`mesh_bounds` (which reports sane-looking bounds because
+    ``min(inf, nan)`` is ``inf``), and only surfaces as NaN coordinates in a
+    G-code move. ``float("1e999")`` is ``inf``, and a crafted binary STL can
+    carry either bit pattern directly, so both loaders check.
+    """
+    return ValueError(
+        "STL triangle %d has a non-finite vertex coordinate (NaN or Infinity) -- "
+        "non-finite values defeat every bounds check downstream, so the mesh is "
+        "rejected rather than clamped" % index)
+
+
 def _load_binary(data: bytes, count: int) -> list[Triangle]:
+    isfinite = math.isfinite
     tris: list[Triangle] = []
     off = 84
-    for _ in range(count):
+    for i in range(count):
         # 12 little-endian floats: normal(3) + v0(3) + v1(3) + v2(3), then 2B attr
         vals = struct.unpack_from("<12f", data, off)
-        v0 = (vals[3], vals[4], vals[5])
-        v1 = (vals[6], vals[7], vals[8])
-        v2 = (vals[9], vals[10], vals[11])
+        # Vertex coordinates only -- the normal is never used by this module, so
+        # a junk normal is not a reason to reject an otherwise-printable mesh.
+        # all(map(...)) keeps the per-triangle cost to one C-level loop over a
+        # 9-float slice; this runs up to 500k times per upload.
+        coords = vals[3:]
+        if not all(map(isfinite, coords)):
+            raise _nonfinite_error(i)
+        v0 = (coords[0], coords[1], coords[2])
+        v1 = (coords[3], coords[4], coords[5])
+        v2 = (coords[6], coords[7], coords[8])
         tris.append((v0, v1, v2))
         off += 50
     return tris
@@ -64,7 +88,16 @@ _VERTEX_RE = re.compile(
 
 
 def _load_ascii(text: str) -> list[Triangle]:
-    verts = [(float(a), float(b), float(c)) for a, b, c in _VERTEX_RE.findall(text)]
+    isfinite = math.isfinite
+    verts: list[Vec3] = []
+    for j, (a, b, c) in enumerate(_VERTEX_RE.findall(text)):
+        # float() accepts "1e999" and hands back inf, and "nan"/"inf" spellings
+        # are only kept out by the regex's character class -- neither is a
+        # guarantee, so the value itself is what gets checked.
+        v = (float(a), float(b), float(c))
+        if not (isfinite(v[0]) and isfinite(v[1]) and isfinite(v[2])):
+            raise _nonfinite_error(j // 3)
+        verts.append(v)
     tris: list[Triangle] = []
     for i in range(0, len(verts) - 2, 3):
         tris.append((verts[i], verts[i + 1], verts[i + 2]))
@@ -73,6 +106,10 @@ def _load_ascii(text: str) -> list[Triangle]:
 
 # ------------------------------------------------------------------ bounds ---
 def mesh_bounds(tris: list[Triangle]) -> tuple[Vec3, Vec3]:
+    # These min()/max() folds cannot detect a NaN vertex -- min(inf, nan) is
+    # inf, so a poisoned mesh reports perfectly sane bounds. That is why the
+    # rejection lives in the loaders (see _nonfinite_error), not here: by the
+    # time triangles reach this function they are already known finite.
     lo = [math.inf, math.inf, math.inf]
     hi = [-math.inf, -math.inf, -math.inf]
     for tri in tris:
@@ -234,13 +271,21 @@ def _point_in_polygon(pt: Vec2, poly: list[Vec2]) -> bool:
     return inside
 
 
-def _is_star_convex(loop: list[Vec2]) -> bool:
-    """True if ``loop`` is star-convex about its own centroid.
+def _is_star_convex(loop: list[Vec2], center: Vec2 | None = None) -> bool:
+    """True if ``loop`` is star-convex about ``center`` (default: its centroid).
 
     A star-convex outline traversed in order sweeps its angle about the centre
     monotonically. Any backtrack means some ray from the centre crosses the
     outline more than once, which is exactly what breaks the ``radius(theta)``
     sampling the base/brim fill relies on.
+
+    Star-convexity is a property of the loop *and* the point the rays come from,
+    not of the loop alone: the same outline can be star-convex about its
+    centroid and not about its bounding-box midpoint. ``center`` defaults to the
+    vertex-average centroid (the historical behaviour, which
+    :func:`analyze_vase_compatibility` relies on), but any caller whose
+    downstream sampling emanates from a different point must pass that point --
+    otherwise it gets an answer about a ray origin it never uses.
 
     Winding-agnostic: raw stitched contours come out in either direction, so we
     take the sweep direction from the total and require every step to agree with
@@ -249,8 +294,11 @@ def _is_star_convex(loop: list[Vec2]) -> bool:
     n = len(loop)
     if n < 3:
         return False
-    cx = sum(p[0] for p in loop) / n
-    cy = sum(p[1] for p in loop) / n
+    if center is None:
+        cx = sum(p[0] for p in loop) / n
+        cy = sum(p[1] for p in loop) / n
+    else:
+        cx, cy = center
     deltas = []
     for i in range(n):
         x0, y0 = loop[i][0] - cx, loop[i][1] - cy

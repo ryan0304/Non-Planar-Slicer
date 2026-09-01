@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 
 const BED_X = 235, BED_Y = 235, BED_Z = 160;
 
@@ -188,7 +189,7 @@ const printerGroup = new THREE.Group(); scene.add(printerGroup);
   const pei = beam(0, -0.32, 0, BED_X - 6, 0.6, BED_Y - 6, peiMat);
 }
 
-let pathObj = null, travelObj = null;
+let pathObj = null, travelObj = null, hybridSeamObj = null;
 
 // ---- toolpath bead mesh -----------------------------------------------------
 // The real toolpath renders as one box per extrude segment (InstancedMesh,
@@ -537,7 +538,7 @@ function parseGcode(text) {
   let curFan = 0, minFan = Infinity, maxFan = -Infinity, fanEverOn = false;   // sticky M106/M107 state (0..1)
   const ext = [], extCol = [], trv = [];          // world-space vertex arrays
   const segSpeed = [], segFlow = [];            // per-extrude-segment telemetry
-  const meta = { lineWidth: null, layerHeight: null, nozzle: null, nozzleTemp: null };
+  const meta = { lineWidth: null, layerHeight: null, nozzle: null, nozzleTemp: null, hybridSeamZ: null };
 
   for (let raw of text.split('\n')) {
     const line = raw.trim(); if (!line) continue;
@@ -546,6 +547,9 @@ function parseGcode(text) {
       if ((m = line.match(/line_width=([\d.]+)/))) meta.lineWidth = parseFloat(m[1]);
       if ((m = line.match(/layer_height=([\d.]+)/))) meta.layerHeight = parseFloat(m[1]);
       if ((m = line.match(/nozzle=([\d.]+)/))) meta.nozzle = parseFloat(m[1]);
+      // Emitted once by trident_gcode/hybrid.py at the planar/non-planar
+      // handoff -- see build_hybrid_print()'s marker-comment call.
+      if ((m = line.match(/hybrid: non-planar wall begins here \(z=([\d.]+)\)/))) meta.hybridSeamZ = parseFloat(m[1]);
       continue;
     }
     const up = line.toUpperCase();
@@ -690,6 +694,11 @@ function updateLegend(colorMode, d) {
 function buildGeometry(d) {
   if (pathObj) { scene.remove(pathObj); if (pathMat) pathMat.dispose(); }
   if (travelObj) { scene.remove(travelObj); travelObj.geometry.dispose(); }
+  if (hybridSeamObj) {
+    scene.remove(hybridSeamObj);
+    hybridSeamObj.geometry.dispose(); hybridSeamObj.material.dispose();
+    hybridSeamObj = null;
+  }
 
   const colorMode = document.getElementById('t-colormode').value;   // 'height' | 'overhang' | 'plain'
   updateLegend(colorMode, d);
@@ -783,6 +792,32 @@ function buildGeometry(d) {
   travelObj = new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x74747a, transparent: true, opacity: 0.45 }));
   travelObj.visible = document.getElementById('t-travel').checked;
   scene.add(travelObj);
+
+  // Hybrid planar/non-planar handoff marker (see trident_gcode/hybrid.py's
+  // marker comment and parseGcode()'s hybridSeamZ above). Smallest useful
+  // feedback for v1: one reference plane at the seam height, sized to the
+  // toolpath's own XY footprint rather than the whole bed so it reads as
+  // "here" rather than a full-bed slab. Uses --accent (0x2f6bff) -- never
+  // --ok/--warn/--danger/--accent-purple, all reserved to other subsystems.
+  if (d.meta.hybridSeamZ != null && isFinite(d.minx) && isFinite(d.maxx)) {
+    const cx2 = BED_X / 2, cy2 = BED_Y / 2;
+    const pad = 4; // mm, a little larger than the footprint so the edge is visible
+    const sx = Math.max(d.maxx - d.minx + pad * 2, pad * 2);
+    const sz = Math.max(d.maxy - d.miny + pad * 2, pad * 2);
+    const pgeo = new THREE.PlaneGeometry(sx, sz);
+    const pmat = new THREE.MeshBasicMaterial({
+      color: 0x2f6bff, transparent: true, opacity: 0.16,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    hybridSeamObj = new THREE.Mesh(pgeo, pmat);
+    hybridSeamObj.rotation.x = -Math.PI / 2;   // plane is XY by default; lay it flat (world XZ)
+    hybridSeamObj.position.set(
+      (d.minx + d.maxx) / 2 - cx2,
+      d.meta.hybridSeamZ,
+      cy2 - (d.miny + d.maxy) / 2
+    );
+    scene.add(hybridSeamObj);
+  }
 
   // Init print-process animation: reveal is by instance count (1 per segment).
   animSeg = d.ext.length / 6;
@@ -1554,6 +1589,23 @@ function disposePreviewObjects(keepActiveCageDrag) {
     previewSiteObj.material.dispose();
     previewSiteObj = null;
   }
+  // Imported-STL preview mesh (see "---- imported mesh preview ----" below):
+  // torn down like previewObj/previewSiteObj above on every draft refresh --
+  // but deliberately WITHOUT geometry.dispose()/material.dispose() here.
+  // Those two are cheap to rebuild from scratch every ~100ms redraw (a
+  // wave-profile line strip, a handful of site dots); an imported STL can be
+  // up to 50 MB (MESH_MAX_MB, designer.js) and re-parsing + re-uploading its
+  // GPU buffers on every slider tweak during a drag would stutter exactly
+  // the interaction this feature exists to support. The geometry/material
+  // are cached and reused (see meshBaseGeometry/meshBaseMaterial) until a
+  // genuinely new upload replaces them or a real teardown -- clicking
+  // "Clear mesh", which calls window.clearMeshBasePreview() -- disposes them
+  // for real. showPreview() below re-adds this same Mesh wrapper from the
+  // cached geometry every redraw, so it survives this teardown visually.
+  if (meshPreviewObj) {
+    scene.remove(meshPreviewObj);
+    meshPreviewObj = null;
+  }
   if (previewLabel) previewLabel.style.display = 'none';
   // NOT while a cage handle is being dragged. hideShapeCage() disposes every
   // handle and clears cageActive/__silDragActive as a failsafe, so the
@@ -1745,6 +1797,12 @@ window.showPreview = function (positions) {
   // something to measure.
   syncCanvasChromeForMode();
 
+  // Re-add the imported-STL preview mesh (if one is loaded) from its cached,
+  // already-parsed geometry -- disposePreviewObjects() above just removed
+  // the previous wrapper. No-op when no mesh is loaded (meshBaseGeometry is
+  // null). See "---- imported mesh preview ----" below.
+  _rebuildMeshPreviewObj();
+
   render();
 };
 
@@ -1759,6 +1817,137 @@ window.clearPreview = function () {
   syncCanvasChromeForMode();
   render();
 };
+
+// ---- imported mesh preview (Design tab draft: the user's own uploaded STL) -
+// The parametric draft above (generatePreview/showPreview, preview_math.js)
+// never drew an uploaded mesh at all -- reported as "i couldnt see my file on
+// the bed". This draws the ACTUAL uploaded triangles as a solid THREE.Mesh on
+// the bed, via designer.js's window.setMeshBasePreview(arrayBuffer, opts),
+// called after a successful /api/upload_mesh, on every mesh-scale edit, and
+// whenever the selected printer's bed centre changes (designer.js's
+// refreshMeshBasePreview()). Placement mirrors EXACTLY what the server does
+// for both the mesh-hybrid planar base (trident_gcode/hybrid.py's
+// build_mesh_hybrid_print, "3. Placement" comment) and mesh-texture mode: the
+// scaled mesh's XY bounding-box midpoint centred on the bed, minz dropped to
+// 0. Uses the /api/upload_mesh response's own server-computed `bounds`
+// (designer.js passes boundsMin/boundsMax straight through) rather than a
+// second client-side bbox derivation, which could drift from the server's
+// and lie about where the mesh actually sits.
+//
+// Colour: terracotta, not the draft's own accent blue or --cage's amber
+// (viewer/style.css's reserved-token ledger) -- MESH_COLOR mirrors --mesh in
+// style.css. Keep the two in step.
+const MESH_COLOR = 0xd4622a;
+const stlLoader = new STLLoader();
+let meshBaseGeometry = null;     // parsed once per upload/replace (see disposePreviewObjects's comment on why this is NOT torn down every draft refresh)
+let meshBaseMaterial = null;
+let meshBaseWorldPos = null;     // {x,y,z}, world-space, set by setMeshBasePreview()
+let meshBaseScale = 1;
+let meshBaseSourceBuffer = null; // identity check: same ArrayBuffer -> skip re-parsing
+let meshPreviewObj = null;       // the live Mesh in the scene; rebuilt every draft refresh from the cached geometry above
+
+// designer.js calls this after a successful /api/upload_mesh (with the
+// upload's own raw ArrayBuffer and the response's `bounds`), on every mesh
+// scale-input edit, and whenever the selected printer's bed centre changes.
+// `opts`:
+//   boundsMin/boundsMax  [x,y,z], server-computed, UNSCALED raw mesh bounds
+//   scale        mesh_base_scale / mesh_texture's own `scale` (uniform, from
+//                the mesh's own origin -- mirrors trident_gcode/hybrid.py's
+//                _scaled: v * k, NOT a scale about the bbox centre)
+//   bedCx/bedCy  selected printer's bed centre in PRINTER mm (designer.js's
+//                design.bed_center, the same profile-aware value
+//                preview_math.js's BED_CX/BED_CY carry -- NOT this file's
+//                own hardcoded BED_X/BED_Y, which stays a fixed 235x235
+//                regardless of printer; see the derivation below)
+window.setMeshBasePreview = function (arrayBuffer, opts) {
+  if (!arrayBuffer || !opts || !opts.boundsMin || !opts.boundsMax) return;
+  if (arrayBuffer !== meshBaseSourceBuffer) {
+    let geom;
+    try { geom = stlLoader.parse(arrayBuffer); }
+    catch (e) { return; } // malformed buffer -- /api/upload_mesh already validated the file server-side
+    // Bake the printer->world axis remap into the geometry ONCE (see this
+    // file's "---- bed ----" comment above): rotating -90deg about X sends a
+    // raw STL vertex (x,y,z) -> (x, z, -y) -- printer X -> world X, printer
+    // Z -> world Y (up), printer Y -> world Z (NEGATED, the same negation
+    // that comment and parseGcode() both require to keep the basis
+    // right-handed, or a chiral shape like an xy_twist would preview
+    // mirrored). Re-baking on every scale/bed-centre update would be
+    // pointless -- neither changes the triangle data, only the uniform
+    // mesh.scale/position applied below.
+    geom.rotateX(-Math.PI / 2);
+    if (meshBaseGeometry) meshBaseGeometry.dispose();
+    meshBaseGeometry = geom;
+    meshBaseSourceBuffer = arrayBuffer;
+    if (!meshBaseMaterial) {
+      meshBaseMaterial = new THREE.MeshStandardMaterial({
+        color: MESH_COLOR, roughness: 0.85, metalness: 0.05,
+        side: THREE.DoubleSide, flatShading: true
+      });
+    }
+  }
+
+  const k = (typeof opts.scale === 'number' && isFinite(opts.scale) && opts.scale > 0) ? opts.scale : 1.0;
+  const bMin = opts.boundsMin, bMax = opts.boundsMax;
+  // Scaled bounding-box midpoint and dropped minz -- build_mesh_hybrid_print's
+  // own "1. Uniform scale" then "3. Placement" order (scale first, from the
+  // mesh's own origin, THEN measure the midpoint of the now-scaled bounds).
+  const mx = k * (bMin[0] + bMax[0]) / 2;
+  const my = k * (bMin[1] + bMax[1]) / 2;
+  const minzScaled = k * bMin[2];
+  const bedCx = (typeof opts.bedCx === 'number' && isFinite(opts.bedCx)) ? opts.bedCx : 117.5;
+  const bedCy = (typeof opts.bedCy === 'number' && isFinite(opts.bedCy)) ? opts.bedCy : 117.5;
+
+  // 1. Placement, mirroring hybrid.py's own dx/dy/dz exactly: translate so
+  //    the scaled bbox midpoint sits at the SELECTED printer's bed centre,
+  //    and minz -> 0.
+  const printerShiftX = bedCx - mx, printerShiftY = bedCy - my, printerShiftZ = -minzScaled;
+  // 2. Printer -> world, applied to that shift (this file's own "---- bed
+  //    ----" comment: origin shifted so bed centre sits at world origin,
+  //    i.e. world = printer - bedCentre; Z axis negated). bedCx/bedCy cancel
+  //    out of the result by construction -- step 1 moves the mesh TO this
+  //    same bed centre, step 2 moves the WORLD origin back to it -- so the
+  //    mesh's own bbox midpoint always lands at world (0, *, 0), exactly
+  //    like the parametric draft (preview_math.js's generatePreview, which
+  //    is ALSO unconditionally centred at world origin), whichever printer
+  //    is selected. Threaded through explicitly rather than pre-cancelled to
+  //    a bare -mx/my so a future change to either bed-centring rule stays
+  //    visible here instead of silently drifting the two apart again.
+  meshBaseScale = k;
+  meshBaseWorldPos = {
+    x: printerShiftX - bedCx,
+    y: printerShiftZ,
+    z: bedCy - printerShiftY
+  };
+
+  _rebuildMeshPreviewObj();
+  render();
+};
+
+// True teardown -- disposes the cached geometry/material for real, unlike
+// disposePreviewObjects()'s per-draft-refresh removal above. Called only by
+// designer.js's "Clear mesh" button handler.
+window.clearMeshBasePreview = function () {
+  if (meshPreviewObj) { scene.remove(meshPreviewObj); meshPreviewObj = null; }
+  if (meshBaseGeometry) { meshBaseGeometry.dispose(); meshBaseGeometry = null; }
+  if (meshBaseMaterial) { meshBaseMaterial.dispose(); meshBaseMaterial = null; }
+  meshBaseWorldPos = null;
+  meshBaseScale = 1;
+  meshBaseSourceBuffer = null;
+  render();
+};
+
+// Rebuilds the live Mesh wrapper from the cached geometry/material/placement
+// -- called by setMeshBasePreview() above and by showPreview() below (after
+// disposePreviewObjects() has just torn the previous wrapper down). A no-op
+// whenever no mesh is loaded.
+function _rebuildMeshPreviewObj() {
+  if (meshPreviewObj) { scene.remove(meshPreviewObj); meshPreviewObj = null; }
+  if (!meshBaseGeometry || !meshBaseMaterial || !meshBaseWorldPos) return;
+  meshPreviewObj = new THREE.Mesh(meshBaseGeometry, meshBaseMaterial);
+  meshPreviewObj.scale.setScalar(meshBaseScale);
+  meshPreviewObj.position.set(meshBaseWorldPos.x, meshBaseWorldPos.y, meshBaseWorldPos.z);
+  scene.add(meshPreviewObj);
+}
 
 // ---- shape cage (3D, draggable grid of points on the draft preview) --------
 // A full N-row x M-col cage of orange spheres wrapped around the model that

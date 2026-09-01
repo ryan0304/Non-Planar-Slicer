@@ -3,6 +3,11 @@ __pycache__/
 *.gcode
 !examples/*.gcode
 !regression_ref/*.gcode
+# Test fixtures are source, not output: tools/check_regression.py,
+# test_orca_gcode_parser.py and test_mesh_hybrid.py all read these, so without
+# this exception a fresh clone gets a test suite that fails on a missing
+# fixture rather than a real regression.
+!tools/fixtures/**/*.gcode
 .venv/
 venv/
 .DS_Store

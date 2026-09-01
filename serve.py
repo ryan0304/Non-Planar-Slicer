@@ -60,6 +60,10 @@ from trident_gcode.paths import PathPoint
 from trident_gcode.paths import _R_PATTERNS, _fade_envelope, R_PATTERN_NAMES, cage_scale
 from trident_gcode.paths import zone_weight, zone_twist_integral, _r_pattern_fn, _r_coords
 from trident_gcode.stl_export import contours_to_mesh, write_binary_stl
+from trident_gcode.orca import orca_binary_path
+from trident_gcode.orca_slice import (OrcaSliceError, _ALLOWED_BRIM_TYPES,
+                                      _ALLOWED_INFILL_PATTERNS)
+from trident_gcode.hybrid import build_hybrid_print, build_mesh_hybrid_print
 
 DEFAULT_PRINTER_KEY = "trident"
 
@@ -777,6 +781,186 @@ def _parse_zone_overrides(raw, layer_height, height) -> tuple[list[ZoneOverride]
     return zones, notes
 
 
+def _parse_hybrid_params(body, height):
+    """Parse the hybrid planar-base request fields. ``hybrid_base_height``
+    of 0 (the default) means the feature is off -- matches
+    base_layers/brim/skirt's existing "0 = off" numeric convention rather
+    than a separate boolean flag. Returns None when off, else a dict of
+    server-clamped fields ready for build_hybrid_print().
+
+    Every numeric field is clamped here, at least as strictly as any UI
+    control -- the client is never trusted. hybrid_infill_pattern is
+    checked against orca_slice.py's own allow-list (imported, not
+    duplicated) so the two can never drift apart.
+    """
+    raw_height = float(body.get("hybrid_base_height", 0) or 0)
+    hybrid_base_height = max(0.0, min(raw_height, height))
+    if hybrid_base_height <= 0.0:
+        return None
+    wall_count = max(1, min(int(body.get("hybrid_wall_count", 3) or 3), 8))
+    infill_density = max(0.0, min(float(body.get("hybrid_infill_density", 0.15) or 0.0), 1.0))
+    infill_pattern = str(body.get("hybrid_infill_pattern") or "grid")
+    if infill_pattern not in _ALLOWED_INFILL_PATTERNS:
+        raise ValueError(
+            "Unknown hybrid infill pattern '%s'; must be one of %s"
+            % (infill_pattern, sorted(_ALLOWED_INFILL_PATTERNS)))
+    return {
+        "hybrid_base_height": hybrid_base_height,
+        "wall_count": wall_count,
+        "infill_density": infill_density,
+        "infill_pattern": infill_pattern,
+    }
+
+
+def _parse_mesh_hybrid_params(body, height):
+    """Parse the mesh-hybrid request fields. ``mesh_base_id`` absent (the
+    default) means the feature is off -- there is no meaningful "0" value
+    for an id string, so presence (not a numeric threshold) is the switch,
+    unlike ``_parse_hybrid_params``'s ``hybrid_base_height``. Returns None
+    when off, else a dict of server-clamped fields ready for
+    build_mesh_hybrid_print().
+
+    Deliberately named ``mesh_base_id``, not ``mesh_id`` -- mesh_texture
+    mode's own request field -- so a request can never ambiguously mean
+    both "drape a texture over this mesh" and "use this mesh as a hybrid
+    planar base".
+
+    Every numeric field is clamped here, at least as strictly as any UI
+    control -- the client is never trusted. mesh_base_infill_pattern is
+    checked against orca_slice.py's own allow-list (imported, not
+    duplicated) so the two can never drift apart.
+
+    Non-finite guards are NOT satisfied by clamping (CLAUDE.md): every
+    comparison against NaN is False, so max(0.0, min(x, hi)) lets a NaN
+    straight through instead of clamping it, and json.loads accepts the
+    bare tokens NaN/Infinity from a request body. Every numeric field here
+    is explicitly checked with math.isfinite and REJECTED (not clamped) if
+    it fails, mirroring _parse_nozzle_temp's own guard.
+    """
+    mesh_base_id = body.get("mesh_base_id")
+    if not mesh_base_id:
+        return None
+
+    def _finite_float(name, raw, default):
+        if raw is None or raw == "":
+            raw = default
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError("%s must be a finite number, got %r" % (name, raw))
+        if not math.isfinite(val):
+            raise ValueError(
+                "%s must be a finite number, got %r -- a non-finite value "
+                "passes every comparison downstream instead of tripping "
+                "it, so it is rejected here rather than clamped."
+                % (name, raw))
+        return val
+
+    scale = _finite_float("mesh_base_scale", body.get("mesh_base_scale"), 1.0)
+    if scale <= 0.0:
+        raise ValueError("mesh_base_scale must be positive, got %r" % (scale,))
+
+    blend_height = _finite_float(
+        "mesh_base_blend_height", body.get("mesh_base_blend_height"), 0.0)
+    if blend_height < 0.0:
+        raise ValueError(
+            "mesh_base_blend_height must not be negative, got %r"
+            % (blend_height,))
+    blend_height = min(blend_height, height)
+
+    raw_wall_count = _finite_float(
+        "mesh_base_wall_count", body.get("mesh_base_wall_count"), 3)
+    wall_count = max(1, min(int(raw_wall_count), 8))
+
+    raw_density = _finite_float(
+        "mesh_base_infill_density", body.get("mesh_base_infill_density"), 0.15)
+    infill_density = max(0.0, min(raw_density, 1.0))
+
+    infill_pattern = str(body.get("mesh_base_infill_pattern") or "grid")
+    if infill_pattern not in _ALLOWED_INFILL_PATTERNS:
+        raise ValueError(
+            "Unknown mesh hybrid infill pattern '%s'; must be one of %s"
+            % (infill_pattern, sorted(_ALLOWED_INFILL_PATTERNS)))
+
+    # Solid skins. The top default is 3, NOT the 0 that build_process_json
+    # still defaults to for the parametric path: the non-planar wall is a
+    # single bead tracing one outline, so with no top shell everything inside
+    # that outline is left as exposed sparse infill -- visible as "the planar
+    # base is missing its top layer" on any mesh wider than the wall.
+    # 8 is the same ceiling wall_count uses; more is a modelling mistake, not
+    # a print setting.
+    raw_top = _finite_float(
+        "mesh_base_top_layers", body.get("mesh_base_top_layers"), 3)
+    top_shell_layers = max(0, min(int(raw_top), 8))
+
+    raw_bottom = _finite_float(
+        "mesh_base_bottom_layers", body.get("mesh_base_bottom_layers"), 3)
+    bottom_shell_layers = max(0, min(int(raw_bottom), 8))
+
+    # --- Quality / Speed / Adhesion / Support -----------------------------
+    # Every one of these is OPTIONAL: absent means None, which
+    # build_process_json reads as "keep the derived default", so an untouched
+    # control cannot change today's output. Speeds are re-clamped there against
+    # profile.max_velocity -- this layer rejects non-finite values and obvious
+    # nonsense, and build_process_json owns the machine ceiling. Two layers,
+    # deliberately: serve.py must be at least as strict as any UI, and
+    # build_process_json must be at least as strict as any caller.
+    overrides = {}
+
+    def _opt_speed(field):
+        raw = body.get(field)
+        if raw is None or raw == "":
+            return None
+        val = _finite_float(field, raw, None)
+        if val <= 0.0:
+            raise ValueError("%s must be positive, got %r" % (field, val))
+        return val
+
+    for field, key in (
+        ("mesh_base_outer_wall_speed", "outer_wall_speed"),
+        ("mesh_base_inner_wall_speed", "inner_wall_speed"),
+        ("mesh_base_infill_speed", "infill_speed"),
+        ("mesh_base_travel_speed", "travel_speed"),
+        ("mesh_base_first_layer_speed", "initial_layer_speed"),
+    ):
+        val = _opt_speed(field)
+        if val is not None:
+            overrides[key] = val
+
+    brim_type = body.get("mesh_base_brim_type")
+    if brim_type:
+        brim_type = str(brim_type)
+        if brim_type not in _ALLOWED_BRIM_TYPES:
+            raise ValueError(
+                "Unknown mesh hybrid brim type '%s'; must be one of %s"
+                % (brim_type, sorted(_ALLOWED_BRIM_TYPES)))
+        overrides["brim_type"] = brim_type
+
+    raw_brim_w = body.get("mesh_base_brim_width")
+    if raw_brim_w is not None and raw_brim_w != "":
+        bw = _finite_float("mesh_base_brim_width", raw_brim_w, 0.0)
+        overrides["brim_width"] = max(0.0, min(bw, 100.0))
+
+    if body.get("mesh_base_enable_support"):
+        overrides["enable_support"] = True
+    raw_angle = body.get("mesh_base_support_threshold")
+    if raw_angle is not None and raw_angle != "":
+        ang = _finite_float("mesh_base_support_threshold", raw_angle, 30)
+        overrides["support_threshold_angle"] = max(0, min(int(ang), 90))
+
+    return {
+        "mesh_base_id": mesh_base_id,
+        "scale": scale,
+        "blend_height": blend_height,
+        "wall_count": wall_count,
+        "infill_density": infill_density,
+        "infill_pattern": infill_pattern,
+        "top_shell_layers": top_shell_layers,
+        "bottom_shell_layers": bottom_shell_layers,
+        "process_overrides": overrides,
+    }
+
+
 def _parse_overhang_fan(body):
     """Fan min/max bounds (0..1 fractions) -- always concrete, never None. The
     fan runs between these two speeds, selected by wall lean (see
@@ -1143,6 +1327,75 @@ def generate_design(body):
     fan_overhang_min, fan_overhang_max = _parse_overhang_fan(body)
     fan_off_layers = max(0, min(int(body.get("fan_off_layers", 0) or 0), 50))
 
+    # Hybrid planar base (real walls + infill, sliced by OrcaSlicer as an
+    # external subprocess) + this app's own non-planar spiral above it.
+    # Resolved/validated here, fail-fast, before any of the wall-generation
+    # work below runs a single STL/subprocess step for it.
+    #
+    # Two mutually exclusive planar-base sources: hybrid_params (a
+    # silhouette extrusion of the parametric shape) and mesh_hybrid_params
+    # (the user's own uploaded mesh, keyed by mesh_base_id -- deliberately a
+    # different field than mesh_texture mode's own mesh_id, so the two can
+    # never collide). Both eventually cross Orca's trust boundary through
+    # the same _slice_replay_and_seam (hybrid.py), so neither gets a weaker
+    # check than the other.
+    hybrid_params = _parse_hybrid_params(body, height)
+    mesh_hybrid_params = _parse_mesh_hybrid_params(body, height)
+    if hybrid_params is not None and mesh_hybrid_params is not None:
+        raise ValueError(
+            "hybrid_base_height and mesh_base_id both requested a planar "
+            "base for this print, but they are two different bases (a "
+            "silhouette extrusion of the parametric shape vs. your own "
+            "imported mesh) -- honouring one silently would print "
+            "something you did not ask for. Set only one."
+        )
+    orca_path = None
+    if hybrid_params is not None or mesh_hybrid_params is not None:
+        orca_path = orca_binary_path()
+        if orca_path is None:
+            raise ValueError(
+                "Hybrid planar base requires a local OrcaSlicer install. "
+                "Install it (https://github.com/OrcaSlicer/OrcaSlicer) and "
+                "put it on PATH, or set TRIDENT_ORCA_PATH to its full path. "
+                "Not available on a hosted deployment."
+            )
+
+    # Mesh-hybrid pre-flight: cache lookup and a conservative LOWER bound on
+    # total print height, both before any STL/subprocess work starts.
+    #
+    # Mirrors the discipline of the whole-object "height - amp_cap > z_max"
+    # check above -- a deliberately loose bound that can never reject a
+    # design build_mesh_hybrid_print's own exact total_height check would
+    # have accepted -- but folds in the mesh's own height too, since for
+    # this branch the object is mesh_height + height, not height alone.
+    mesh_hybrid_entry = None
+    if mesh_hybrid_params is not None:
+        mesh_hybrid_entry = _mesh_cache.get(mesh_hybrid_params["mesh_base_id"])
+        if mesh_hybrid_entry is None:
+            raise KeyError(
+                "mesh_base_id not found (upload may have expired) - "
+                "re-upload the STL")
+        _mb_tris = mesh_hybrid_entry["tris"]
+        if not _mb_tris:
+            raise ValueError(
+                "mesh_base_id refers to an empty mesh (no triangles) - "
+                "re-upload the STL")
+        _mb_min, _mb_max = mesh_bounds(_mb_tris)
+        _mesh_height_est = (_mb_max[2] - _mb_min[2]) * mesh_hybrid_params["scale"]
+        # build_mesh_hybrid_print snaps the achieved base height to a whole
+        # number of layers (round(), floored at 2), which can differ from
+        # this raw estimate by up to half a layer either way -- subtracting
+        # that margin keeps this bound from ever rejecting a design the
+        # real, layer-snapped check would have accepted.
+        _mesh_lower_bound_top = (
+            (_mesh_height_est - layer_height * 0.5) + height - _amp_cap)
+        if _mesh_lower_bound_top > profile.z_max:
+            raise ValueError(
+                "Print height (mesh base ~%.1f mm + non-planar wall %.1f "
+                "mm) exceeds Z max %.1f. Reduce height, scale the mesh "
+                "down, or choose a printer with more Z clearance."
+                % (_mesh_height_est, height, profile.z_max))
+
     point_mask, point_protection, point_ffd, point_smooth, point_radial_push = (
         _parse_point_edit_specs(body))
 
@@ -1151,6 +1404,9 @@ def generate_design(body):
     loop_base_issue = None
     zone_scope_issue = None
     zone_empty_issue = None
+    hybrid_scope_issue = None
+    mesh_hybrid_scope_issue = None
+    mesh_hybrid_overhang_issue = None
     if body.get("zone_overrides") and not zone_specs:
         zone_empty_issue = (
             "zone overrides were requested but none were valid or active - "
@@ -1203,6 +1459,14 @@ def generate_design(body):
             loop_base_issue = (
                 "loop fabric anchors itself with its own solid cuff, so the "
                 "requested " + ", ".join(requested) + " were not printed.")
+        if hybrid_params is not None:
+            hybrid_scope_issue = (
+                "a hybrid planar base only applies to the parametric wall "
+                "(not loop fabric) - ignored for this design.")
+        if mesh_hybrid_params is not None:
+            mesh_hybrid_scope_issue = (
+                "a mesh planar base only applies to the parametric wall "
+                "(not loop fabric) - ignored for this design.")
         report = build_loop_fabric(
             writer, shape=shape, height=height, spec=loop_spec,
             radius_envelope=radius_fn,
@@ -1212,6 +1476,101 @@ def generate_design(body):
             cuff_lh=layer_height,
             fan_speed=fan_overhang_min,
         )
+    elif hybrid_params is not None:
+        # build_profile_spiral (the wall generator hybrid mode uses) has no
+        # Zone Override or Point Edit Modifier support -- those are
+        # continuous_spiral.py/spiral_path()-only subsystems. Say so, the
+        # same way loop fabric mode already does above, rather than letting
+        # a request that set them look silently applied.
+        if zone_specs:
+            zone_scope_issue = (
+                "zone overrides only apply to the parametric wall (not a "
+                "hybrid planar base) - ignored for this design.")
+        if _point_edit_active(body):
+            point_edit_issue = (
+                "point edit modifiers only apply to the parametric wall "
+                "(not a hybrid planar base) - ignored for this design.")
+        report = build_hybrid_print(
+            writer,
+            shape_fn=shape, radius=radius, height=height,
+            transition_height=hybrid_params["hybrid_base_height"],
+            layer_height=layer_height, points_per_turn=240,
+            wall_count=hybrid_params["wall_count"],
+            infill_density=hybrid_params["infill_density"],
+            infill_pattern=hybrid_params["infill_pattern"],
+            orca_path=orca_path, filament_name=filament,
+            radius_envelope=radius_fn, amp_envelope=amp_fn,
+            z_amp=1.0, z_waves=z_waves, z_twist_turns=z_twist,
+            r_pattern=pattern, r_amp=pattern_amp, r_waves=pattern_waves,
+            r_bands=pattern_bands, r_twist_turns=pattern_twist,
+            r_phase=pattern_phase, r_fade_in=pattern_fade_in,
+            r_fade_out=pattern_fade_out, r_alternate=pattern_alternate,
+            xy_twist_turns=xy_twist, cage=cage, ovality=ovality,
+            spine_offset=spine_offset,
+            overhang_flow_k=overhang_flow_k,
+            fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
+            fan_off_layers=fan_off_layers, width_callback=width_fn,
+        )
+    elif mesh_hybrid_params is not None:
+        # Same scope as the parametric hybrid branch above: build_profile_spiral
+        # (which this mesh base's own upper wall also uses) has no Zone
+        # Override or Point Edit Modifier support -- those are
+        # continuous_spiral.py/spiral_path()-only subsystems.
+        if zone_specs:
+            zone_scope_issue = (
+                "zone overrides only apply to the parametric wall (not a "
+                "mesh planar base) - ignored for this design.")
+        if _point_edit_active(body):
+            point_edit_issue = (
+                "point edit modifiers only apply to the parametric wall "
+                "(not a mesh planar base) - ignored for this design.")
+        report = build_mesh_hybrid_print(
+            writer,
+            tris=mesh_hybrid_entry["tris"],
+            scale=mesh_hybrid_params["scale"],
+            layer_height=layer_height, points_per_turn=240,
+            shape_fn=shape, radius=radius, height=height,
+            blend_height=mesh_hybrid_params["blend_height"],
+            wall_count=mesh_hybrid_params["wall_count"],
+            infill_density=mesh_hybrid_params["infill_density"],
+            infill_pattern=mesh_hybrid_params["infill_pattern"],
+            top_shell_layers=mesh_hybrid_params["top_shell_layers"],
+            bottom_shell_layers=mesh_hybrid_params["bottom_shell_layers"],
+            process_overrides=mesh_hybrid_params["process_overrides"],
+            orca_path=orca_path, filament_name=filament,
+            radius_envelope=radius_fn, amp_envelope=amp_fn,
+            z_amp=1.0, z_waves=z_waves, z_twist_turns=z_twist,
+            r_pattern=pattern, r_amp=pattern_amp, r_waves=pattern_waves,
+            r_bands=pattern_bands, r_twist_turns=pattern_twist,
+            r_phase=pattern_phase, r_fade_in=pattern_fade_in,
+            r_fade_out=pattern_fade_out, r_alternate=pattern_alternate,
+            xy_twist_turns=xy_twist, cage=cage, ovality=ovality,
+            spine_offset=spine_offset,
+            overhang_flow_k=overhang_flow_k,
+            fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
+            fan_off_layers=fan_off_layers, width_callback=width_fn,
+        )
+        # The printable-overhang check blend_stack() deliberately does NOT
+        # apply itself (CLAUDE.md: no machine limit may be a module constant
+        # -- the ceiling belongs on the PrinterProfile; see
+        # build_mesh_hybrid_print's own "Overhang" docstring section).
+        # build_mesh_hybrid_print surfaces the blend's steepest layer-to-
+        # layer step as DATA (blend_max_slope, horizontal per vertical);
+        # compare it here against this machine's own slope_ceiling(),
+        # mirroring the peak-wall-slope quality check below -- advisory
+        # only, never fatal (see how issues_extra is built and returned).
+        _blend_slope = report.get("blend_max_slope")
+        _blend_slope_limit = slope_ceiling(profile)
+        if _blend_slope is not None and _blend_slope > _blend_slope_limit + 1e-9:
+            mesh_hybrid_overhang_issue = (
+                "the mesh-to-wall blend needs an overhang up to %.1f deg "
+                "from vertical (slope %.2f, %.3f mm horizontal step over a "
+                "%.2f mm layer) - exceeds this printer's printable ~%.2f "
+                "slope; increase mesh_base_blend_height to ease the "
+                "transition." % (
+                    report.get("blend_max_overhang_deg", 0.0), _blend_slope,
+                    report.get("blend_max_step_mm", 0.0), layer_height,
+                    _blend_slope_limit))
     else:
         report = build_continuous_spiral(
             writer, spec, shape=shape,
@@ -1278,6 +1637,12 @@ def generate_design(body):
         issues_extra.append(zone_scope_issue)
     if zone_empty_issue:
         issues_extra.append(zone_empty_issue)
+    if hybrid_scope_issue:
+        issues_extra.append(hybrid_scope_issue)
+    if mesh_hybrid_scope_issue:
+        issues_extra.append(mesh_hybrid_scope_issue)
+    if mesh_hybrid_overhang_issue:
+        issues_extra.append(mesh_hybrid_overhang_issue)
     for note in zone_notes:
         issues_extra.append("zone override: " + note)
     stats = {
@@ -1296,6 +1661,8 @@ def generate_design(body):
         "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
         "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
         "zones": len(zone_specs) if loop_spec is None else 0,
+        "hybrid_achieved_base_height_mm": report.get("achieved_base_height_mm"),
+        "hybrid_base_layers": report.get("orca_base_layers"),
     }
 
     filename = "design_%s_%dmm.gcode" % (_clean_shape(shape_name), int(round(height)))
@@ -2307,6 +2674,14 @@ def _printer_entry_json(key, profile, custom, meta=None):
         # pass a file at 20 mm/s on a machine declaring 10. Served from the
         # profile so the client never carries a ceiling of its own.
         "max_z_velocity": float(profile.max_z_velocity),
+        # max_velocity: the XY ceiling, served for exactly the same reason as
+        # max_z_velocity above. The Planar base panel's speed inputs (outer
+        # wall / inner wall / infill / travel / first layer) are clamped to it
+        # server-side in _parse_mesh_hybrid_params -> build_process_json; the
+        # client needs the number so its own "max" attributes match, rather
+        # than carrying a hardcoded speed ceiling that would be wrong on every
+        # printer but the one it was written for.
+        "max_velocity": float(profile.max_velocity),
         # quality_slope_max: same reasoning as max_z_velocity above -- this
         # used to be QUALITY_SLOPE_LIMIT, a bare 0.25 baked into serve.py and
         # applied to every printer regardless of what it actually declared.
@@ -2589,6 +2964,17 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == "/api/mesh_profile":
             self._handle_mesh_profile()
+            return
+        if path == "/api/orca_status":
+            # Read-only capability probe so the viewer can show hybrid
+            # planar-base controls as enabled/disabled up front, rather than
+            # letting a user configure a hybrid print and only discover
+            # OrcaSlicer isn't installed after clicking Generate.
+            try:
+                path_found = orca_binary_path()
+            except Exception:
+                path_found = None
+            self._send_json({"available": path_found is not None, "path": path_found})
             return
         return super().do_GET()
 

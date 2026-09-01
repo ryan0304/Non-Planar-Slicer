@@ -196,6 +196,34 @@
     spine_mm: 0, spine_deg: 0, ovality: 0,
     base_style: "spiral", skirt: 0,
     bottom: "solid",
+    hybrid_base_height: 0, hybrid_wall_count: 3, hybrid_infill_density: 0.15,
+    hybrid_infill_pattern: "grid",
+    // Mesh-hybrid planar base (Import tab): a DIFFERENT planar-base source
+    // from hybrid_* above (a silhouette extrusion of the parametric shape)
+    // -- this one uses the user's own uploaded STL, keyed server-side by
+    // mesh_base_id, and serve.py rejects a request that sends both (see
+    // buildGenerateBody's meshBaseActive gating). "planar_base" is the
+    // spec'd default the moment an STL loads; a design with no mesh loaded
+    // simply never reads these fields.
+    mesh_base_mode: "planar_base", mesh_base_blend_height: 0,
+    mesh_base_wall_count: 3, mesh_base_infill_density: 0.15,
+    mesh_base_infill_pattern: "grid",
+    // Solid top/bottom cap layers for the mesh planar base (right-hand
+    // Planar base bar). Fixes a real bug: with 0 top layers the base's
+    // interior was left as exposed sparse infill instead of a solid cap --
+    // see the info tooltip on #d-meshbase-toplayers in index.html.
+    mesh_base_top_layers: 3, mesh_base_bottom_layers: 3,
+    // Optional mesh-hybrid planar base overrides (right-hand Speed/Adhesion/
+    // Support sections). Every one of these mirrors serve.py's own "absent
+    // means keep the OrcaSlicer-derived default" contract (_parse_mesh_
+    // hybrid_params): null/false/"" here means the field is left out of the
+    // /api/generate body entirely (see buildGenerateBody below), NOT sent as
+    // 0/""/false -- an untouched control must not change today's output.
+    mesh_base_outer_wall_speed: null, mesh_base_inner_wall_speed: null,
+    mesh_base_infill_speed: null, mesh_base_travel_speed: null,
+    mesh_base_first_layer_speed: null,
+    mesh_base_brim_type: '', mesh_base_brim_width: null,
+    mesh_base_enable_support: false, mesh_base_support_threshold: null,
     star_points: 5, star_depth: 0.35,
     print_speed: 40, filament: "", line_width: null, nozzle_temp: null, bed_temp: null,
     pattern: "", pattern_amp: 1.0, pattern_waves: 12,
@@ -890,6 +918,17 @@
       // panel's .active class -- viewer.js re-syncs it from here.
       if(window.__syncCanvasChrome) window.__syncCanvasChrome();
       else if(window.__measureAppMode) window.__measureAppMode();
+      // The right-hand Planar base bar (#planar-panel) lives outside
+      // #mode-design, so it does not get hidden by the .active toggle above
+      // like the rest of the design controls -- refreshShapeRows() is its
+      // single source of truth (see its own comment) and is mode-aware, so
+      // re-running it here re-syncs the bar for both directions of this
+      // switch. Guarded by typeof: refreshShapeRows is a function declaration
+      // hoisted for the whole file, so this is safe even on the very first
+      // activateMode('design') call at startup, before its own definition is
+      // textually reached -- same hoisting this codebase already relies on
+      // for e.g. updateZoneTwistCautions above in refreshShapeRows itself.
+      if(typeof refreshShapeRows === 'function') refreshShapeRows();
       if(name === 'viewer'){
         // Viewing the generated G-code: drop the live blue draft so the
         // rainbow toolpath is unobstructed. Also cancel any in-flight
@@ -1075,6 +1114,25 @@
   // #machine-bar, not a collapsible group (see B.1 in the machine-limits spec).
   registerSection('printstats', document.getElementById('sec-head-printstats'), document.getElementById('sec-body-printstats'), true);
   registerSection('display', document.getElementById('sec-head-display'), document.getElementById('sec-body-display'), true);
+  // Right-hand Planar base bar (#planar-panel): same collapsible-heading
+  // treatment as every other section above, so it reads as part of the same
+  // system rather than a bolted-on extra. Its own show/hide (mesh loaded AND
+  // in planar-base mode, see refreshShapeRows) is independent of and sits
+  // above this open/closed state -- collapsing just tucks its rows away
+  // while the bar itself stays visible. Split into six peer sections
+  // (Shell/Infill/Seam blend/Speed/Adhesion/Support) instead of one big
+  // "Planar base" section now that it holds ~15 controls -- the panel's own
+  // "Planar base (OrcaSlicer)" label above them is a plain, non-collapsible
+  // h3 (see index.html), not registered here. Speed/Adhesion/Support default
+  // CLOSED (optional, advanced overrides -- the untouched-control-changes-
+  // nothing fields); Shell/Infill/Seam default OPEN, same as the original
+  // single section did, since they were already visible before this split.
+  registerSection('mb-shell', document.getElementById('sec-head-mbshell'), document.getElementById('sec-body-mbshell'), true);
+  registerSection('mb-infill', document.getElementById('sec-head-mbinfill'), document.getElementById('sec-body-mbinfill'), true);
+  registerSection('mb-seam', document.getElementById('sec-head-mbseam'), document.getElementById('sec-body-mbseam'), true);
+  registerSection('mb-speed', document.getElementById('sec-head-mbspeed'), document.getElementById('sec-body-mbspeed'), false);
+  registerSection('mb-adhesion', document.getElementById('sec-head-mbadhesion'), document.getElementById('sec-body-mbadhesion'), false);
+  registerSection('mb-support', document.getElementById('sec-head-mbsupport'), document.getElementById('sec-body-mbsupport'), false);
 
   // ---- hint-density toggle --------------------------------------------------
   // Every .hint block defaults visible -- hiding them is opt-in and
@@ -1476,6 +1534,14 @@
       name: (meta && meta.name) || design.printer,
       max_z_velocity: (meta && typeof meta.max_z_velocity === 'number' && isFinite(meta.max_z_velocity))
         ? meta.max_z_velocity : 10.0, // conservative default, matches printer_validate.py's unknown-limit fallback
+      // XY ceiling for the Planar base panel's speed inputs. Same contract as
+      // max_z_velocity: served per-printer so no speed ceiling is hardcoded
+      // here. null (not a number) when the server did not send one -- callers
+      // must then leave `max` unset rather than invent a figure, because a
+      // wrong ceiling is worse than none: the server clamp stays authoritative
+      // either way.
+      max_velocity: (meta && typeof meta.max_velocity === 'number' && isFinite(meta.max_velocity))
+        ? meta.max_velocity : null,
       // Same contract, same funnel, for the wave-slope ceiling: designer.js
       // used to hardcode the Trident's own 0.25 for every printer (see
       // SLOPE_LIMIT_FALLBACK's comment above for why that number in
@@ -1484,6 +1550,11 @@
       // /api/printers entry a few lines above.
       quality_slope_max: activeSlopeLimit()
     };
+    // Push the new XY ceiling onto the Planar base panel's speed inputs. Runs
+    // here, inside the one function every printer switch and the initial
+    // /api/printers load both funnel through, so the inputs' own "max" can
+    // never drift from whichever printer is actually selected.
+    syncPlanarSpeedMax();
 
     return changed;
   }
@@ -1725,6 +1796,10 @@
     if(PRINTER_BEDS[design.printer]){
       design.bed_center = [PRINTER_BEDS[design.printer][0]/2, PRINTER_BEDS[design.printer][1]/2];
     }
+    // The uploaded mesh (if any) is drawn centred on THIS bed -- a printer
+    // switch moves the bed centre, so redraw it at the new position. No-op
+    // when no mesh is loaded.
+    if(typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
     var changed = applyPrinterCaps();
     updatePrinterMeta();
     updateMachineSummary();
@@ -1802,6 +1877,7 @@
         window.setPreviewBedSize(PRINTER_BEDS[key][0], PRINTER_BEDS[key][1]);
       }
       if(PRINTER_BEDS[key]) design.bed_center = [PRINTER_BEDS[key][0]/2, PRINTER_BEDS[key][1]/2];
+      if(typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
       applyPrinterCaps();
       updatePrinterMeta();
       updateMachineSummary();
@@ -2685,6 +2761,71 @@
     var o = famSel.options[famSel.selectedIndex];
     famSel.title = o ? o.textContent : '';
   }
+
+  // ---- hybrid planar base capability probe --------------------------------
+  // Read-only, no request body: lets the panel show the hybrid controls as
+  // disabled up front (with an explanation) rather than letting a user
+  // configure a hybrid print and only discover OrcaSlicer isn't installed
+  // after clicking Generate.
+  (function(){
+    var ids = ['d-hybrid-height', 'd-hybrid-walls', 'd-hybrid-infill', 'd-hybrid-pattern'];
+    var hintEl = document.getElementById('hybrid-orca-hint');
+    apiFetch('/api/orca_status').then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.available) return;
+      ids.forEach(function(id){
+        var el = document.getElementById(id);
+        if(el) el.disabled = true;
+      });
+      if(hintEl) hintEl.style.display = '';
+    }).catch(function(){
+      // Network hiccup or an old server without this endpoint: fail open
+      // (leave the controls enabled) rather than hiding a real capability --
+      // Generate itself still gives a clear error if Orca truly isn't there.
+    });
+  })();
+
+  // ---- mesh-hybrid planar base capability probe ---------------------------
+  // Same reasoning and pattern as the hybrid planar base probe just above,
+  // for the Import tab's "Planar base" mode: it also runs through OrcaSlicer
+  // server-side (build_mesh_hybrid_print / hybrid.py), so it needs the same
+  // up-front, before-Generate capability check. Unlike the parametric hybrid
+  // rows (which just go inert), "Planar base" is a radio CHOICE -- if it is
+  // unavailable, force the choice itself back to "Texture the whole model"
+  // (the one mode that always works) rather than leaving an unusable option
+  // selected and disabled.
+  (function(){
+    var meshBaseIds = ['d-meshbase-blend', 'd-meshbase-walls', 'd-meshbase-infill', 'd-meshbase-pattern',
+      'd-meshbase-toplayers', 'd-meshbase-bottomlayers',
+      // Speed/Adhesion/Support sections added alongside Shell/Infill/Seam
+      // blend above -- every one of these also runs through the same local
+      // OrcaSlicer install, so it needs the same up-front disable.
+      'd-meshbase-speed-outer', 'd-meshbase-speed-inner', 'd-meshbase-speed-infill',
+      'd-meshbase-speed-travel', 'd-meshbase-speed-first',
+      'd-meshbase-brim-type', 'd-meshbase-brim-width',
+      'd-meshbase-support-enable', 'd-meshbase-support-threshold'];
+    var planarRadio = document.getElementById('mesh-mode-planar');
+    var textureRadio = document.getElementById('mesh-mode-texture');
+    var hintEl = document.getElementById('meshbase-orca-hint');
+    apiFetch('/api/orca_status').then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.available) return;
+      meshBaseIds.forEach(function(id){
+        var el = document.getElementById(id);
+        if(el) el.disabled = true;
+      });
+      if(planarRadio){
+        planarRadio.disabled = true;
+        if(design.mesh_base_mode === 'planar_base'){
+          design.mesh_base_mode = 'texture';
+          if(textureRadio) textureRadio.checked = true;
+          persistDesign();
+          if(typeof refreshShapeRows === 'function') refreshShapeRows();
+        }
+      }
+      if(hintEl) hintEl.style.display = '';
+    }).catch(function(){
+      // fail open, same reasoning as the hybrid probe above
+    });
+  })();
   famSel.addEventListener('change', syncFilamentTitle);
 
   // ---- filament combo: a button+list mirror of the real <select> above,
@@ -3772,6 +3913,40 @@
     });
   }
 
+  // Optional numeric field: blank <-> null, same "absent means keep the
+  // server-derived default" contract as bindOptionalTemp (d-nozzletemp/
+  // d-bedtemp) and the freehand d-flh/d-lwoverride blocks below, generalized
+  // for the right-hand Planar base bar's Speed/Adhesion/Support overrides.
+  // Deliberately does NOT toggle bindOptionalTemp's 'fm-overridden' class --
+  // that class is styled only for .pm-field-input (the filament-modal
+  // inputs), so reusing it here on a plain .drow input would silently do
+  // nothing. Clamps to the field's own min/max on commit, same as bindNumber.
+  function bindOptionalNumber(id, field){
+    var el = document.getElementById(id);
+    if(!el) return;
+    if(design[field] != null) el.value = design[field];
+    function applyValue(commit){
+      var raw = parseFloat(el.value);
+      if(el.value === '' || Number.isNaN(raw)){
+        design[field] = null;
+        el.classList.remove('out-of-range');
+      } else {
+        var v = raw;
+        var lo = parseFloat(el.min), hi = parseFloat(el.max);
+        if(isFinite(lo)) v = Math.max(lo, v);
+        if(isFinite(hi)) v = Math.min(hi, v);
+        design[field] = v;
+        el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
+        if(commit){ el.value = v; el.classList.remove('out-of-range'); }
+      }
+      persistDesign('num:' + id);
+      if(commit) endHistRun();
+      schedulePreview();
+    }
+    el.addEventListener('input', function(){ applyValue(false); });
+    el.addEventListener('change', function(){ applyValue(true); });
+  }
+
   // Shape tab.
   bindSelect('d-shape', 'shape');
   bindNumber('d-radius', 'radius');
@@ -3789,8 +3964,21 @@
     if(radiusEl) radiusEl.addEventListener('input', function(){ silEditor.draw(); });
     if(heightEl) heightEl.addEventListener('input', function(){
       ampEditor.draw(); silEditor.draw(); widthEditor.draw();
+      syncMeshBaseBlendMax();
     });
   })();
+  // mesh_base_blend_height's server clamp (serve.py's _parse_mesh_hybrid_params)
+  // is "min(blend_height, height)" -- there is no fixed mm ceiling to write
+  // into the HTML, only "the design's own Height", which moves as the user
+  // types. Mirroring it into the input's own max attribute lets bindNumber's
+  // already-generic clamp+out-of-range styling (bindNumber() above) do the
+  // rest, instead of a second bespoke clamp path that could drift from the
+  // server's.
+  function syncMeshBaseBlendMax(){
+    var mb = document.getElementById('d-meshbase-blend');
+    if(mb) mb.max = design.height;
+  }
+  syncMeshBaseBlendMax();
   bindNumber('d-lh', 'layer_height');
   bindNumber('d-xytwist', 'xy_twist');
   bindNumber('d-starpoints', 'star_points', true);
@@ -3802,6 +3990,62 @@
   bindNumber('d-ovality', 'ovality');
   bindSelect('d-basestyle', 'base_style');
   bindNumber('d-skirt', 'skirt', true);
+  bindNumber('d-hybrid-height', 'hybrid_base_height');
+  bindNumber('d-hybrid-walls', 'hybrid_wall_count', true);
+  bindNumber('d-hybrid-infill', 'hybrid_infill_density');
+  bindSelect('d-hybrid-pattern', 'hybrid_infill_pattern');
+  bindNumber('d-meshbase-blend', 'mesh_base_blend_height');
+  bindNumber('d-meshbase-walls', 'mesh_base_wall_count', true);
+  bindNumber('d-meshbase-infill', 'mesh_base_infill_density');
+  bindSelect('d-meshbase-pattern', 'mesh_base_infill_pattern');
+  bindNumber('d-meshbase-toplayers', 'mesh_base_top_layers', true);
+  bindNumber('d-meshbase-bottomlayers', 'mesh_base_bottom_layers', true);
+  // Speed overrides (right-hand Speed section) -- optional, blank = auto.
+  // Their "max" is set from the SELECTED PRINTER's max_velocity, served by
+  // _printer_entry_json and republished on every printer switch (see
+  // syncPlanarSpeedMax below): no speed ceiling is hardcoded here, matching
+  // how d-nozzletemp/d-bedtemp take theirs from max_nozzle_temp/max_bed_temp.
+  // The server clamp in _parse_mesh_hybrid_params -> build_process_json stays
+  // authoritative regardless; this only lets the UI refuse first.
+  // Mirrors the selected printer's XY ceiling onto the five speed inputs.
+  // If the server did not send max_velocity, the attribute is REMOVED rather
+  // than guessed: a wrong ceiling is worse than none, and the server clamp
+  // still catches anything over-limit.
+  function syncPlanarSpeedMax(){
+    var lim = window.__printerLimits;
+    var v = lim && typeof lim.max_velocity === 'number' && isFinite(lim.max_velocity)
+      ? lim.max_velocity : null;
+    ['d-meshbase-speed-outer', 'd-meshbase-speed-inner', 'd-meshbase-speed-infill',
+     'd-meshbase-speed-travel', 'd-meshbase-speed-first'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(!el) return;
+      if(v != null) el.max = String(v); else el.removeAttribute('max');
+    });
+  }
+
+  bindOptionalNumber('d-meshbase-speed-outer', 'mesh_base_outer_wall_speed');
+  bindOptionalNumber('d-meshbase-speed-inner', 'mesh_base_inner_wall_speed');
+  bindOptionalNumber('d-meshbase-speed-infill', 'mesh_base_infill_speed');
+  bindOptionalNumber('d-meshbase-speed-travel', 'mesh_base_travel_speed');
+  bindOptionalNumber('d-meshbase-speed-first', 'mesh_base_first_layer_speed');
+  // Adhesion: brim type is a select with its own blank "(default)" option
+  // (value="") so bindSelect's plain `design[field] = el.value` already
+  // gives the right "absent means unset" semantics with no extra glue.
+  bindSelect('d-meshbase-brim-type', 'mesh_base_brim_type');
+  bindOptionalNumber('d-meshbase-brim-width', 'mesh_base_brim_width');
+  // Support: plain checkbox (default OFF, confirmed with the user) plus an
+  // optional threshold angle.
+  (function(){
+    var el = document.getElementById('d-meshbase-support-enable');
+    if(!el) return;
+    el.checked = !!design.mesh_base_enable_support;
+    el.addEventListener('change', function(){
+      design.mesh_base_enable_support = el.checked;
+      persistDesign();
+      schedulePreview();
+    });
+  })();
+  bindOptionalNumber('d-meshbase-support-threshold', 'mesh_base_support_threshold');
   (function(){
     var el = document.getElementById('d-flh');
     if(!el) return;
@@ -5355,6 +5599,54 @@
     if(skirtRow) skirtRow.style.display = (isLoopFabric || meshLoaded) ? 'none' : '';
     var loopBaseHint = document.getElementById('loop-base-hint');
     if(loopBaseHint) loopBaseHint.style.display = isLoopFabric ? '' : 'none';
+
+    // Mesh-hybrid planar base (Import tab): the "Use this STL as" toggle and
+    // its planar-base-only sub-rows only make sense once an STL is loaded;
+    // the sub-rows themselves only when planar-base mode is the active
+    // choice. meshBaseActive is buildGenerateBody's own single source of
+    // truth for "will this request send mesh_base_id" -- recomputed here
+    // rather than re-derived, so the panel and the request can never
+    // disagree about which mode is live.
+    var meshBaseActive = meshLoaded && design.mesh_base_mode === 'planar_base';
+    var meshModeRow = document.getElementById('row-mesh-mode');
+    if(meshModeRow) meshModeRow.style.display = meshLoaded ? '' : 'none';
+    var meshModeHint = document.getElementById('mesh-mode-hint');
+    if(meshModeHint) meshModeHint.style.display = meshLoaded ? '' : 'none';
+    // Right-hand Planar base bar (#planar-panel, index.html): all of its
+    // rows moved/added there gate together on meshBaseActive, so the whole
+    // bar is shown or hidden as one unit rather than row-by-row -- it also
+    // has to stay off-screen in G-code Viewer mode, which the left panel's
+    // #mode-design/#mode-viewer .active toggle already handles for every
+    // other design control (this bar lives outside #mode-design, as a flex
+    // sibling of #canvas-wrap, so it needs its own check here). Toggling the
+    // whole bar (not each row) is also what lets window.__viewerResize only
+    // fire on an actual appear/disappear, not on every unrelated design edit
+    // that happens to call refreshShapeRows().
+    var modeDesignEl = document.getElementById('mode-design');
+    var inDesignMode = !modeDesignEl || modeDesignEl.classList.contains('active');
+    var planarPanel = document.getElementById('planar-panel');
+    if(planarPanel){
+      var showPlanarPanel = meshBaseActive && inDesignMode;
+      var planarPanelWasVisible = planarPanel.style.display !== 'none';
+      if(showPlanarPanel !== planarPanelWasVisible){
+        planarPanel.style.display = showPlanarPanel ? '' : 'none';
+        if(window.__viewerResize) window.__viewerResize();
+      }
+    }
+    // The parametric hybrid rows (a DIFFERENT planar-base source -- a
+    // silhouette extrusion, not this mesh) are dead controls once a mesh
+    // base is active: serve.py hard-rejects a request carrying both
+    // hybrid_base_height and mesh_base_id (buildGenerateBody never sends
+    // hybrid_base_height in that case either, see meshBaseActive there).
+    // Hiding them here is exactly the dead-control confusion fix, not just
+    // the request-side guard.
+    ['row-hybrid-height', 'row-hybrid-walls', 'row-hybrid-infill', 'row-hybrid-pattern'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(el) el.style.display = meshBaseActive ? 'none' : '';
+    });
+    var hybridOrcaHint = document.getElementById('hybrid-orca-hint');
+    if(hybridOrcaHint && meshBaseActive) hybridOrcaHint.style.display = 'none';
+
     // A zone's xy_twist no-op note (zoneTwistNoOpNote below) depends on the
     // shape too -- refresh it here rather than only from the field's own
     // input handler, or switching TO circle after already setting a zone's
@@ -5376,6 +5668,23 @@
       // permanently: picking Solid again could not bring it back, while the
       // Base layers input still displayed the old number, so the panel
       // promised a solid base and the G-code had none.
+      persistDesign();
+      refreshShapeRows();
+      schedulePreview();
+    });
+  });
+
+  // "Use this STL as" radios (Import tab): planar base vs. texture the whole
+  // model. Mirrors the d-bottom radios immediately above. The mesh-loaded
+  // orca-status probe further down may force this to 'texture' and disable
+  // the planar-base option if no local OrcaSlicer is available -- see its
+  // own comment.
+  var meshUsageRadios = document.querySelectorAll('input[name="mesh-usage"]');
+  meshUsageRadios.forEach(function(r){
+    if(r.value === design.mesh_base_mode) r.checked = true;
+    r.addEventListener('change', function(){
+      if(!r.checked) return;
+      design.mesh_base_mode = r.value;
       persistDesign();
       refreshShapeRows();
       schedulePreview();
@@ -5405,27 +5714,39 @@
     var resultsEl = document.getElementById('param-search-results');
     var scroll = document.getElementById('panel-scroll');
     if(!input || !resultsEl || !scroll) return;
+    // Right-hand Planar base bar has its own .panel-scroll (see index.html);
+    // its rows moved out of #panel-scroll so they need indexing separately,
+    // each remembering ITS OWN scroll container (scrollEl below) so choose()
+    // scrolls the right element into view instead of doing the left panel's
+    // scroll math against a row that does not live inside it.
+    var planarScroll = document.querySelector('#planar-panel .panel-scroll');
 
     // conditional block -> the <select> id that controls its visibility
     var BLOCK_CTRL = { 'star-rows':'d-shape', 'pattern-rows':'d-pattern',
                        'loop-rows':'d-pattern' };
     var STEP_LABEL = { model:'Model', texture:'Texture', print:'Print', generate:'Generate' };
 
-    // build index once over every reachable row in the sidebar
+    // build index once over every reachable row in the sidebar (+ the
+    // planar-base bar, if present)
     var index = [];
-    Array.prototype.forEach.call(scroll.querySelectorAll('.drow, label.row'), function(row){
-      var span = row.querySelector(':scope > span');
-      var label = span ? (span.textContent || '').trim() : '';
-      if(!label) return;
-      var mp = row.closest('.mode-panel');
-      var mode = (mp && mp.id === 'mode-viewer') ? 'viewer' : 'design';
-      var sp = row.closest('.step-panel');
-      var step = sp ? sp.id.replace('step-','') : null;
-      var ctrl = null;
-      for(var b in BLOCK_CTRL){ var el = document.getElementById(b);
-        if(el && el.contains(row)){ ctrl = document.getElementById(BLOCK_CTRL[b]); break; } }
-      index.push({ row:row, lc:label.toLowerCase(), label:label, mode:mode, step:step, ctrl:ctrl });
-    });
+    function indexScroll(scrollEl){
+      if(!scrollEl) return;
+      Array.prototype.forEach.call(scrollEl.querySelectorAll('.drow, label.row'), function(row){
+        var span = row.querySelector(':scope > span');
+        var label = span ? (span.textContent || '').trim() : '';
+        if(!label) return;
+        var mp = row.closest('.mode-panel');
+        var mode = (mp && mp.id === 'mode-viewer') ? 'viewer' : 'design';
+        var sp = row.closest('.step-panel');
+        var step = sp ? sp.id.replace('step-','') : null;
+        var ctrl = null;
+        for(var b in BLOCK_CTRL){ var el = document.getElementById(b);
+          if(el && el.contains(row)){ ctrl = document.getElementById(BLOCK_CTRL[b]); break; } }
+        index.push({ row:row, lc:label.toLowerCase(), label:label, mode:mode, step:step, ctrl:ctrl, scrollEl:scrollEl });
+      });
+    }
+    indexScroll(scroll);
+    indexScroll(planarScroll);
 
     var matches = [], activeIdx = -1;
     function esc(s){ return s.replace(/[&<>"]/g,function(c){
@@ -5486,8 +5807,9 @@
         var target = m.row;
         if(m.ctrl && m.row.offsetParent === null)           // hidden conditional block
           target = m.ctrl.closest('.drow') || m.ctrl;
-        var cr = scroll.getBoundingClientRect(), er = target.getBoundingClientRect();
-        scroll.scrollTop += (er.top - cr.top) - (scroll.clientHeight/2 - er.height/2);
+        var targetScroll = m.scrollEl || scroll;
+        var cr = targetScroll.getBoundingClientRect(), er = target.getBoundingClientRect();
+        targetScroll.scrollTop += (er.top - cr.top) - (targetScroll.clientHeight/2 - er.height/2);
         target.classList.remove('param-search-hit'); void target.offsetWidth;
         target.classList.add('param-search-hit');
         setTimeout(function(){ target.classList.remove('param-search-hit'); }, 1400);
@@ -5647,6 +5969,7 @@
     }
 
     var hoverContainers = [document.getElementById('panel-scroll'),
+                            document.querySelector('#planar-panel .panel-scroll'),
                             document.getElementById('point-edit-modal'),
                             document.getElementById('zone-modal')];
     hoverContainers.forEach(function(c){
@@ -5657,9 +5980,12 @@
       c.addEventListener('focusout', onFocusOut);
     });
     // 'scroll' does not bubble, so it needs the actual scrolling elements --
-    // #panel-scroll for the sidebar, .pe-panels/.zo-modal-body for each
+    // #panel-scroll for the sidebar (and the Planar base bar's own copy,
+    // since it moved rows out of #panel-scroll into a second .panel-scroll
+    // of its own -- see index.html), .pe-panels/.zo-modal-body for each
     // modal's own body.
     var scrollContainers = [document.getElementById('panel-scroll'),
+                             document.querySelector('#planar-panel .panel-scroll'),
                              document.querySelector('.pe-panels'),
                              document.querySelector('.zo-modal-body')];
     scrollContainers.forEach(function(c){ if(c) c.addEventListener('scroll', hide, {passive:true}); });
@@ -5797,6 +6123,7 @@
       if(PRINTER_BEDS[design.printer]){
         design.bed_center = [PRINTER_BEDS[design.printer][0]/2, PRINTER_BEDS[design.printer][1]/2];
       }
+      if(typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
     }
     document.getElementById('d-shape').value = design.shape;
     document.getElementById('d-radius').value = design.radius;
@@ -5813,6 +6140,29 @@
     _set('d-ovality', design.ovality || 0);
     _set('d-basestyle', design.base_style || 'spiral');
     _set('d-skirt', design.skirt || 0);
+    _set('d-hybrid-height', design.hybrid_base_height || 0);
+    _set('d-hybrid-walls', design.hybrid_wall_count || 3);
+    _set('d-hybrid-infill', design.hybrid_infill_density != null ? design.hybrid_infill_density : 0.15);
+    _set('d-hybrid-pattern', design.hybrid_infill_pattern || 'grid');
+    _set('d-meshbase-blend', design.mesh_base_blend_height || 0);
+    _set('d-meshbase-walls', design.mesh_base_wall_count || 3);
+    _set('d-meshbase-infill', design.mesh_base_infill_density != null ? design.mesh_base_infill_density : 0.15);
+    _set('d-meshbase-pattern', design.mesh_base_infill_pattern || 'grid');
+    _set('d-meshbase-toplayers', design.mesh_base_top_layers != null ? design.mesh_base_top_layers : 3);
+    _set('d-meshbase-bottomlayers', design.mesh_base_bottom_layers != null ? design.mesh_base_bottom_layers : 3);
+    if(typeof syncMeshBaseBlendMax === 'function') syncMeshBaseBlendMax();
+    // Optional Speed/Adhesion/Support overrides -- blank, not 0/false, is
+    // "unset" (see the design-object comment on these fields above).
+    _set('d-meshbase-speed-outer', design.mesh_base_outer_wall_speed != null ? design.mesh_base_outer_wall_speed : '');
+    _set('d-meshbase-speed-inner', design.mesh_base_inner_wall_speed != null ? design.mesh_base_inner_wall_speed : '');
+    _set('d-meshbase-speed-infill', design.mesh_base_infill_speed != null ? design.mesh_base_infill_speed : '');
+    _set('d-meshbase-speed-travel', design.mesh_base_travel_speed != null ? design.mesh_base_travel_speed : '');
+    _set('d-meshbase-speed-first', design.mesh_base_first_layer_speed != null ? design.mesh_base_first_layer_speed : '');
+    _set('d-meshbase-brim-type', design.mesh_base_brim_type || '');
+    _set('d-meshbase-brim-width', design.mesh_base_brim_width != null ? design.mesh_base_brim_width : '');
+    var mbSupportEl = document.getElementById('d-meshbase-support-enable');
+    if(mbSupportEl) mbSupportEl.checked = !!design.mesh_base_enable_support;
+    _set('d-meshbase-support-threshold', design.mesh_base_support_threshold != null ? design.mesh_base_support_threshold : '');
     var flhEl = document.getElementById('d-flh');
     if(flhEl) flhEl.value = design.first_layer_height != null ? design.first_layer_height : '';
     document.getElementById('d-spacing').value = design.spacing_factor;
@@ -5838,6 +6188,8 @@
     if(bedTempEl) bedTempEl.value = design.bed_temp != null ? design.bed_temp : '';
     var bottomRadios = document.querySelectorAll('input[name="d-bottom"]');
     bottomRadios.forEach(function(r){ r.checked = r.value === design.bottom; });
+    var meshUsageRadios = document.querySelectorAll('input[name="mesh-usage"]');
+    meshUsageRadios.forEach(function(r){ r.checked = r.value === design.mesh_base_mode; });
     var nozzleEl = document.getElementById('d-nozzle');
     if(nozzleEl) nozzleEl.value = design.nozzle || '';
     var smoothEl = document.getElementById('sil-smooth');
@@ -6084,7 +6436,7 @@
 
   // ---- STL mesh import (Import tab) ---------------------------------------
   var MESH_MAX_MB = 50;
-  var meshState = { mesh_id: null, filename: null, info: null };
+  var meshState = { mesh_id: null, filename: null, info: null, arrayBuffer: null };
 
   var stlDrop = document.getElementById('stl-drop');
   var stlFile = document.getElementById('stl-file');
@@ -6135,10 +6487,17 @@
     var reader = new FileReader();
     reader.onload = function(e){
       if(mySeq !== stlUploadSeq) return; // superseded before the request even went out
+      // Kept for the Design-tab draft preview (window.setMeshBasePreview,
+      // viewer.js) -- parsed with THREE's STLLoader from this SAME buffer
+      // once the upload confirms the file is valid, rather than a second
+      // client-side parse racing the network request. fetch() only READS an
+      // ArrayBuffer body; it does not detach/neuter it, so reusing it below
+      // is safe.
+      var arrayBuffer = e.target.result;
       apiFetch('/api/upload_mesh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
-        body: e.target.result
+        body: arrayBuffer
       })
       .then(function(r){ return r.json(); })
       .then(function(data){
@@ -6148,11 +6507,15 @@
         meshState.mesh_id = data.mesh_id;
         meshState.filename = file.name;
         meshState.info = data;
+        meshState.arrayBuffer = arrayBuffer;
         showMeshInfo(data, file.name);
         // Mesh-mode loops print a base again once a mesh is loaded (loops
         // become hanging loop sites on a normal wall, not fabric) - bring
         // the base/brim/skirt rows back.
         refreshShapeRows();
+        // Draw the actual uploaded triangles on the bed (viewer.js) -- see
+        // refreshMeshBasePreview()'s own comment for the placement contract.
+        refreshMeshBasePreview();
       })
       .catch(function(err){
         if(mySeq !== stlUploadSeq) return;
@@ -6240,10 +6603,47 @@
     }
   }
 
+  // ---- draw the imported STL on the bed (Design tab draft preview) --------
+  // The parametric draft (generatePreview/showPreview, preview_math.js) never
+  // drew an uploaded mesh -- reported as "i couldnt see my file on the bed".
+  // Delegates the actual THREE.js work to viewer.js's window.setMeshBasePreview
+  // (an ES module, so it owns the THREE/STLLoader imports; this file is a
+  // plain script and has neither). Passes the /api/upload_mesh response's OWN
+  // server-computed `bounds` -- never a second client-side bbox derivation,
+  // which could drift from the server's and lie about where the mesh sits --
+  // plus the current mesh scale and the SELECTED printer's bed centre
+  // (design.bed_center, the same profile-aware value preview_math.js's
+  // BED_CX/BED_CY carry), so the draft mesh is centred exactly like the real
+  // print would be, on whichever printer is currently selected. Called after
+  // a successful upload, on every #mesh-scale edit, and whenever the printer
+  // (and so the bed centre) changes.
+  function refreshMeshBasePreview(){
+    if(!meshState.mesh_id || !meshState.arrayBuffer || !meshState.info || !meshState.info.bounds){
+      if(typeof window.clearMeshBasePreview === 'function') window.clearMeshBasePreview();
+      return;
+    }
+    if(typeof window.setMeshBasePreview !== 'function') return;
+    var scaleEl = document.getElementById('mesh-scale');
+    var scale = scaleEl ? (parseFloat(scaleEl.value) || 1.0) : 1.0;
+    var bedCx = (design.bed_center && design.bed_center.length === 2) ? design.bed_center[0] : 117.5;
+    var bedCy = (design.bed_center && design.bed_center.length === 2) ? design.bed_center[1] : 117.5;
+    window.setMeshBasePreview(meshState.arrayBuffer, {
+      boundsMin: meshState.info.bounds.min,
+      boundsMax: meshState.info.bounds.max,
+      scale: scale,
+      bedCx: bedCx,
+      bedCy: bedCy
+    });
+  }
+  var meshScaleEl = document.getElementById('mesh-scale');
+  if(meshScaleEl) meshScaleEl.addEventListener('input', refreshMeshBasePreview);
+
   document.getElementById('mesh-clear').addEventListener('click', function(){
     meshState.mesh_id = null;
     meshState.filename = null;
     meshState.info = null;
+    meshState.arrayBuffer = null;
+    if(typeof window.clearMeshBasePreview === 'function') window.clearMeshBasePreview();
     var drop = document.getElementById('stl-drop');
     if (drop) drop.style.display = '';
     document.getElementById('mesh-info').style.display = 'none';
@@ -6379,6 +6779,29 @@
         return entry;
       });
     }
+    // Mesh-hybrid planar base (Import tab, "Use this STL as" -> Planar
+    // base): a DIFFERENT planar-base source than hybrid_base_height below --
+    // this one is the user's own uploaded STL, keyed server-side by
+    // mesh_base_id. serve.py hard-rejects a request that carries BOTH
+    // hybrid_base_height>0 AND mesh_base_id (they are two different bases,
+    // and honouring one silently would print something not asked for) --
+    // computed once here and reused below so the two send-sites can never
+    // disagree about which mode is live.
+    var meshBaseActive = !!meshState.mesh_id && design.mesh_base_mode === 'planar_base';
+    // Hybrid planar base: only sent when actually enabled (0 = off, same
+    // "0 = off" numeric convention as base_layers/brim/skirt above) AND no
+    // mesh base is active (see meshBaseActive above -- sending both is the
+    // hard server error CLAUDE.md warns about). Only the parametric wall
+    // honors this -- server-side it takes priority over Zone
+    // Overrides/Point Edit Modifiers (unsupported by the wall generator
+    // hybrid mode uses) and is itself ignored for loop fabric, each with its
+    // own scope warning in the report, mirroring the existing pattern.
+    if(!meshBaseActive && design.hybrid_base_height > 0){
+      body.hybrid_base_height = design.hybrid_base_height;
+      body.hybrid_wall_count = Math.round(design.hybrid_wall_count || 3);
+      body.hybrid_infill_density = design.hybrid_infill_density != null ? design.hybrid_infill_density : 0.15;
+      body.hybrid_infill_pattern = design.hybrid_infill_pattern || 'grid';
+    }
     // Route texture params by the pattern dropdown: loops are a site-based
     // texture (server pattern stays null), wave patterns send the pattern_*
     // fields (and only those get pattern_alternate).
@@ -6430,12 +6853,52 @@
     }
 
     if(meshState.mesh_id){
-      body.mode = 'mesh_texture';
-      body.mesh_id = meshState.mesh_id;
-      body.scale = parseFloat(document.getElementById('mesh-scale').value) || 1.0;
-      // layer_height from the mesh panel overrides the shape panel's value
-      body.layer_height = parseFloat(document.getElementById('mesh-lh').value) || 0.3;
-      // texture + z-wave params still come from the design object (Texture/Waves tabs)
+      if(meshBaseActive){
+        // Planar base: mode stays at its server-side default (NOT
+        // 'mesh_texture') -- the mesh-base path activates purely on
+        // mesh_base_id's presence (serve.py's _parse_mesh_hybrid_params).
+        // layer_height is deliberately left at the shape panel's own value
+        // (already set above) rather than overridden by the mesh panel's
+        // #mesh-lh, unlike texture mode below: the server contract has no
+        // mesh_base_layer_height field, so the planar base and the
+        // non-planar wall above it share one layer height.
+        body.mesh_base_id = meshState.mesh_id;
+        body.mesh_base_scale = parseFloat(document.getElementById('mesh-scale').value) || 1.0;
+        body.mesh_base_blend_height = design.mesh_base_blend_height || 0;
+        body.mesh_base_wall_count = Math.round(design.mesh_base_wall_count || 3);
+        body.mesh_base_infill_density = design.mesh_base_infill_density != null ? design.mesh_base_infill_density : 0.15;
+        body.mesh_base_infill_pattern = design.mesh_base_infill_pattern || 'grid';
+        // Solid top/bottom cap layers -- right-hand Planar base bar only,
+        // never sent on the mesh_texture path below (that path has no
+        // planar base to cap) nor alongside hybrid_base_height (mutually
+        // exclusive with meshBaseActive, same as the fields just above).
+        body.mesh_base_top_layers = Math.round(design.mesh_base_top_layers != null ? design.mesh_base_top_layers : 3);
+        body.mesh_base_bottom_layers = Math.round(design.mesh_base_bottom_layers != null ? design.mesh_base_bottom_layers : 3);
+        // Speed/Adhesion/Support: every one of these is OPTIONAL server-side
+        // (_parse_mesh_hybrid_params reads absence as "keep the derived
+        // default") -- sent ONLY when the design actually holds a value, so
+        // an untouched control never sends 0/""/false and never changes
+        // today's output. mesh_base_enable_support is the one exception to
+        // "presence is the switch": it is a real boolean (default OFF,
+        // confirmed with the user), sent only when true, matching serve.py's
+        // own "truthy = on" reading of the field.
+        if(design.mesh_base_outer_wall_speed != null) body.mesh_base_outer_wall_speed = design.mesh_base_outer_wall_speed;
+        if(design.mesh_base_inner_wall_speed != null) body.mesh_base_inner_wall_speed = design.mesh_base_inner_wall_speed;
+        if(design.mesh_base_infill_speed != null) body.mesh_base_infill_speed = design.mesh_base_infill_speed;
+        if(design.mesh_base_travel_speed != null) body.mesh_base_travel_speed = design.mesh_base_travel_speed;
+        if(design.mesh_base_first_layer_speed != null) body.mesh_base_first_layer_speed = design.mesh_base_first_layer_speed;
+        if(design.mesh_base_brim_type) body.mesh_base_brim_type = design.mesh_base_brim_type;
+        if(design.mesh_base_brim_width != null) body.mesh_base_brim_width = design.mesh_base_brim_width;
+        if(design.mesh_base_enable_support) body.mesh_base_enable_support = true;
+        if(design.mesh_base_support_threshold != null) body.mesh_base_support_threshold = design.mesh_base_support_threshold;
+      } else {
+        body.mode = 'mesh_texture';
+        body.mesh_id = meshState.mesh_id;
+        body.scale = parseFloat(document.getElementById('mesh-scale').value) || 1.0;
+        // layer_height from the mesh panel overrides the shape panel's value
+        body.layer_height = parseFloat(document.getElementById('mesh-lh').value) || 0.3;
+        // texture + z-wave params still come from the design object (Texture/Waves tabs)
+      }
     }
 
     return body;

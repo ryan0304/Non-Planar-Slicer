@@ -242,6 +242,29 @@
                   <div class="hint tight-top" id="loop-base-hint" style="display:none">Loop fabric anchors
                     itself with its own solid cuff (see "Solid cuff turns" in the loop settings below) -
                     base disks, brim and skirt do not apply here and are not printed.</div>
+
+                  <div class="drow" id="row-hybrid-height"><span>Hybrid base height (mm)
+                      <button type="button" class="fm-info-btn"
+                        data-tip="Solid planar layers (real walls + infill, sliced by a local OrcaSlicer install) from the bed up to this height, then the usual non-planar wall continues above it. 0 = off. Zone Overrides and Point Edit Modifiers do not apply to a hybrid base.">&#9432;</button>
+                    </span><input type="number" id="d-hybrid-height" min="0" step="0.5"></div>
+                  <div class="drow" id="row-hybrid-walls"><span>Hybrid wall count</span>
+                    <input type="number" id="d-hybrid-walls" min="1" max="8" step="1"></div>
+                  <div class="drow" id="row-hybrid-infill"><span>Hybrid infill density</span>
+                    <input type="number" id="d-hybrid-infill" min="0" max="1" step="0.05"></div>
+                  <div class="drow" id="row-hybrid-pattern"><span>Hybrid infill pattern</span>
+                    <select id="d-hybrid-pattern" class="mid-select">
+                      <option value="grid">Grid</option>
+                      <option value="line">Line</option>
+                      <option value="triangles">Triangles</option>
+                      <option value="cubic">Cubic</option>
+                      <option value="gyroid">Gyroid</option>
+                      <option value="honeycomb">Honeycomb</option>
+                      <option value="concentric">Concentric</option>
+                      <option value="rectilinear">Rectilinear</option>
+                    </select>
+                  </div>
+                  <div class="hint tight-top" id="hybrid-orca-hint" style="display:none">Hybrid planar
+                    base requires a local OrcaSlicer install and is unavailable on a hosted deployment.</div>
                   <div class="drow" id="row-squish">
                     <span>First layer height (mm)
                       <button type="button" class="fm-info-btn"
@@ -266,6 +289,26 @@
                         step="0.1" value="1.0"></div>
                     <div class="drow"><span>Layer height</span><input type="number" id="mesh-lh" min="0.1" max="0.6"
                         step="0.05" value="0.3"></div>
+
+                    <div class="drow" id="row-mesh-mode" style="margin-top:8px"><span>Use this STL as</span>
+                      <span>
+                        <label class="radio-inline"><input type="radio" name="mesh-usage" id="mesh-mode-planar"
+                            value="planar_base"> Planar base</label>
+                        &nbsp;
+                        <label class="radio-inline"><input type="radio" name="mesh-usage" id="mesh-mode-texture"
+                            value="texture"> Texture the whole model</label>
+                      </span>
+                    </div>
+                    <div class="hint tight-top" id="mesh-mode-hint">
+                      <b>Planar base</b> - build design on top: prints this STL as a real solid base (walls +
+                      infill, sliced by a local OrcaSlicer install), then the usual non-planar wall continues
+                      above it. <b>Texture the whole model</b>: today's existing behaviour - the non-planar wall
+                      traces this mesh's own outline at every height instead.
+                    </div>
+                    <div class="hint tight-top" id="meshbase-orca-hint" style="display:none">Planar base mode
+                      requires a local OrcaSlicer install and is unavailable on a hosted deployment - falling
+                      back to Texture the whole model.</div>
+
                     <div id="mesh-check" class="mesh-check" style="display:none">
                       <div class="mesh-check-head"><span id="mesh-check-icon">!</span><span
                           id="mesh-check-title">-</span></div>
@@ -697,6 +740,121 @@
         <div id="preset-context-menu" class="preset-ctx-menu" style="display:none" role="menu" aria-label="Load preset">
           <div class="preset-ctx-header">Load a preset model</div>
           <div id="preset-ctx-items" class="preset-ctx-items"></div>
+        </div>
+      </div>
+      <!-- ---- Right settings bar: OrcaSlicer planar-base controls ----------
+           Sits on the OPPOSITE side of the canvas from #panel (the main left
+           sidebar, untouched by this bar). Reuses #panel's own building
+           blocks (.panel-scroll, .section-heading, .drow, .hint, .fm-info-btn)
+           for visual consistency rather than inventing a second visual
+           language -- see .planar-panel in style.css, a near-twin of .panel
+           with the border moved to its left edge.
+           Visibility: shown only when meaningful (a mesh is loaded AND
+           actively used as the planar base) -- see refreshShapeRows() in
+           designer.js, the single place that decides this bar's presence
+           and re-syncs the 3-D viewport (window.__viewerResize) when it
+           changes, since this bar is a flex sibling of #canvas-wrap and its
+           appearance/disappearance changes the canvas's available width. -->
+      <div id="planar-panel" class="planar-panel" style="display:none">
+        <div class="panel-scroll">
+          <h3 class="section-heading">Planar base (OrcaSlicer)</h3>
+          <div class="hint tight-top" id="planarbase-scope-hint">
+            Solid planar base only, sliced by a local OrcaSlicer install from the imported
+            STL. These settings do not affect the non-planar wall printed above it.
+          </div>
+          <div class="hint tight-top" id="meshbase-height-hint">
+            Height means ONLY the non-planar portion printed ABOVE this mesh, not the whole object -
+            a 20 mm mount + Height 200 prints a 220 mm object.
+          </div>
+
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbshell">Shell</h3>
+          <div id="sec-body-mbshell">
+            <div class="drow" id="row-meshbase-toplayers"><span>Top layers
+                <button type="button" class="fm-info-btn"
+                  data-tip="Solid layers capping the TOP of the planar base before the non-planar wall begins. 0 leaves the base's interior open to its own sparse infill instead of a solid cap -- the see-through-to-infill bug this control exists to fix.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-toplayers" min="0" max="8" step="1"></div>
+            <div class="drow" id="row-meshbase-bottomlayers"><span>Bottom layers</span>
+              <input type="number" id="d-meshbase-bottomlayers" min="0" max="8" step="1"></div>
+            <div class="drow" id="row-meshbase-walls"><span>Wall count</span>
+              <input type="number" id="d-meshbase-walls" min="1" max="8" step="1"></div>
+          </div>
+
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbinfill">Infill</h3>
+          <div id="sec-body-mbinfill">
+            <div class="drow" id="row-meshbase-infill"><span>Infill density</span>
+              <input type="number" id="d-meshbase-infill" min="0" max="1" step="0.05"></div>
+            <div class="drow" id="row-meshbase-pattern"><span>Infill pattern</span>
+              <select id="d-meshbase-pattern" class="mid-select">
+                <option value="grid">Grid</option>
+                <option value="line">Line</option>
+                <option value="triangles">Triangles</option>
+                <option value="cubic">Cubic</option>
+                <option value="gyroid">Gyroid</option>
+                <option value="honeycomb">Honeycomb</option>
+                <option value="concentric">Concentric</option>
+                <option value="rectilinear">Rectilinear</option>
+              </select>
+            </div>
+          </div>
+
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbseam">Seam blend</h3>
+          <div id="sec-body-mbseam">
+            <div class="hint tight-top">Not an OrcaSlicer setting -- eases this app's own hand-off
+              from the mount's outline into the non-planar wall above it.</div>
+            <div class="drow" id="row-meshbase-blend"><span>Blend height (mm)
+                <button type="button" class="fm-info-btn"
+                  data-tip="Eases the hand-off from the mount's own outline into the non-planar wall's starting shape over this many mm, instead of an abrupt seam. 0 = off. Clamped to the design Height.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-blend" min="0" step="0.5"></div>
+          </div>
+
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbspeed">Speed</h3>
+          <div id="sec-body-mbspeed">
+            <div class="hint tight-top" id="mbspeed-hint">Blank = OrcaSlicer's own derived default
+              for the selected printer/filament. Only a typed value overrides it.</div>
+            <div class="drow" id="row-meshbase-speed-outer"><span>Outer wall (mm/s)</span>
+              <input type="number" id="d-meshbase-speed-outer" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-inner"><span>Inner wall (mm/s)</span>
+              <input type="number" id="d-meshbase-speed-inner" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-infill"><span>Infill (mm/s)</span>
+              <input type="number" id="d-meshbase-speed-infill" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-travel"><span>Travel (mm/s)</span>
+              <input type="number" id="d-meshbase-speed-travel" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-first"><span>First layer (mm/s)</span>
+              <input type="number" id="d-meshbase-speed-first" min="1" step="1" placeholder="auto"></div>
+          </div>
+
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbadhesion">Adhesion</h3>
+          <div id="sec-body-mbadhesion">
+            <div class="drow" id="row-meshbase-brim-type"><span>Brim type</span>
+              <select id="d-meshbase-brim-type" class="mid-select">
+                <option value="">(default)</option>
+                <option value="no_brim">No brim</option>
+                <option value="outer_only">Outer only</option>
+                <option value="inner_only">Inner only</option>
+                <option value="outer_and_inner">Outer and inner</option>
+                <option value="auto_brim">Auto brim</option>
+              </select>
+            </div>
+            <div class="drow" id="row-meshbase-brim-width"><span>Brim width (mm)</span>
+              <input type="number" id="d-meshbase-brim-width" min="0" max="100" step="1" placeholder="auto"></div>
+          </div>
+
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbsupport">Support</h3>
+          <div id="sec-body-mbsupport">
+            <label class="row" id="row-meshbase-support-enable"><span>Enable support</span>
+              <input type="checkbox" id="d-meshbase-support-enable"></label>
+            <div class="drow" id="row-meshbase-support-threshold"><span>Threshold angle (deg)
+                <button type="button" class="fm-info-btn"
+                  data-tip="Overhang angle (from vertical) beyond which support material is generated. Only takes effect while Enable support is on. Blank = OrcaSlicer's own default.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-support-threshold" min="0" max="90" step="1"
+                placeholder="auto"></div>
+          </div>
         </div>
       </div>
     </div><!-- .app-body -->
