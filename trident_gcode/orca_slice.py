@@ -163,6 +163,14 @@ _ALLOWED_WALL_SEQUENCES = frozenset({
     "inner wall/outer wall", "outer wall/inner wall", "inner-outer-inner wall",
 })
 
+# Which perimeter generator Orca uses. "classic" keeps every wall one nozzle
+# wide; "arachne" varies the bead width so thin features that fall between
+# whole multiples of the line width are still filled rather than dropped.
+# Both values appear in the shipped profiles (315 classic / 60 arachne) and in
+# the binary. Emitted only when the caller picks one, so an untouched request
+# keeps whatever the inherited base profile chose.
+_ALLOWED_WALL_GENERATORS = frozenset({"classic", "arachne"})
+
 # Shared by top_surface_pattern and bottom_surface_pattern -- Orca uses one
 # enum for both.
 _ALLOWED_SURFACE_PATTERNS = frozenset({
@@ -206,6 +214,7 @@ def build_process_json(
     internal_solid_infill_line_width: float | None = None,
     seam_position: str | None = None,
     wall_sequence: str | None = None,
+    wall_generator: str | None = None,
     # --- Strength ----------------------------------------------------------
     top_surface_pattern: str | None = None,
     bottom_surface_pattern: str | None = None,
@@ -395,6 +404,9 @@ def build_process_json(
         out["seam_position"] = _enum("seam position", seam_position, _ALLOWED_SEAM_POSITIONS)
     if wall_sequence is not None:
         out["wall_sequence"] = _enum("wall sequence", wall_sequence, _ALLOWED_WALL_SEQUENCES)
+    if wall_generator is not None:
+        out["wall_generator"] = _enum(
+            "wall generator", wall_generator, _ALLOWED_WALL_GENERATORS)
 
     # Strength.
     if top_surface_pattern is not None:

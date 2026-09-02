@@ -232,6 +232,7 @@
     mesh_base_lw_outer: null, mesh_base_lw_inner: null, mesh_base_lw_top: null,
     mesh_base_lw_infill: null, mesh_base_lw_solid: null,
     mesh_base_seam_position: '', mesh_base_wall_sequence: '',
+    mesh_base_wall_generator: '',
     mesh_base_top_pattern: '', mesh_base_bottom_pattern: '',
     mesh_base_bridge_angle: null,
     mesh_base_first_layer_infill_speed: null, mesh_base_solid_infill_speed: null,
@@ -3966,6 +3967,7 @@
     ['d-meshbase-lw-solid', 'mesh_base_lw_solid', 'num'],
     ['d-meshbase-seam', 'mesh_base_seam_position', 'sel'],
     ['d-meshbase-wallorder', 'mesh_base_wall_sequence', 'sel'],
+    ['d-meshbase-wallgen', 'mesh_base_wall_generator', 'sel'],
     // Strength
     ['d-meshbase-toppattern', 'mesh_base_top_pattern', 'sel'],
     ['d-meshbase-bottompattern', 'mesh_base_bottom_pattern', 'sel'],

@@ -66,6 +66,7 @@ from trident_gcode.orca_slice import (OrcaSliceError, _ALLOWED_BRIM_TYPES,
                                       _ALLOWED_SEAM_POSITIONS,
                                       _ALLOWED_SURFACE_PATTERNS,
                                       _ALLOWED_SUPPORT_TYPES,
+                                      _ALLOWED_WALL_GENERATORS,
                                       _ALLOWED_WALL_SEQUENCES)
 from trident_gcode.hybrid import build_hybrid_print, build_mesh_hybrid_print
 
@@ -993,6 +994,8 @@ def _parse_mesh_hybrid_params(body, height):
         "mesh_base_seam_position", _ALLOWED_SEAM_POSITIONS, "seam position"))
     _put("wall_sequence", _opt_enum(
         "mesh_base_wall_sequence", _ALLOWED_WALL_SEQUENCES, "wall order"))
+    _put("wall_generator", _opt_enum(
+        "mesh_base_wall_generator", _ALLOWED_WALL_GENERATORS, "wall generator"))
 
     # Strength.
     _put("top_surface_pattern", _opt_enum(

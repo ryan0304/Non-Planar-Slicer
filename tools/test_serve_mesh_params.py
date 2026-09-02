@@ -67,6 +67,7 @@ _FIELD_MAP = [
     ("mesh_base_lw_solid", "internal_solid_infill_line_width", 0.45),
     ("mesh_base_seam_position", "seam_position", "back"),
     ("mesh_base_wall_sequence", "wall_sequence", "outer wall/inner wall"),
+    ("mesh_base_wall_generator", "wall_generator", "arachne"),
     ("mesh_base_top_pattern", "top_surface_pattern", "concentric"),
     ("mesh_base_bottom_pattern", "bottom_surface_pattern", "monotonic"),
     ("mesh_base_bridge_angle", "bridge_angle", 45),
@@ -133,6 +134,7 @@ def test_non_finite_rejected():
 def test_enums_and_ranges():
     for field, bad in (("mesh_base_seam_position", "sideways"),
                        ("mesh_base_wall_sequence", "outer-then-inner"),
+                       ("mesh_base_wall_generator", "supersmart"),
                        ("mesh_base_top_pattern", "spaghetti"),
                        ("mesh_base_bottom_pattern", "spaghetti"),
                        ("mesh_base_support_type", "normal(manual)"),

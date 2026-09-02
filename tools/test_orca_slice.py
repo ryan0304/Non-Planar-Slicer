@@ -200,6 +200,7 @@ _OPTIONAL_EMITS = [
     ("internal_solid_infill_line_width", "internal_solid_infill_line_width", 0.45),
     ("seam_position", "seam_position", "back"),
     ("wall_sequence", "wall_sequence", "outer wall/inner wall"),
+    ("wall_generator", "wall_generator", "arachne"),
     ("top_surface_pattern", "top_surface_pattern", "concentric"),
     ("bottom_surface_pattern", "bottom_surface_pattern", "monotonic"),
     ("bridge_angle", "bridge_angle", 45),
@@ -288,6 +289,7 @@ def test_process_json_optional_settings():
     for kwarg, bad in (
         ("seam_position", "sideways"),
         ("wall_sequence", "outer-then-inner"),
+        ("wall_generator", "supersmart"),
         ("top_surface_pattern", "spaghetti"),
         ("bottom_surface_pattern", "spaghetti"),
         ("support_type", "normal(manual)"),   # real Orca value, deliberately not offered

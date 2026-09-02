@@ -633,7 +633,7 @@
                 <!-- Label reads "Highlight unsupported" (see s-risk above); id/class
            stay t-risk for the self-test and stylesheet. -->
                 <label class="row"><span>Highlight unsupported</span><input type="checkbox" id="t-risk"></label>
-                <label class="row"><span>Show travels</span><input type="checkbox" id="t-travel" checked></label>
+                <label class="row"><span>Show travels</span><input type="checkbox" id="t-travel"></label>
                 <label class="row"><span>Show printer</span><input type="checkbox" id="t-printer" checked></label>
                 <label class="row"><span>Show bed grid</span><span><input type="checkbox" id="t-bed"
                       checked></span></label>
@@ -803,6 +803,16 @@
                 <option value="nearest">Nearest</option>
                 <option value="back">Back</option>
                 <option value="random">Random</option>
+              </select>
+            </div>
+            <div class="drow" id="row-meshbase-wallgen"><span>Wall generator
+                <button type="button" class="fm-info-btn"
+                  data-tip="Classic keeps every wall exactly one nozzle wide. Arachne varies the bead width so thin features that fall between whole multiples of the line width still get filled instead of being dropped - usually the better choice for a modelled part with thin ribs or lettering.">&#9432;</button>
+              </span>
+              <select id="d-meshbase-wallgen" class="mid-select">
+                <option value="">(default)</option>
+                <option value="classic">Classic</option>
+                <option value="arachne">Arachne</option>
               </select>
             </div>
             <div class="drow" id="row-meshbase-wallorder"><span>Order of walls</span>

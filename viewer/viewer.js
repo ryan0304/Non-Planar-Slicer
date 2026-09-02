@@ -789,6 +789,17 @@ function buildGeometry(d) {
   // 0x2b3036 background its contrast dropped by roughly half, so it is
   // lifted again here to keep travel moves legible without turning them into
   // a distraction from the extrude path they are meant to sit behind.
+  //
+  // #t-travel now starts UNCHECKED (index.html). That tuning, and the old
+  // default-on, both date from when every file this viewer opened was a
+  // continuous non-planar spiral: one path, essentially no travels, so the
+  // handful that existed read as useful context. An Orca-sliced planar base
+  // puts ~1600 travels into a few millimetres of Z, drawn as long straight
+  // lines right across the part's own holes -- dense enough that the first
+  // reading is "the model is broken" rather than "these are travels". They
+  // are diagnostic, not part of the printed object, so the default view now
+  // shows what actually gets printed and the toggle brings them back for
+  // anyone chasing oozing or a stringing-prone travel pattern.
   travelObj = new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x74747a, transparent: true, opacity: 0.45 }));
   travelObj.visible = document.getElementById('t-travel').checked;
   scene.add(travelObj);
