@@ -169,6 +169,70 @@ def test_infinity_is_rejected():
         check("finite" in str(e).lower(), "inline Einf: raises OrcaGcodeParseError", str(e))
 
 
+# ---------------------------------------------------------------------------
+# 6. M201/M203/M204/M205 -- Orca's marlin-flavor firmware-limit sync.
+#
+# Found live: generating a hybrid print for ANY non-klipper printer (every
+# Bambu profile, every Creality marlin profile -- 11 of this app's 15
+# printer profiles, verified against a real OrcaSlicer install) failed with
+# "unrecognized command 'M201'" (or M203/M204/M205), because Orca emits these
+# unconditionally at the top of its EXECUTABLE block for marlin/bambu_marlin
+# gcode_flavor, independent of machine_start_gcode being blanked in
+# build_machine_json -- it is Orca's own header, not the start-gcode
+# template. Klipper-flavor output never emits them (it uses
+# SET_VELOCITY_LIMIT instead, already ignored), which is why this was never
+# hit on the Trident's own klipper profile during development.
+# ---------------------------------------------------------------------------
+def test_marlin_firmware_limit_sync_is_ignored():
+    text = (
+        "M73 P0 R2\n"
+        "M201 X500 Y500 Z100 E5000\n"
+        "M203 X200 Y200 Z5 E120\n"
+        "M204 P1500 R1500 T1500\n"
+        "M205 X10.00 Y10.00 Z0.20 E2.50 ; sets the jerk limits, mm/sec\n"
+        "M190 S35\n"
+        "M104 S210\n"
+        "G90\n"
+        "G21\n"
+        "M83\n"
+        "G92 E0\n"
+        "G1 X10 Y10 Z0.2 F1200\n"
+        "G1 X20 Y10 Z0.2 E0.5 F1200\n"
+    )
+    moves = parse_orca_gcode(text)
+    check(len(moves) == 2,
+          "marlin firmware-limit header: parses without raising, only the "
+          "two real moves become OrcaMoves",
+          f"got {len(moves)} moves")
+
+    # M204 also recurs mid-body in real Orca output (per-feature accel hint,
+    # not just the one-time header sync) -- must be ignored there too.
+    mid_body = (
+        "M83\nG92 E0\n"
+        "G1 X10 Y10 Z0.2 F1200\n"
+        "M204 S300\n"
+        "M204 S10000\n"
+        "G1 X20 Y10 Z0.2 E0.5 F1200\n"
+    )
+    moves2 = parse_orca_gcode(mid_body)
+    check(len(moves2) == 2,
+          "mid-body M204 (per-feature accel hint): ignored like the header "
+          "copy, not just when it opens the file",
+          f"got {len(moves2)} moves")
+
+    # Values on an ignored line are never validated -- exactly the existing
+    # "M104's temperature is never trusted" contract, extended to these.
+    # This asserts that on purpose: GcodeWriter never re-emits M201/M204 for
+    # either the planar or non-planar phase (grep-verified), so what Orca
+    # wrote here has no bearing on what the printer actually receives.
+    garbage = "M83\nG92 E0\nM204 S garbage not-a-number\nG1 X1 Y1 Z0.2 E0.1 F1200\n"
+    moves3 = parse_orca_gcode(garbage)
+    check(len(moves3) == 1,
+          "an ignored command's own malformed tokens do not raise -- its "
+          "values are discarded, not parsed",
+          f"got {len(moves3)} moves")
+
+
 def main() -> int:
     test_clean_base_parses()
     test_m82_normalizes_to_relative_deltas()
@@ -178,6 +242,7 @@ def main() -> int:
     test_unknown_command_is_rejected()
     test_comment_mentioning_a_command_is_not_executed()
     test_infinity_is_rejected()
+    test_marlin_firmware_limit_sync_is_ignored()
 
     if _FAILURES:
         print(f"\n{len(_FAILURES)} FAILURE(S):")

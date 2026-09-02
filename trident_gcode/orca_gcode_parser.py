@@ -63,8 +63,38 @@ class OrcaMove:
 #   SET_VELOCITY_LIMIT   Klipper per-layer accel/velocity hint -- this app
 #                        computes its own feedrates via PrinterProfile, so
 #                        Orca's own internal velocity planning is irrelevant
+#   M201/M203/M205       marlin-flavor firmware-limit sync (max accel / max
+#                        feedrate / jerk) -- Orca emits these unconditionally
+#                        at the top of the EXECUTABLE block for every
+#                        non-klipper gcode_flavor (confirmed against a real
+#                        install for every marlin/bambu_marlin profile this
+#                        app ships, klipper profiles never emit them), even
+#                        though machine_start_gcode is blanked in
+#                        build_machine_json: this is not part of the start
+#                        G-code template, it is Orca's own unconditional
+#                        header. Their VALUES are read straight back out of
+#                        build_machine_json's own machine_max_acceleration_*/
+#                        machine_max_speed_* (so at best redundant with what
+#                        this app already derived from PrinterProfile) and
+#                        are never trusted regardless -- exactly the M104
+#                        temperature reasoning above. printer_validate.py
+#                        independently flags these same three tokens as
+#                        _WARN_TOKENS in a hand-typed start G-code for the
+#                        identical reason: they silently override the
+#                        profile's own limits, so this app must never let
+#                        Orca's copy reach the printer either.
+#   M204                 marlin-flavor PER-MOVE print/travel/retract
+#                        acceleration hint, re-emitted throughout the body
+#                        (not just the header) -- GcodeWriter never emits
+#                        M204 anywhere in this app (grep-verified), for
+#                        either the planar or non-planar phase, so ignoring
+#                        it here changes nothing about what acceleration the
+#                        printer actually runs during the hybrid base: it is
+#                        left at the same firmware-default state the rest of
+#                        every print in this app already runs at.
 _IGNORED_COMMANDS = {
     "G21", "M73", "M104", "M106", "M107", "M109", "M140", "M190",
+    "M201", "M203", "M204", "M205",
     "SET_VELOCITY_LIMIT",
 }
 _ALLOWED_COMMANDS = {"G0", "G1", "G90", "G91", "G92", "M82", "M83"} | _IGNORED_COMMANDS
