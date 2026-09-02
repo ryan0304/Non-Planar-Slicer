@@ -62,7 +62,11 @@ from trident_gcode.paths import zone_weight, zone_twist_integral, _r_pattern_fn,
 from trident_gcode.stl_export import contours_to_mesh, write_binary_stl
 from trident_gcode.orca import orca_binary_path
 from trident_gcode.orca_slice import (OrcaSliceError, _ALLOWED_BRIM_TYPES,
-                                      _ALLOWED_INFILL_PATTERNS)
+                                      _ALLOWED_INFILL_PATTERNS,
+                                      _ALLOWED_SEAM_POSITIONS,
+                                      _ALLOWED_SURFACE_PATTERNS,
+                                      _ALLOWED_SUPPORT_TYPES,
+                                      _ALLOWED_WALL_SEQUENCES)
 from trident_gcode.hybrid import build_hybrid_print, build_mesh_hybrid_print
 
 DEFAULT_PRINTER_KEY = "trident"
@@ -897,17 +901,29 @@ def _parse_mesh_hybrid_params(body, height):
         "mesh_base_bottom_layers", body.get("mesh_base_bottom_layers"), 3)
     bottom_shell_layers = max(0, min(int(raw_bottom), 8))
 
-    # --- Quality / Speed / Adhesion / Support -----------------------------
-    # Every one of these is OPTIONAL: absent means None, which
-    # build_process_json reads as "keep the derived default", so an untouched
-    # control cannot change today's output. Speeds are re-clamped there against
-    # profile.max_velocity -- this layer rejects non-finite values and obvious
-    # nonsense, and build_process_json owns the machine ceiling. Two layers,
-    # deliberately: serve.py must be at least as strict as any UI, and
+    # --- Quality / Strength / Speed / Support / Others --------------------
+    # Every one of these is OPTIONAL: absent means the key is never put in
+    # `overrides` at all, and build_process_json then emits nothing for it, so
+    # the inherited OrcaSlicer base profile's own value stands. An untouched
+    # control therefore cannot change today's output -- which is the whole
+    # reason the UI shows these as blank/"(default)" rather than pre-filled.
+    #
+    # Two clamping layers, deliberately, and they own different things.
+    # THIS layer rejects non-finite values and obvious nonsense and applies
+    # the geometry ranges (support/brim distances, layer counts, angles).
+    # build_process_json owns every MACHINE ceiling -- speeds against
+    # profile.max_velocity, acceleration against profile.max_accel, line
+    # widths against the profile's own nozzle diameter -- because those depend
+    # on the selected printer, which this function does not have. Per
+    # CLAUDE.md: serve.py must be at least as strict as any UI, and
     # build_process_json must be at least as strict as any caller.
     overrides = {}
 
     def _opt_speed(field):
+        """A speed/acceleration: positive and finite here, machine-clamped in
+        build_process_json. No ceiling is applied at this layer on purpose --
+        a millimetre-per-second figure typed into serve.py would be exactly
+        the hardcoded machine limit CLAUDE.md forbids."""
         raw = body.get(field)
         if raw is None or raw == "":
             return None
@@ -916,17 +932,79 @@ def _parse_mesh_hybrid_params(body, height):
             raise ValueError("%s must be positive, got %r" % (field, val))
         return val
 
+    def _opt_num(field, lo, hi):
+        """A slicer-geometry number (a support gap, a bridge angle). Unlike a
+        speed these are NOT machine limits, so a fixed sanity range belongs
+        here rather than on the printer profile."""
+        raw = body.get(field)
+        if raw is None or raw == "":
+            return None
+        val = _finite_float(field, raw, None)
+        return max(lo, min(val, hi))
+
+    def _opt_int(field, lo, hi):
+        val = _opt_num(field, lo, hi)
+        return None if val is None else int(val)
+
+    def _opt_enum(field, allowed, label):
+        raw = body.get(field)
+        if raw is None or raw == "":
+            return None
+        val = str(raw)
+        if val not in allowed:
+            raise ValueError(
+                "Unknown mesh hybrid %s '%s'; must be one of %s"
+                % (label, val, sorted(allowed)))
+        return val
+
+    def _put(key, val):
+        if val is not None:
+            overrides[key] = val
+
+    # Speeds. build_process_json clamps each to profile.max_velocity.
     for field, key in (
         ("mesh_base_outer_wall_speed", "outer_wall_speed"),
         ("mesh_base_inner_wall_speed", "inner_wall_speed"),
         ("mesh_base_infill_speed", "infill_speed"),
         ("mesh_base_travel_speed", "travel_speed"),
         ("mesh_base_first_layer_speed", "initial_layer_speed"),
+        ("mesh_base_first_layer_infill_speed", "initial_layer_infill_speed"),
+        ("mesh_base_solid_infill_speed", "internal_solid_infill_speed"),
+        ("mesh_base_top_surface_speed", "top_surface_speed"),
+        ("mesh_base_overhang_speed", "overhang_speed"),
+        ("mesh_base_acceleration", "acceleration"),
     ):
-        val = _opt_speed(field)
-        if val is not None:
-            overrides[key] = val
+        _put(key, _opt_speed(field))
 
+    # Quality: per-feature line widths, in mm. The real ceiling is a multiple
+    # of the selected profile's nozzle diameter and lives in
+    # build_process_json; the wide range here only keeps a nonsense value from
+    # travelling any further, and rejects non-finite outright.
+    for field, key in (
+        ("mesh_base_lw_outer", "outer_wall_line_width"),
+        ("mesh_base_lw_inner", "inner_wall_line_width"),
+        ("mesh_base_lw_top", "top_surface_line_width"),
+        ("mesh_base_lw_infill", "sparse_infill_line_width"),
+        ("mesh_base_lw_solid", "internal_solid_infill_line_width"),
+    ):
+        _put(key, _opt_num(field, 0.05, 10.0))
+
+    _put("seam_position", _opt_enum(
+        "mesh_base_seam_position", _ALLOWED_SEAM_POSITIONS, "seam position"))
+    _put("wall_sequence", _opt_enum(
+        "mesh_base_wall_sequence", _ALLOWED_WALL_SEQUENCES, "wall order"))
+
+    # Strength.
+    _put("top_surface_pattern", _opt_enum(
+        "mesh_base_top_pattern", _ALLOWED_SURFACE_PATTERNS, "top surface pattern"))
+    _put("bottom_surface_pattern", _opt_enum(
+        "mesh_base_bottom_pattern", _ALLOWED_SURFACE_PATTERNS, "bottom surface pattern"))
+    # 0 is meaningful here: OrcaSlicer reads bridge_angle 0 as "choose the
+    # bridge direction automatically", so it is a real value, not "unset".
+    # Absence (a blank field) is what means unset.
+    _put("bridge_angle", _opt_num("mesh_base_bridge_angle", 0.0, 360.0))
+
+    # Adhesion / Others.
     brim_type = body.get("mesh_base_brim_type")
     if brim_type:
         brim_type = str(brim_type)
@@ -941,12 +1019,34 @@ def _parse_mesh_hybrid_params(body, height):
         bw = _finite_float("mesh_base_brim_width", raw_brim_w, 0.0)
         overrides["brim_width"] = max(0.0, min(bw, 100.0))
 
+    _put("brim_object_gap", _opt_num("mesh_base_brim_gap", 0.0, 5.0))
+    _put("skirt_loops", _opt_int("mesh_base_skirt_loops", 0, 10))
+
+    # Support. enable_support is the one field here whose absence is a real
+    # value rather than "unset": it is a checkbox that defaults OFF, so a
+    # falsy/absent field means off, matching build_process_json's own default.
+    # Everything else in this group is a normal optional override, emitted
+    # whether or not support is currently on -- Orca ignoring a setting it is
+    # not using is harmless, and dropping them would make a saved design's
+    # support numbers vanish the moment the box was unticked.
     if body.get("mesh_base_enable_support"):
         overrides["enable_support"] = True
     raw_angle = body.get("mesh_base_support_threshold")
     if raw_angle is not None and raw_angle != "":
         ang = _finite_float("mesh_base_support_threshold", raw_angle, 30)
         overrides["support_threshold_angle"] = max(0, min(int(ang), 90))
+
+    _put("support_type", _opt_enum(
+        "mesh_base_support_type", _ALLOWED_SUPPORT_TYPES, "support type"))
+    _put("support_top_z_distance", _opt_num("mesh_base_support_top_z", 0.0, 5.0))
+    _put("support_bottom_z_distance", _opt_num("mesh_base_support_bottom_z", 0.0, 5.0))
+    _put("support_interface_top_layers",
+         _opt_int("mesh_base_support_interface_layers", 0, 10))
+    _put("support_interface_spacing",
+         _opt_num("mesh_base_support_interface_spacing", 0.0, 10.0))
+    _put("support_object_xy_distance", _opt_num("mesh_base_support_xy", 0.0, 10.0))
+    _put("support_object_first_layer_gap",
+         _opt_num("mesh_base_support_first_layer_gap", 0.0, 5.0))
 
     return {
         "mesh_base_id": mesh_base_id,
@@ -2682,6 +2782,13 @@ def _printer_entry_json(key, profile, custom, meta=None):
         # than carrying a hardcoded speed ceiling that would be wrong on every
         # printer but the one it was written for.
         "max_velocity": float(profile.max_velocity),
+        # max_accel: the Planar base panel exposes an acceleration override
+        # (OrcaSlicer's default_acceleration, the "lower it for thin models"
+        # knob). Served per-printer for the same reason as max_velocity above:
+        # an mm/s^2 ceiling written into designer.js would be a machine limit
+        # living in a module, wrong on every printer but the one it was typed
+        # for. build_process_json clamps to this same value server-side.
+        "max_accel": float(profile.max_accel),
         # quality_slope_max: same reasoning as max_z_velocity above -- this
         # used to be QUALITY_SLOPE_LIMIT, a bare 0.25 baked into serve.py and
         # applied to every printer regardless of what it actually declared.

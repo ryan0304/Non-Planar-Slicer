@@ -144,6 +144,39 @@ _ALLOWED_BRIM_TYPES = frozenset({
     "no_brim", "outer_only", "inner_only", "outer_and_inner", "auto_brim",
 })
 
+# The remaining Orca enums this module exposes. Every value below was read
+# back out of a LOCALLY INSTALLED OrcaSlicer (2.4.x) rather than typed from
+# memory: the shipped process profiles under resources/profiles/*/process/
+# were scanned for the values actually in use, and each literal was then
+# confirmed to exist in the OrcaSlicer binary itself. An enum value Orca does
+# not recognise is a silent-failure mode (the CLI can exit nonzero with no
+# useful message -- see _PROFILE_FROM's note), so these are allow-lists for
+# exactly the same reason _ALLOWED_BRIM_TYPES is one.
+_ALLOWED_SEAM_POSITIONS = frozenset({"nearest", "aligned", "back", "random"})
+
+# Orca 2.x replaced the older single wall_infill_order key with wall_sequence
+# (+ is_infill_first). The base profiles this module inherits from still carry
+# wall_infill_order; emitting wall_sequence ONLY when the caller actually picks
+# one leaves the inherited default in play for every untouched request, so the
+# two keys never end up fighting over a request nobody asked to change.
+_ALLOWED_WALL_SEQUENCES = frozenset({
+    "inner wall/outer wall", "outer wall/inner wall", "inner-outer-inner wall",
+})
+
+# Shared by top_surface_pattern and bottom_surface_pattern -- Orca uses one
+# enum for both.
+_ALLOWED_SURFACE_PATTERNS = frozenset({
+    "monotonic", "monotonicline", "concentric", "zig-zag", "alignedrectilinear",
+    "rectilinear", "hilbertcurve", "archimedeanchords", "octagramspiral",
+})
+
+# Only the two AUTOMATIC support types are offered. Orca's "normal(manual)"
+# and "tree(manual)" build support solely where the user has painted enforcers
+# in Orca's own 3-D view -- something a CLI slice of a generated STL can never
+# have. Offering them would be a control that silently produces no support at
+# all, which is the dead-control failure mode this panel exists to avoid.
+_ALLOWED_SUPPORT_TYPES = frozenset({"normal(auto)", "tree(auto)"})
+
 
 def build_process_json(
     profile: PrinterProfile,
@@ -165,6 +198,35 @@ def build_process_json(
     brim_width: float = 0.0,
     enable_support: bool = False,
     support_threshold_angle: int = 30,
+    # --- Quality -----------------------------------------------------------
+    outer_wall_line_width: float | None = None,
+    inner_wall_line_width: float | None = None,
+    top_surface_line_width: float | None = None,
+    sparse_infill_line_width: float | None = None,
+    internal_solid_infill_line_width: float | None = None,
+    seam_position: str | None = None,
+    wall_sequence: str | None = None,
+    # --- Strength ----------------------------------------------------------
+    top_surface_pattern: str | None = None,
+    bottom_surface_pattern: str | None = None,
+    bridge_angle: float | None = None,
+    # --- Speed -------------------------------------------------------------
+    initial_layer_infill_speed: float | None = None,
+    internal_solid_infill_speed: float | None = None,
+    top_surface_speed: float | None = None,
+    overhang_speed: float | None = None,
+    acceleration: float | None = None,
+    # --- Support -----------------------------------------------------------
+    support_type: str | None = None,
+    support_top_z_distance: float | None = None,
+    support_bottom_z_distance: float | None = None,
+    support_interface_top_layers: int | None = None,
+    support_interface_spacing: float | None = None,
+    support_object_xy_distance: float | None = None,
+    support_object_first_layer_gap: float | None = None,
+    # --- Others ------------------------------------------------------------
+    skirt_loops: int | None = None,
+    brim_object_gap: float | None = None,
 ) -> dict:
     """Build an Orca process-settings dict, clamping every speed/accel key
     to this printer's own limits before serializing -- defense in depth on
@@ -172,6 +234,24 @@ def build_process_json(
     "server clamps must be at least as strict" spirit extends naturally to
     "don't hand an external tool a number our own safety story says is
     unsafe" (this repo's own generators are held to the exact same rule).
+
+    Every parameter below ``support_threshold_angle`` is OPTIONAL and
+    defaults to None, meaning "emit nothing for this key and let the
+    inherited base profile's own value stand". That is what keeps the
+    parametric hybrid's output unchanged by this expansion: a caller that
+    does not pass them produces exactly the JSON it produced before they
+    existed. It is also what makes a blank UI field honest -- an untouched
+    control cannot silently rewrite a setting it never showed a value for.
+
+    Two different kinds of ceiling appear here and conflating them is the
+    mistake to avoid. Speeds and acceleration are MACHINE limits, so they come
+    from *profile* (``max_velocity`` / ``max_accel``) and never from a module
+    constant, per CLAUDE.md. The support and brim distances are not machine
+    limits at all -- they are slicer geometry, bounded here only to stop an
+    absurd number reaching the subprocess -- so a fixed sanity range is the
+    right thing for them. Line widths sit in between: they are bounded as a
+    MULTIPLE of this profile's own nozzle diameter rather than in millimetres,
+    because "how wide a bead can this nozzle lay" is a nozzle property.
     """
     if infill_pattern not in _ALLOWED_INFILL_PATTERNS:
         raise ValueError(
@@ -211,6 +291,35 @@ def build_process_json(
             raise ValueError(f"{name} must be positive, got {val!r}")
         return min(val, profile.max_velocity)
 
+    # Non-finite rejection for the non-speed numerics too, for the same reason
+    # as _speed: a NaN "clamped" by max()/min() is still a NaN, so it is
+    # refused at this boundary rather than carried into the JSON handed to the
+    # subprocess.
+    def _num(name, val, lo, hi):
+        val = float(val)
+        if not math.isfinite(val):
+            raise ValueError(
+                f"{name} must be a finite number, got {val!r} -- a non-finite "
+                "value passes every comparison downstream instead of tripping "
+                "it, so it is rejected here rather than clamped."
+            )
+        return max(lo, min(val, hi))
+
+    def _enum(name, val, allowed):
+        val = str(val)
+        if val not in allowed:
+            raise ValueError(
+                f"Unknown {name} {val!r}; must be one of {sorted(allowed)}"
+            )
+        return val
+
+    # The bound is a multiple of the profile's own nozzle diameter, not a
+    # millimetre figure typed into this module. GcodeWriter's volumetric-flow
+    # cap still applies to every replayed move regardless -- this is the outer
+    # of two independent guards, not the only one.
+    def _line_width(name, val):
+        return _num(name, val, 0.05, profile.nozzle_diameter * 3.0)
+
     outer_v = _speed("outer_wall_speed", outer_wall_speed, min(speed, 60.0))
     inner_v = _speed("inner_wall_speed", inner_wall_speed, speed)
     infill_v = _speed("infill_speed", infill_speed, speed)
@@ -222,7 +331,7 @@ def build_process_json(
         raise ValueError("brim_width must be a finite number")
     support_threshold_angle = max(0, min(int(support_threshold_angle), 90))
     base = "fdm_process_klipper_common" if profile.firmware == "klipper" else "fdm_process_marlin_common"
-    return {
+    out = {
         "type": "process",
         "from": _PROFILE_FROM,
         "inherits": base,
@@ -265,6 +374,131 @@ def build_process_json(
         "support_threshold_angle": str(support_threshold_angle),
     }
 
+    # --- Optional keys: absent stays absent. See the docstring. -------------
+    # Quality.
+    if outer_wall_line_width is not None:
+        out["outer_wall_line_width"] = (
+            f"{_line_width('outer_wall_line_width', outer_wall_line_width):g}")
+    if inner_wall_line_width is not None:
+        out["inner_wall_line_width"] = (
+            f"{_line_width('inner_wall_line_width', inner_wall_line_width):g}")
+    if top_surface_line_width is not None:
+        out["top_surface_line_width"] = (
+            f"{_line_width('top_surface_line_width', top_surface_line_width):g}")
+    if sparse_infill_line_width is not None:
+        out["sparse_infill_line_width"] = (
+            f"{_line_width('sparse_infill_line_width', sparse_infill_line_width):g}")
+    if internal_solid_infill_line_width is not None:
+        out["internal_solid_infill_line_width"] = (
+            f"{_line_width('internal_solid_infill_line_width', internal_solid_infill_line_width):g}")
+    if seam_position is not None:
+        out["seam_position"] = _enum("seam position", seam_position, _ALLOWED_SEAM_POSITIONS)
+    if wall_sequence is not None:
+        out["wall_sequence"] = _enum("wall sequence", wall_sequence, _ALLOWED_WALL_SEQUENCES)
+
+    # Strength.
+    if top_surface_pattern is not None:
+        out["top_surface_pattern"] = _enum(
+            "top surface pattern", top_surface_pattern, _ALLOWED_SURFACE_PATTERNS)
+    if bottom_surface_pattern is not None:
+        out["bottom_surface_pattern"] = _enum(
+            "bottom surface pattern", bottom_surface_pattern, _ALLOWED_SURFACE_PATTERNS)
+    if bridge_angle is not None:
+        # Orca reads 0 as "pick the bridge direction automatically", which is
+        # why the range starts at 0 instead of rejecting it.
+        out["bridge_angle"] = f"{_num('bridge_angle', bridge_angle, 0.0, 360.0):g}"
+
+    # Speed. Each of these is a machine-limited value, so it goes through
+    # _speed and lands under profile.max_velocity exactly like the five above.
+    if initial_layer_infill_speed is not None:
+        out["initial_layer_infill_speed"] = (
+            f"{_speed('initial_layer_infill_speed', initial_layer_infill_speed, None):g}")
+    if internal_solid_infill_speed is not None:
+        out["internal_solid_infill_speed"] = (
+            f"{_speed('internal_solid_infill_speed', internal_solid_infill_speed, None):g}")
+    if top_surface_speed is not None:
+        out["top_surface_speed"] = (
+            f"{_speed('top_surface_speed', top_surface_speed, None):g}")
+    if overhang_speed is not None:
+        # Orca splits overhang slowdown into four bands by how much of the
+        # extrusion is unsupported. The 1/4 band ships as "0", which Orca reads
+        # as "no slowdown, print at the normal wall speed" -- so it is left
+        # alone deliberately, and this single control drives the three bands
+        # that are genuinely overhanging. One number instead of four is a
+        # simplification; the UI tooltip says so rather than implying this is
+        # Orca's own one-to-one control.
+        ov = _speed("overhang_speed", overhang_speed, None)
+        out["overhang_2_4_speed"] = f"{ov:g}"
+        out["overhang_3_4_speed"] = f"{ov:g}"
+        out["overhang_4_4_speed"] = f"{ov:g}"
+    if acceleration is not None:
+        # profile.max_accel, NOT the derived `accel` above: a caller may ask
+        # for more than this module's own conservative default, but never for
+        # more than the machine itself declares.
+        a = float(acceleration)
+        if not math.isfinite(a):
+            raise ValueError(
+                f"acceleration must be a finite number, got {acceleration!r} "
+                "-- a non-finite value passes every comparison downstream "
+                "instead of tripping it, so it is rejected here rather than "
+                "clamped."
+            )
+        if a <= 0.0:
+            raise ValueError(f"acceleration must be positive, got {a!r}")
+        out["default_acceleration"] = f"{min(a, profile.max_accel):g}"
+
+    # Support. These only take effect while enable_support is on; they are
+    # still emitted whenever supplied, because Orca ignoring a setting it is
+    # not currently using is harmless, whereas dropping them here would make a
+    # saved design's values silently vanish the moment support was toggled off.
+    if support_type is not None:
+        out["support_type"] = _enum("support type", support_type, _ALLOWED_SUPPORT_TYPES)
+        if out["support_type"].startswith("tree"):
+            # Orca refuses to slice organic/tree support whose tip diameter is
+            # narrower than the support extrusion width, with the hard error
+            # "Organic support tree tip diameter must not be smaller than
+            # support material extrusion width". Its own default tip is 0.8 mm
+            # while the inherited base profile's support_line_width is "96%",
+            # which resolves against the line width -- so on a 0.8 mm nozzle
+            # that is 0.96 * 0.84 = 0.806 mm and the two cross over. Verified
+            # against a real OrcaSlicer 2.4 install: the same request slices on
+            # a 0.4 nozzle and fails on a 0.8.
+            #
+            # So the tip is derived from the line width actually in use rather
+            # than left to a default that only holds for small nozzles. The
+            # 0.8 floor is ORCA'S OWN default, kept deliberately so the common
+            # 0.4-nozzle case emits the value it already had and nothing about
+            # its support geometry changes; the 1.2 factor is headroom over the
+            # 0.96 the comparison uses. Neither is a machine limit -- both are
+            # ratios against a width the caller supplied -- so per CLAUDE.md
+            # they belong here rather than on the PrinterProfile.
+            out["tree_support_tip_diameter"] = f"{max(0.8, line_width * 1.2):g}"
+    if support_top_z_distance is not None:
+        out["support_top_z_distance"] = (
+            f"{_num('support_top_z_distance', support_top_z_distance, 0.0, 5.0):g}")
+    if support_bottom_z_distance is not None:
+        out["support_bottom_z_distance"] = (
+            f"{_num('support_bottom_z_distance', support_bottom_z_distance, 0.0, 5.0):g}")
+    if support_interface_top_layers is not None:
+        out["support_interface_top_layers"] = str(int(
+            _num("support_interface_top_layers", support_interface_top_layers, 0, 10)))
+    if support_interface_spacing is not None:
+        out["support_interface_spacing"] = (
+            f"{_num('support_interface_spacing', support_interface_spacing, 0.0, 10.0):g}")
+    if support_object_xy_distance is not None:
+        out["support_object_xy_distance"] = (
+            f"{_num('support_object_xy_distance', support_object_xy_distance, 0.0, 10.0):g}")
+    if support_object_first_layer_gap is not None:
+        out["support_object_first_layer_gap"] = (
+            f"{_num('support_object_first_layer_gap', support_object_first_layer_gap, 0.0, 5.0):g}")
+
+    # Others.
+    if skirt_loops is not None:
+        out["skirt_loops"] = str(int(_num("skirt_loops", skirt_loops, 0, 10)))
+    if brim_object_gap is not None:
+        out["brim_object_gap"] = f"{_num('brim_object_gap', brim_object_gap, 0.0, 5.0):g}"
+
+    return out
 
 # ---------------------------------------------------------------- filament -
 def build_filament_json(fs: FilamentSettings | None, profile: PrinterProfile) -> dict:

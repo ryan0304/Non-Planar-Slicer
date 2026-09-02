@@ -224,6 +224,24 @@
     mesh_base_first_layer_speed: null,
     mesh_base_brim_type: '', mesh_base_brim_width: null,
     mesh_base_enable_support: false, mesh_base_support_threshold: null,
+    // The rest of the OrcaSlicer Process settings, grouped in the right-hand
+    // bar the way Orca's own Process tab groups them (Quality / Strength /
+    // Speed / Support / Others). Same "absent means unset" contract as the
+    // fields above -- null or '' is never sent, so OrcaSlicer's own value for
+    // the selected printer and filament stands.
+    mesh_base_lw_outer: null, mesh_base_lw_inner: null, mesh_base_lw_top: null,
+    mesh_base_lw_infill: null, mesh_base_lw_solid: null,
+    mesh_base_seam_position: '', mesh_base_wall_sequence: '',
+    mesh_base_top_pattern: '', mesh_base_bottom_pattern: '',
+    mesh_base_bridge_angle: null,
+    mesh_base_first_layer_infill_speed: null, mesh_base_solid_infill_speed: null,
+    mesh_base_top_surface_speed: null, mesh_base_overhang_speed: null,
+    mesh_base_acceleration: null,
+    mesh_base_support_type: '', mesh_base_support_top_z: null,
+    mesh_base_support_bottom_z: null, mesh_base_support_interface_layers: null,
+    mesh_base_support_interface_spacing: null, mesh_base_support_xy: null,
+    mesh_base_support_first_layer_gap: null,
+    mesh_base_skirt_loops: null, mesh_base_brim_gap: null,
     star_points: 5, star_depth: 0.35,
     print_speed: 40, filament: "", line_width: null, nozzle_temp: null, bed_temp: null,
     pattern: "", pattern_amp: 1.0, pattern_waves: 12,
@@ -1127,12 +1145,17 @@
   // CLOSED (optional, advanced overrides -- the untouched-control-changes-
   // nothing fields); Shell/Infill/Seam default OPEN, same as the original
   // single section did, since they were already visible before this split.
-  registerSection('mb-shell', document.getElementById('sec-head-mbshell'), document.getElementById('sec-body-mbshell'), true);
-  registerSection('mb-infill', document.getElementById('sec-head-mbinfill'), document.getElementById('sec-body-mbinfill'), true);
-  registerSection('mb-seam', document.getElementById('sec-head-mbseam'), document.getElementById('sec-body-mbseam'), true);
+  // Right-hand Planar base bar, grouped as OrcaSlicer's own Process tab is.
+  // Only Strength starts expanded: it holds the settings a user actually
+  // retunes per part (wall loops, shell layers, infill), while Quality,
+  // Speed, Support and Others are dial-it-in-once groups. Thirty controls all
+  // open at once in a 280px column is a wall of numbers, not a panel.
+  registerSection('mb-quality', document.getElementById('sec-head-mbquality'), document.getElementById('sec-body-mbquality'), false);
+  registerSection('mb-strength', document.getElementById('sec-head-mbstrength'), document.getElementById('sec-body-mbstrength'), true);
   registerSection('mb-speed', document.getElementById('sec-head-mbspeed'), document.getElementById('sec-body-mbspeed'), false);
-  registerSection('mb-adhesion', document.getElementById('sec-head-mbadhesion'), document.getElementById('sec-body-mbadhesion'), false);
   registerSection('mb-support', document.getElementById('sec-head-mbsupport'), document.getElementById('sec-body-mbsupport'), false);
+  registerSection('mb-others', document.getElementById('sec-head-mbothers'), document.getElementById('sec-body-mbothers'), false);
+  registerSection('mb-seam', document.getElementById('sec-head-mbseam'), document.getElementById('sec-body-mbseam'), true);
 
   // ---- hint-density toggle --------------------------------------------------
   // Every .hint block defaults visible -- hiding them is opt-in and
@@ -1542,6 +1565,12 @@
       // either way.
       max_velocity: (meta && typeof meta.max_velocity === 'number' && isFinite(meta.max_velocity))
         ? meta.max_velocity : null,
+      // Acceleration ceiling for the Planar base panel's own acceleration
+      // input. Same contract as max_velocity above, including the null: a
+      // wrong ceiling is worse than none, and build_process_json clamps to
+      // profile.max_accel server-side regardless.
+      max_accel: (meta && typeof meta.max_accel === 'number' && isFinite(meta.max_accel))
+        ? meta.max_accel : null,
       // Same contract, same funnel, for the wave-slope ceiling: designer.js
       // used to hardcode the Trident's own 0.25 for every printer (see
       // SLOPE_LIMIT_FALLBACK's comment above for why that number in
@@ -2794,24 +2823,21 @@
   // (the one mode that always works) rather than leaving an unusable option
   // selected and disabled.
   (function(){
-    var meshBaseIds = ['d-meshbase-blend', 'd-meshbase-walls', 'd-meshbase-infill', 'd-meshbase-pattern',
-      'd-meshbase-toplayers', 'd-meshbase-bottomlayers',
-      // Speed/Adhesion/Support sections added alongside Shell/Infill/Seam
-      // blend above -- every one of these also runs through the same local
-      // OrcaSlicer install, so it needs the same up-front disable.
-      'd-meshbase-speed-outer', 'd-meshbase-speed-inner', 'd-meshbase-speed-infill',
-      'd-meshbase-speed-travel', 'd-meshbase-speed-first',
-      'd-meshbase-brim-type', 'd-meshbase-brim-width',
-      'd-meshbase-support-enable', 'd-meshbase-support-threshold'];
+    // EVERY control in the bar, found by container rather than listed by id:
+    // all of them reach the printer through the same local OrcaSlicer install,
+    // so all of them need the same up-front disable, and a hand-kept id list
+    // would silently miss each newly added setting -- leaving it enabled and
+    // apparently usable on a machine with no Orca at all.
+    var meshBaseInputs = function(){
+      var panel = document.getElementById('planar-panel');
+      return panel ? panel.querySelectorAll('input, select') : [];
+    };
     var planarRadio = document.getElementById('mesh-mode-planar');
     var textureRadio = document.getElementById('mesh-mode-texture');
     var hintEl = document.getElementById('meshbase-orca-hint');
     apiFetch('/api/orca_status').then(function(r){ return r.json(); }).then(function(j){
       if(j && j.available) return;
-      meshBaseIds.forEach(function(id){
-        var el = document.getElementById(id);
-        if(el) el.disabled = true;
-      });
+      meshBaseInputs().forEach(function(el){ el.disabled = true; });
       if(planarRadio){
         planarRadio.disabled = true;
         if(design.mesh_base_mode === 'planar_base'){
@@ -3921,6 +3947,56 @@
   // that class is styled only for .pm-field-input (the filament-modal
   // inputs), so reusing it here on a plain .drow input would silently do
   // nothing. Clamps to the field's own min/max on commit, same as bindNumber.
+  // Every OPTIONAL planar-base control in ONE table: [element id, design
+  // field, kind]. The three places that touch these fields -- the input
+  // bindings below, loadDesign()'s restore, and buildGenerateBody()'s request
+  // body -- all iterate this list rather than each keeping their own copy.
+  // That is a deliberate change of shape: with five optional settings three
+  // hand-maintained parallel lists were survivable, but at thirty a new
+  // setting added to two of the three silently half-works (it binds and
+  // persists, then never reaches the server, or reaches it but is lost on
+  // reload). Kind 'num' means "blank clears it to null"; kind 'sel' means a
+  // <select> whose "" option IS the unset state.
+  var MESH_BASE_OPTIONAL = [
+    // Quality
+    ['d-meshbase-lw-outer', 'mesh_base_lw_outer', 'num'],
+    ['d-meshbase-lw-inner', 'mesh_base_lw_inner', 'num'],
+    ['d-meshbase-lw-top', 'mesh_base_lw_top', 'num'],
+    ['d-meshbase-lw-infill', 'mesh_base_lw_infill', 'num'],
+    ['d-meshbase-lw-solid', 'mesh_base_lw_solid', 'num'],
+    ['d-meshbase-seam', 'mesh_base_seam_position', 'sel'],
+    ['d-meshbase-wallorder', 'mesh_base_wall_sequence', 'sel'],
+    // Strength
+    ['d-meshbase-toppattern', 'mesh_base_top_pattern', 'sel'],
+    ['d-meshbase-bottompattern', 'mesh_base_bottom_pattern', 'sel'],
+    ['d-meshbase-bridgeangle', 'mesh_base_bridge_angle', 'num'],
+    // Speed
+    ['d-meshbase-speed-first', 'mesh_base_first_layer_speed', 'num'],
+    ['d-meshbase-speed-firstinfill', 'mesh_base_first_layer_infill_speed', 'num'],
+    ['d-meshbase-speed-outer', 'mesh_base_outer_wall_speed', 'num'],
+    ['d-meshbase-speed-inner', 'mesh_base_inner_wall_speed', 'num'],
+    ['d-meshbase-speed-infill', 'mesh_base_infill_speed', 'num'],
+    ['d-meshbase-speed-solid', 'mesh_base_solid_infill_speed', 'num'],
+    ['d-meshbase-speed-topsurface', 'mesh_base_top_surface_speed', 'num'],
+    ['d-meshbase-speed-travel', 'mesh_base_travel_speed', 'num'],
+    ['d-meshbase-speed-overhang', 'mesh_base_overhang_speed', 'num'],
+    ['d-meshbase-accel', 'mesh_base_acceleration', 'num'],
+    // Support
+    ['d-meshbase-support-type', 'mesh_base_support_type', 'sel'],
+    ['d-meshbase-support-threshold', 'mesh_base_support_threshold', 'num'],
+    ['d-meshbase-support-topz', 'mesh_base_support_top_z', 'num'],
+    ['d-meshbase-support-bottomz', 'mesh_base_support_bottom_z', 'num'],
+    ['d-meshbase-support-iflayers', 'mesh_base_support_interface_layers', 'num'],
+    ['d-meshbase-support-ifspacing', 'mesh_base_support_interface_spacing', 'num'],
+    ['d-meshbase-support-xy', 'mesh_base_support_xy', 'num'],
+    ['d-meshbase-support-firstgap', 'mesh_base_support_first_layer_gap', 'num'],
+    // Others
+    ['d-meshbase-skirt', 'mesh_base_skirt_loops', 'num'],
+    ['d-meshbase-brim-type', 'mesh_base_brim_type', 'sel'],
+    ['d-meshbase-brim-width', 'mesh_base_brim_width', 'num'],
+    ['d-meshbase-brim-gap', 'mesh_base_brim_gap', 'num']
+  ];
+
   function bindOptionalNumber(id, field){
     var el = document.getElementById(id);
     if(!el) return;
@@ -4016,25 +4092,37 @@
     var v = lim && typeof lim.max_velocity === 'number' && isFinite(lim.max_velocity)
       ? lim.max_velocity : null;
     ['d-meshbase-speed-outer', 'd-meshbase-speed-inner', 'd-meshbase-speed-infill',
-     'd-meshbase-speed-travel', 'd-meshbase-speed-first'].forEach(function(id){
+     'd-meshbase-speed-travel', 'd-meshbase-speed-first',
+     'd-meshbase-speed-firstinfill', 'd-meshbase-speed-solid',
+     'd-meshbase-speed-topsurface', 'd-meshbase-speed-overhang'].forEach(function(id){
       var el = document.getElementById(id);
       if(!el) return;
       if(v != null) el.max = String(v); else el.removeAttribute('max');
     });
+    // Acceleration has its own machine ceiling (max_accel, not max_velocity),
+    // served per-printer for exactly the same reason -- an mm/s^2 figure
+    // typed into this file would be the module-constant machine limit
+    // CLAUDE.md forbids. Same "remove rather than guess" rule as above.
+    var a = lim && typeof lim.max_accel === 'number' && isFinite(lim.max_accel)
+      ? lim.max_accel : null;
+    var accelEl = document.getElementById('d-meshbase-accel');
+    if(accelEl){
+      if(a != null) accelEl.max = String(a); else accelEl.removeAttribute('max');
+    }
   }
 
-  bindOptionalNumber('d-meshbase-speed-outer', 'mesh_base_outer_wall_speed');
-  bindOptionalNumber('d-meshbase-speed-inner', 'mesh_base_inner_wall_speed');
-  bindOptionalNumber('d-meshbase-speed-infill', 'mesh_base_infill_speed');
-  bindOptionalNumber('d-meshbase-speed-travel', 'mesh_base_travel_speed');
-  bindOptionalNumber('d-meshbase-speed-first', 'mesh_base_first_layer_speed');
-  // Adhesion: brim type is a select with its own blank "(default)" option
-  // (value="") so bindSelect's plain `design[field] = el.value` already
-  // gives the right "absent means unset" semantics with no extra glue.
-  bindSelect('d-meshbase-brim-type', 'mesh_base_brim_type');
-  bindOptionalNumber('d-meshbase-brim-width', 'mesh_base_brim_width');
-  // Support: plain checkbox (default OFF, confirmed with the user) plus an
-  // optional threshold angle.
+  // Bind every optional control from the one table. Selects carry their own
+  // blank "(default)" option (value=""), so bindSelect's plain
+  // `design[field] = el.value` already gives the right "absent means unset"
+  // semantics with no extra glue.
+  MESH_BASE_OPTIONAL.forEach(function(row){
+    if(row[2] === 'sel') bindSelect(row[0], row[1]);
+    else bindOptionalNumber(row[0], row[1]);
+  });
+  // Support enable: a plain checkbox (default OFF, confirmed with the user).
+  // It is NOT in MESH_BASE_OPTIONAL because its absent state is a real value
+  // (off) rather than "unset", which is a different contract from every row
+  // in that table.
   (function(){
     var el = document.getElementById('d-meshbase-support-enable');
     if(!el) return;
@@ -4043,9 +4131,42 @@
       design.mesh_base_enable_support = el.checked;
       persistDesign();
       schedulePreview();
+      syncPlanarSupportRows();
     });
   })();
-  bindOptionalNumber('d-meshbase-support-threshold', 'mesh_base_support_threshold');
+  // The Support group's other rows do nothing while support is off. Dimming
+  // them (rather than hiding them) keeps the group's shape stable and says
+  // "this is inert right now" instead of "this setting does not exist" --
+  // they stay readable and their saved values stay visible.
+  function syncPlanarSupportRows(){
+    var on = !!design.mesh_base_enable_support;
+    var hint = document.getElementById('meshbase-support-off-hint');
+    if(hint) hint.style.display = on ? 'none' : '';
+    ['row-meshbase-support-type', 'row-meshbase-support-threshold',
+     'row-meshbase-support-topz', 'row-meshbase-support-bottomz',
+     'row-meshbase-support-iflayers', 'row-meshbase-support-ifspacing',
+     'row-meshbase-support-xy', 'row-meshbase-support-firstgap'
+    ].forEach(function(id){
+      var el = document.getElementById(id);
+      if(el) el.classList.toggle('row-inert', !on);
+    });
+  }
+  syncPlanarSupportRows();
+  // The base and the non-planar wall share ONE layer height, owned by the
+  // left sidebar's #d-lh. Mirrored here as read-only text so the Quality
+  // group is not missing the setting Orca puts at the top of its own Quality
+  // page, without creating a second control that could disagree with it.
+  function syncPlanarLayerHeightRead(){
+    var el = document.getElementById('d-meshbase-lh-read');
+    if(!el) return;
+    var v = parseFloat(design.layer_height);
+    el.textContent = isFinite(v) ? (v + ' mm') : '--';
+  }
+  syncPlanarLayerHeightRead();
+  (function(){
+    var lh = document.getElementById('d-lh');
+    if(lh) lh.addEventListener('input', syncPlanarLayerHeightRead);
+  })();
   (function(){
     var el = document.getElementById('d-flh');
     if(!el) return;
@@ -6151,18 +6272,18 @@
     _set('d-meshbase-toplayers', design.mesh_base_top_layers != null ? design.mesh_base_top_layers : 3);
     _set('d-meshbase-bottomlayers', design.mesh_base_bottom_layers != null ? design.mesh_base_bottom_layers : 3);
     if(typeof syncMeshBaseBlendMax === 'function') syncMeshBaseBlendMax();
-    // Optional Speed/Adhesion/Support overrides -- blank, not 0/false, is
-    // "unset" (see the design-object comment on these fields above).
-    _set('d-meshbase-speed-outer', design.mesh_base_outer_wall_speed != null ? design.mesh_base_outer_wall_speed : '');
-    _set('d-meshbase-speed-inner', design.mesh_base_inner_wall_speed != null ? design.mesh_base_inner_wall_speed : '');
-    _set('d-meshbase-speed-infill', design.mesh_base_infill_speed != null ? design.mesh_base_infill_speed : '');
-    _set('d-meshbase-speed-travel', design.mesh_base_travel_speed != null ? design.mesh_base_travel_speed : '');
-    _set('d-meshbase-speed-first', design.mesh_base_first_layer_speed != null ? design.mesh_base_first_layer_speed : '');
-    _set('d-meshbase-brim-type', design.mesh_base_brim_type || '');
-    _set('d-meshbase-brim-width', design.mesh_base_brim_width != null ? design.mesh_base_brim_width : '');
+    // Optional Quality/Strength/Speed/Support/Others overrides -- blank, not
+    // 0/false, is "unset" (see the design-object comment on these fields).
+    // Driven off MESH_BASE_OPTIONAL so a setting can never be bound and sent
+    // but forgotten here, which would quietly drop it on every reload.
+    MESH_BASE_OPTIONAL.forEach(function(row){
+      var v = design[row[1]];
+      _set(row[0], v != null && v !== '' ? v : '');
+    });
     var mbSupportEl = document.getElementById('d-meshbase-support-enable');
     if(mbSupportEl) mbSupportEl.checked = !!design.mesh_base_enable_support;
-    _set('d-meshbase-support-threshold', design.mesh_base_support_threshold != null ? design.mesh_base_support_threshold : '');
+    if(typeof syncPlanarSupportRows === 'function') syncPlanarSupportRows();
+    if(typeof syncPlanarLayerHeightRead === 'function') syncPlanarLayerHeightRead();
     var flhEl = document.getElementById('d-flh');
     if(flhEl) flhEl.value = design.first_layer_height != null ? design.first_layer_height : '';
     document.getElementById('d-spacing').value = design.spacing_factor;
@@ -6882,15 +7003,15 @@
         // "presence is the switch": it is a real boolean (default OFF,
         // confirmed with the user), sent only when true, matching serve.py's
         // own "truthy = on" reading of the field.
-        if(design.mesh_base_outer_wall_speed != null) body.mesh_base_outer_wall_speed = design.mesh_base_outer_wall_speed;
-        if(design.mesh_base_inner_wall_speed != null) body.mesh_base_inner_wall_speed = design.mesh_base_inner_wall_speed;
-        if(design.mesh_base_infill_speed != null) body.mesh_base_infill_speed = design.mesh_base_infill_speed;
-        if(design.mesh_base_travel_speed != null) body.mesh_base_travel_speed = design.mesh_base_travel_speed;
-        if(design.mesh_base_first_layer_speed != null) body.mesh_base_first_layer_speed = design.mesh_base_first_layer_speed;
-        if(design.mesh_base_brim_type) body.mesh_base_brim_type = design.mesh_base_brim_type;
-        if(design.mesh_base_brim_width != null) body.mesh_base_brim_width = design.mesh_base_brim_width;
+        // The request field name is the design field name for every row in
+        // MESH_BASE_OPTIONAL -- serve.py's _parse_mesh_hybrid_params reads
+        // exactly these keys -- so one loop replaces thirty hand-written
+        // lines that each had to agree with the server's spelling.
+        MESH_BASE_OPTIONAL.forEach(function(row){
+          var v = design[row[1]];
+          if(v != null && v !== '') body[row[1]] = v;
+        });
         if(design.mesh_base_enable_support) body.mesh_base_enable_support = true;
-        if(design.mesh_base_support_threshold != null) body.mesh_base_support_threshold = design.mesh_base_support_threshold;
       } else {
         body.mode = 'mesh_texture';
         body.mesh_id = meshState.mesh_id;

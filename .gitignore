@@ -12,3 +12,9 @@ __pycache__/
 venv/
 .DS_Store
 custom_printers/
+
+# OrcaSlicer drops a numbered log into the process working directory when a
+# slice fails validation (e.g. "00000.log"). It is the subprocess's scratch
+# output, not ours, and it appears in `git status` right after any failed
+# hybrid generate.
+[0-9][0-9][0-9][0-9][0-9].log

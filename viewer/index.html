@@ -766,26 +766,102 @@
             Height means ONLY the non-planar portion printed ABOVE this mesh, not the whole object -
             a 20 mm mount + Height 200 prints a 220 mm object.
           </div>
+          <div class="hint tight-top" id="meshbase-blank-hint">
+            Grouped as OrcaSlicer groups them. A blank field or "(default)" means
+            OrcaSlicer's own value for the selected printer and filament is used
+            unchanged - only a value you actually type is sent.
+          </div>
 
+          <!-- ---------------------------------------------------------- -->
           <hr>
-          <h3 class="section-heading" id="sec-head-mbshell">Shell</h3>
-          <div id="sec-body-mbshell">
-            <div class="drow" id="row-meshbase-toplayers"><span>Top layers
+          <h3 class="section-heading" id="sec-head-mbquality">Quality</h3>
+          <div id="sec-body-mbquality">
+            <div class="drow" id="row-meshbase-lh"><span>Layer height
+                <button type="button" class="fm-info-btn"
+                  data-tip="Set in the left sidebar and shared with the non-planar wall above -- the base and the wall print at one layer height, so there is deliberately only one control for it.">&#9432;</button>
+              </span><span class="mb-read" id="d-meshbase-lh-read">--</span></div>
+
+            <div class="mb-subhead">Line width</div>
+            <div class="hint tight-top">Millimetres. Blank keeps OrcaSlicer's own
+              nozzle-relative percentage (e.g. 110% of nozzle diameter).</div>
+            <div class="drow" id="row-meshbase-lw-outer"><span>Outer wall</span>
+              <input type="number" id="d-meshbase-lw-outer" min="0.05" max="2" step="0.01" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-lw-inner"><span>Inner wall</span>
+              <input type="number" id="d-meshbase-lw-inner" min="0.05" max="2" step="0.01" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-lw-top"><span>Top surface</span>
+              <input type="number" id="d-meshbase-lw-top" min="0.05" max="2" step="0.01" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-lw-infill"><span>Sparse infill</span>
+              <input type="number" id="d-meshbase-lw-infill" min="0.05" max="2" step="0.01" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-lw-solid"><span>Internal solid infill</span>
+              <input type="number" id="d-meshbase-lw-solid" min="0.05" max="2" step="0.01" placeholder="auto"></div>
+
+            <div class="mb-subhead">Walls</div>
+            <div class="drow" id="row-meshbase-seam"><span>Seam position</span>
+              <select id="d-meshbase-seam" class="mid-select">
+                <option value="">(default)</option>
+                <option value="aligned">Aligned</option>
+                <option value="nearest">Nearest</option>
+                <option value="back">Back</option>
+                <option value="random">Random</option>
+              </select>
+            </div>
+            <div class="drow" id="row-meshbase-wallorder"><span>Order of walls</span>
+              <select id="d-meshbase-wallorder" class="mid-select">
+                <option value="">(default)</option>
+                <option value="inner wall/outer wall">Inner first</option>
+                <option value="outer wall/inner wall">Outer first</option>
+                <option value="inner-outer-inner wall">Inner-outer-inner</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- ---------------------------------------------------------- -->
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbstrength">Strength</h3>
+          <div id="sec-body-mbstrength">
+            <div class="drow" id="row-meshbase-walls"><span>Wall loops</span>
+              <input type="number" id="d-meshbase-walls" min="1" max="8" step="1"></div>
+
+            <div class="mb-subhead">Top / bottom shell</div>
+            <div class="drow" id="row-meshbase-toplayers"><span>Top shell layers
                 <button type="button" class="fm-info-btn"
                   data-tip="Solid layers capping the TOP of the planar base before the non-planar wall begins. 0 leaves the base's interior open to its own sparse infill instead of a solid cap -- the see-through-to-infill bug this control exists to fix.">&#9432;</button>
               </span><input type="number" id="d-meshbase-toplayers" min="0" max="8" step="1"></div>
-            <div class="drow" id="row-meshbase-bottomlayers"><span>Bottom layers</span>
+            <div class="drow" id="row-meshbase-toppattern"><span>Top pattern</span>
+              <select id="d-meshbase-toppattern" class="mid-select">
+                <option value="">(default)</option>
+                <option value="monotonic">Monotonic</option>
+                <option value="monotonicline">Monotonic line</option>
+                <option value="concentric">Concentric</option>
+                <option value="zig-zag">Zig zag</option>
+                <option value="rectilinear">Rectilinear</option>
+                <option value="alignedrectilinear">Aligned rectilinear</option>
+                <option value="hilbertcurve">Hilbert curve</option>
+                <option value="archimedeanchords">Archimedean chords</option>
+                <option value="octagramspiral">Octagram spiral</option>
+              </select>
+            </div>
+            <div class="drow" id="row-meshbase-bottomlayers"><span>Bottom shell layers</span>
               <input type="number" id="d-meshbase-bottomlayers" min="0" max="8" step="1"></div>
-            <div class="drow" id="row-meshbase-walls"><span>Wall count</span>
-              <input type="number" id="d-meshbase-walls" min="1" max="8" step="1"></div>
-          </div>
+            <div class="drow" id="row-meshbase-bottompattern"><span>Bottom pattern</span>
+              <select id="d-meshbase-bottompattern" class="mid-select">
+                <option value="">(default)</option>
+                <option value="monotonic">Monotonic</option>
+                <option value="monotonicline">Monotonic line</option>
+                <option value="concentric">Concentric</option>
+                <option value="zig-zag">Zig zag</option>
+                <option value="rectilinear">Rectilinear</option>
+                <option value="alignedrectilinear">Aligned rectilinear</option>
+                <option value="hilbertcurve">Hilbert curve</option>
+                <option value="archimedeanchords">Archimedean chords</option>
+                <option value="octagramspiral">Octagram spiral</option>
+              </select>
+            </div>
 
-          <hr>
-          <h3 class="section-heading" id="sec-head-mbinfill">Infill</h3>
-          <div id="sec-body-mbinfill">
-            <div class="drow" id="row-meshbase-infill"><span>Infill density</span>
+            <div class="mb-subhead">Infill</div>
+            <div class="drow" id="row-meshbase-infill"><span>Sparse infill density</span>
               <input type="number" id="d-meshbase-infill" min="0" max="1" step="0.05"></div>
-            <div class="drow" id="row-meshbase-pattern"><span>Infill pattern</span>
+            <div class="drow" id="row-meshbase-pattern"><span>Sparse infill pattern</span>
               <select id="d-meshbase-pattern" class="mid-select">
                 <option value="grid">Grid</option>
                 <option value="line">Line</option>
@@ -797,39 +873,95 @@
                 <option value="rectilinear">Rectilinear</option>
               </select>
             </div>
-          </div>
-
-          <hr>
-          <h3 class="section-heading" id="sec-head-mbseam">Seam blend</h3>
-          <div id="sec-body-mbseam">
-            <div class="hint tight-top">Not an OrcaSlicer setting -- eases this app's own hand-off
-              from the mount's outline into the non-planar wall above it.</div>
-            <div class="drow" id="row-meshbase-blend"><span>Blend height (mm)
+            <div class="drow" id="row-meshbase-bridgeangle"><span>Bridge direction (deg)
                 <button type="button" class="fm-info-btn"
-                  data-tip="Eases the hand-off from the mount's own outline into the non-planar wall's starting shape over this many mm, instead of an abrupt seam. 0 = off. Clamped to the design Height.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-blend" min="0" step="0.5"></div>
+                  data-tip="Direction bridges are laid across an opening. 0 is a real value meaning 'let OrcaSlicer choose automatically'; leave the field BLANK to send nothing at all.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-bridgeangle" min="0" max="360" step="1" placeholder="auto"></div>
           </div>
 
+          <!-- ---------------------------------------------------------- -->
           <hr>
           <h3 class="section-heading" id="sec-head-mbspeed">Speed</h3>
           <div id="sec-body-mbspeed">
-            <div class="hint tight-top" id="mbspeed-hint">Blank = OrcaSlicer's own derived default
-              for the selected printer/filament. Only a typed value overrides it.</div>
-            <div class="drow" id="row-meshbase-speed-outer"><span>Outer wall (mm/s)</span>
-              <input type="number" id="d-meshbase-speed-outer" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-inner"><span>Inner wall (mm/s)</span>
-              <input type="number" id="d-meshbase-speed-inner" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-infill"><span>Infill (mm/s)</span>
-              <input type="number" id="d-meshbase-speed-infill" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-travel"><span>Travel (mm/s)</span>
-              <input type="number" id="d-meshbase-speed-travel" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-first"><span>First layer (mm/s)</span>
+            <div class="hint tight-top" id="mbspeed-hint">Every speed is a CEILING, not a
+              target: OrcaSlicer still slows for small perimeters, overhangs and cooling,
+              so a small part often prints slower than the number typed here.</div>
+            <div class="mb-subhead">Initial layer</div>
+            <div class="drow" id="row-meshbase-speed-first"><span>Initial layer</span>
               <input type="number" id="d-meshbase-speed-first" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-firstinfill"><span>Initial layer infill</span>
+              <input type="number" id="d-meshbase-speed-firstinfill" min="1" step="1" placeholder="auto"></div>
+
+            <div class="mb-subhead">Other layers</div>
+            <div class="drow" id="row-meshbase-speed-outer"><span>Outer wall</span>
+              <input type="number" id="d-meshbase-speed-outer" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-inner"><span>Inner wall</span>
+              <input type="number" id="d-meshbase-speed-inner" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-infill"><span>Sparse infill</span>
+              <input type="number" id="d-meshbase-speed-infill" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-solid"><span>Internal solid infill</span>
+              <input type="number" id="d-meshbase-speed-solid" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-topsurface"><span>Top surface</span>
+              <input type="number" id="d-meshbase-speed-topsurface" min="1" step="1" placeholder="auto"></div>
+
+            <div class="mb-subhead">Travel and overhangs</div>
+            <div class="drow" id="row-meshbase-speed-travel"><span>Travel</span>
+              <input type="number" id="d-meshbase-speed-travel" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-overhang"><span>Overhang
+                <button type="button" class="fm-info-btn"
+                  data-tip="OrcaSlicer splits overhang slowdown into four bands by how unsupported the extrusion is. This single control sets the three genuinely-overhanging bands (2/4, 3/4, 4/4) to one speed; the 1/4 band keeps OrcaSlicer's own 'no slowdown'.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-speed-overhang" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-accel"><span>Acceleration
+                <button type="button" class="fm-info-btn"
+                  data-tip="Default print acceleration in mm/s^2. Lowering it helps thin or tall models by reducing the jerk that makes them wobble. Clamped to the selected printer's own max acceleration.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-accel" min="1" step="50" placeholder="auto"></div>
           </div>
 
+          <!-- ---------------------------------------------------------- -->
           <hr>
-          <h3 class="section-heading" id="sec-head-mbadhesion">Adhesion</h3>
-          <div id="sec-body-mbadhesion">
+          <h3 class="section-heading" id="sec-head-mbsupport">Support</h3>
+          <div id="sec-body-mbsupport">
+            <label class="row" id="row-meshbase-support-enable"><span>Enable support</span>
+              <input type="checkbox" id="d-meshbase-support-enable"></label>
+            <div class="hint tight-top" id="meshbase-support-off-hint">The rows below only take
+              effect while Enable support is on.</div>
+            <div class="drow" id="row-meshbase-support-type"><span>Type
+                <button type="button" class="fm-info-btn"
+                  data-tip="Only the automatic types are offered. OrcaSlicer's manual types build support solely where enforcers are painted in its own 3-D view, which a command-line slice can never have -- offering them would be a control that silently produces no support.">&#9432;</button>
+              </span>
+              <select id="d-meshbase-support-type" class="mid-select">
+                <option value="">(default)</option>
+                <option value="normal(auto)">Normal (auto)</option>
+                <option value="tree(auto)">Tree (auto)</option>
+              </select>
+            </div>
+            <div class="drow" id="row-meshbase-support-threshold"><span>Threshold angle (deg)
+                <button type="button" class="fm-info-btn"
+                  data-tip="Overhang angle (from vertical) beyond which support material is generated. Blank = OrcaSlicer's own default.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-support-threshold" min="0" max="90" step="1"
+                placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-support-topz"><span>Top Z distance (mm)</span>
+              <input type="number" id="d-meshbase-support-topz" min="0" max="5" step="0.05" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-support-bottomz"><span>Bottom Z distance (mm)</span>
+              <input type="number" id="d-meshbase-support-bottomz" min="0" max="5" step="0.05" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-support-iflayers"><span>Top interface layers</span>
+              <input type="number" id="d-meshbase-support-iflayers" min="0" max="10" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-support-ifspacing"><span>Top interface spacing (mm)</span>
+              <input type="number" id="d-meshbase-support-ifspacing" min="0" max="10" step="0.05" placeholder="auto">
+            </div>
+            <div class="drow" id="row-meshbase-support-xy"><span>Object XY distance (mm)</span>
+              <input type="number" id="d-meshbase-support-xy" min="0" max="10" step="0.05" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-support-firstgap"><span>Object first layer gap (mm)</span>
+              <input type="number" id="d-meshbase-support-firstgap" min="0" max="5" step="0.05" placeholder="auto">
+            </div>
+          </div>
+
+          <!-- ---------------------------------------------------------- -->
+          <hr>
+          <h3 class="section-heading" id="sec-head-mbothers">Others</h3>
+          <div id="sec-body-mbothers">
+            <div class="drow" id="row-meshbase-skirt"><span>Skirt loops</span>
+              <input type="number" id="d-meshbase-skirt" min="0" max="10" step="1" placeholder="auto"></div>
             <div class="drow" id="row-meshbase-brim-type"><span>Brim type</span>
               <select id="d-meshbase-brim-type" class="mid-select">
                 <option value="">(default)</option>
@@ -842,18 +974,20 @@
             </div>
             <div class="drow" id="row-meshbase-brim-width"><span>Brim width (mm)</span>
               <input type="number" id="d-meshbase-brim-width" min="0" max="100" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-brim-gap"><span>Brim-object gap (mm)</span>
+              <input type="number" id="d-meshbase-brim-gap" min="0" max="5" step="0.05" placeholder="auto"></div>
           </div>
 
+          <!-- ---------------------------------------------------------- -->
           <hr>
-          <h3 class="section-heading" id="sec-head-mbsupport">Support</h3>
-          <div id="sec-body-mbsupport">
-            <label class="row" id="row-meshbase-support-enable"><span>Enable support</span>
-              <input type="checkbox" id="d-meshbase-support-enable"></label>
-            <div class="drow" id="row-meshbase-support-threshold"><span>Threshold angle (deg)
+          <h3 class="section-heading" id="sec-head-mbseam">Seam blend</h3>
+          <div id="sec-body-mbseam">
+            <div class="hint tight-top">Not an OrcaSlicer setting -- eases this app's own hand-off
+              from the mount's outline into the non-planar wall above it.</div>
+            <div class="drow" id="row-meshbase-blend"><span>Blend height (mm)
                 <button type="button" class="fm-info-btn"
-                  data-tip="Overhang angle (from vertical) beyond which support material is generated. Only takes effect while Enable support is on. Blank = OrcaSlicer's own default.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-support-threshold" min="0" max="90" step="1"
-                placeholder="auto"></div>
+                  data-tip="Eases the hand-off from the mount's own outline into the non-planar wall's starting shape over this many mm, instead of an abrupt seam. 0 = off. Clamped to the design Height.">&#9432;</button>
+              </span><input type="number" id="d-meshbase-blend" min="0" step="0.5"></div>
           </div>
         </div>
       </div>

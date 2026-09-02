@@ -172,9 +172,219 @@ def test_filament_json_defaults_and_clamps():
           f_cold["nozzle_temperature"])
 
 
+
+# ---------------------------------------------------------------------------
+# The expanded OrcaSlicer process settings (Quality / Strength / Speed /
+# Support / Others), added so the right-hand Planar base bar can offer the
+# same groups OrcaSlicer's own Process tab does.
+#
+# The single most important property is the FIRST test below: a caller that
+# passes none of them must produce byte-for-byte the same dict as before they
+# existed. That is what lets a blank UI field honestly mean "OrcaSlicer's own
+# default" and what keeps the parametric hybrid's behaviour untouched.
+# ---------------------------------------------------------------------------
+_BASE_KWARGS = dict(
+    layer_height=0.2, first_layer_height=0.2, wall_count=3,
+    infill_density=0.15, infill_pattern="grid", line_width=0.42,
+)
+
+# Every optional key this module can emit, with the kwarg that emits it.
+# Listed explicitly rather than derived from the signature so that adding a
+# parameter without adding it here is a visible omission in review, and so a
+# renamed Orca key cannot slip through as "no test changed".
+_OPTIONAL_EMITS = [
+    ("outer_wall_line_width", "outer_wall_line_width", 0.4),
+    ("inner_wall_line_width", "inner_wall_line_width", 0.45),
+    ("top_surface_line_width", "top_surface_line_width", 0.4),
+    ("sparse_infill_line_width", "sparse_infill_line_width", 0.45),
+    ("internal_solid_infill_line_width", "internal_solid_infill_line_width", 0.45),
+    ("seam_position", "seam_position", "back"),
+    ("wall_sequence", "wall_sequence", "outer wall/inner wall"),
+    ("top_surface_pattern", "top_surface_pattern", "concentric"),
+    ("bottom_surface_pattern", "bottom_surface_pattern", "monotonic"),
+    ("bridge_angle", "bridge_angle", 45),
+    ("initial_layer_infill_speed", "initial_layer_infill_speed", 30),
+    ("internal_solid_infill_speed", "internal_solid_infill_speed", 80),
+    ("top_surface_speed", "top_surface_speed", 40),
+    ("acceleration", "default_acceleration", 2500),
+    ("support_type", "support_type", "tree(auto)"),
+    ("support_top_z_distance", "support_top_z_distance", 0.2),
+    ("support_bottom_z_distance", "support_bottom_z_distance", 0.2),
+    ("support_interface_top_layers", "support_interface_top_layers", 2),
+    ("support_interface_spacing", "support_interface_spacing", 0.5),
+    ("support_object_xy_distance", "support_object_xy_distance", 0.35),
+    ("support_object_first_layer_gap", "support_object_first_layer_gap", 0.2),
+    ("skirt_loops", "skirt_loops", 1),
+    ("brim_object_gap", "brim_object_gap", 0.1),
+]
+
+
+def test_process_json_optional_settings():
+    profile = PrinterProfile()
+
+    # 1. Untouched controls change nothing. Every optional parameter defaults
+    #    to None, and None must mean "emit no key at all" -- not "emit a
+    #    zero", which would silently overwrite OrcaSlicer's own value.
+    plain = build_process_json(profile, **_BASE_KWARGS)
+    for kwarg, key, value in _OPTIONAL_EMITS:
+        if key == "default_acceleration":
+            continue  # always present; covered separately below
+        check(key not in plain,
+              f"process_json: {key} absent when {kwarg} is not passed",
+              f"unexpectedly present as {plain.get(key)!r}")
+
+    # 2. Each one, when passed, emits its own Orca key -- and ONLY its own.
+    #    Catches a copy-paste that writes the neighbouring key's name.
+    for kwarg, key, value in _OPTIONAL_EMITS:
+        got = build_process_json(profile, **_BASE_KWARGS, **{kwarg: value})
+        check(key in got, f"process_json: {kwarg} emits {key}")
+        added = set(got) - set(plain)
+        expected = set() if key == "default_acceleration" else {key}
+        if kwarg == "support_type" and str(value).startswith("tree"):
+            # The one deliberate pairing: tree support also pins a tip
+            # diameter wide enough for the support extrusion width, or Orca
+            # refuses the slice outright on a large nozzle. See test 8.
+            expected.add("tree_support_tip_diameter")
+        check(added == expected,
+              f"process_json: {kwarg} adds only {sorted(expected)}",
+              f"added {sorted(added)}")
+
+    # 3. overhang_speed is the one control that is NOT one-to-one: it drives
+    #    the three genuinely-overhanging bands and deliberately leaves Orca's
+    #    own "no slowdown" 1/4 band alone. If that ever becomes four separate
+    #    controls, this test is the thing that should fail.
+    oh = build_process_json(profile, **_BASE_KWARGS, overhang_speed=15)
+    check(oh.get("overhang_2_4_speed") == "15"
+          and oh.get("overhang_3_4_speed") == "15"
+          and oh.get("overhang_4_4_speed") == "15",
+          "process_json: overhang_speed sets the 2/4, 3/4 and 4/4 bands",
+          {k: v for k, v in oh.items() if k.startswith("overhang")})
+    check("overhang_1_4_speed" not in oh,
+          "process_json: overhang_speed leaves the 1/4 band at Orca's own "
+          "'no slowdown' rather than slowing a fully-supported wall")
+
+    # 4. Non-finite is REJECTED, never clamped -- CLAUDE.md's central trap.
+    #    max()/min() let a NaN straight through, so each of these must raise.
+    #    Checked on one parameter of every kind: a speed, an acceleration, a
+    #    line width and a plain geometry number.
+    for kwarg, bad in (
+        ("top_surface_speed", float("nan")),
+        ("top_surface_speed", float("inf")),
+        ("acceleration", float("nan")),
+        ("outer_wall_line_width", float("nan")),
+        ("support_object_xy_distance", float("inf")),
+        ("bridge_angle", float("nan")),
+    ):
+        try:
+            build_process_json(profile, **_BASE_KWARGS, **{kwarg: bad})
+            check(False, f"process_json: {kwarg}={bad!r} rejected",
+                  "no exception raised -- a non-finite value reached the JSON")
+        except ValueError:
+            check(True, f"process_json: {kwarg}={bad!r} rejected, not clamped")
+
+    # 5. Unknown enum values fail loudly rather than reaching the subprocess.
+    #    An unrecognised value makes the Orca CLI fail with no useful message,
+    #    so the allow-list is the only place it can be diagnosed.
+    for kwarg, bad in (
+        ("seam_position", "sideways"),
+        ("wall_sequence", "outer-then-inner"),
+        ("top_surface_pattern", "spaghetti"),
+        ("bottom_surface_pattern", "spaghetti"),
+        ("support_type", "normal(manual)"),   # real Orca value, deliberately not offered
+    ):
+        try:
+            build_process_json(profile, **_BASE_KWARGS, **{kwarg: bad})
+            check(False, f"process_json: {kwarg}={bad!r} rejected", "no exception")
+        except ValueError:
+            check(True, f"process_json: {kwarg}={bad!r} rejected by the allow-list")
+
+    # 6. Machine ceilings come from the PROFILE, never a module constant.
+    slow = PrinterProfile(max_velocity=40.0, max_accel=800.0)
+    got = build_process_json(
+        slow, **_BASE_KWARGS,
+        top_surface_speed=500, internal_solid_infill_speed=500,
+        initial_layer_infill_speed=500, overhang_speed=500, acceleration=99000)
+    for key in ("top_surface_speed", "internal_solid_infill_speed",
+                "initial_layer_infill_speed", "overhang_4_4_speed"):
+        check(float(got[key]) <= slow.max_velocity,
+              f"process_json: {key} clamped to this profile's max_velocity",
+              got[key])
+    check(float(got["default_acceleration"]) <= slow.max_accel,
+          "process_json: acceleration clamped to this profile's max_accel",
+          got["default_acceleration"])
+
+    # A caller IS allowed to exceed this module's own conservative 3000 accel
+    # default -- what it may never exceed is the machine's own figure.
+    fast = PrinterProfile(max_accel=20000.0)
+    got = build_process_json(fast, **_BASE_KWARGS, acceleration=9000)
+    check(got["default_acceleration"] == "9000",
+          "process_json: acceleration above the module's conservative default "
+          "is allowed while under the machine's own max_accel",
+          got["default_acceleration"])
+
+    # 7. Line width is bounded by the NOZZLE, not by a millimetre constant --
+    #    so the same request lands differently on a 0.4 and a 0.8 nozzle.
+    narrow = build_process_json(
+        PrinterProfile(nozzle_diameter=0.4), **_BASE_KWARGS,
+        outer_wall_line_width=5.0)
+    wide = build_process_json(
+        PrinterProfile(nozzle_diameter=0.8), **_BASE_KWARGS,
+        outer_wall_line_width=5.0)
+    check(float(narrow["outer_wall_line_width"]) == 1.2,
+          "process_json: line width capped at 3x a 0.4 nozzle",
+          narrow["outer_wall_line_width"])
+    check(float(wide["outer_wall_line_width"]) == 2.4,
+          "process_json: the same request caps higher on a 0.8 nozzle -- the "
+          "bound is the nozzle's, not a constant",
+          wide["outer_wall_line_width"])
+
+    # 8. Tree support must carry a tip diameter wide enough for the support
+    #    extrusion width in use. Found by driving a real OrcaSlicer 2.4:
+    #    picking Tree support on a 0.8 mm nozzle failed outright with
+    #    "Organic support tree tip diameter must not be smaller than support
+    #    material extrusion width", because Orca's default 0.8 mm tip is
+    #    narrower than the inherited support_line_width of 96% (0.96 * 0.84 =
+    #    0.806 mm). The same request slices on a 0.4 nozzle, so the bug is
+    #    invisible until someone changes nozzle -- exactly the kind of
+    #    machine-dependent break this repo derives from the profile instead.
+    narrow_tree = build_process_json(
+        PrinterProfile(nozzle_diameter=0.4),
+        **{**_BASE_KWARGS, "line_width": 0.42},
+        enable_support=True, support_type="tree(auto)")
+    check(narrow_tree["tree_support_tip_diameter"] == "0.8",
+          "process_json: a 0.4 nozzle keeps Orca's own 0.8 mm tree tip -- the "
+          "fix must not change support geometry for the common case",
+          narrow_tree.get("tree_support_tip_diameter"))
+
+    wide_tree = build_process_json(
+        PrinterProfile(nozzle_diameter=0.8),
+        **{**_BASE_KWARGS, "line_width": 0.84},
+        enable_support=True, support_type="tree(auto)")
+    tip = float(wide_tree["tree_support_tip_diameter"])
+    check(tip > 0.84 * 0.96,
+          "process_json: a 0.8 nozzle widens the tree tip past the resolved "
+          "support extrusion width, so Orca does not refuse the slice",
+          f"tip {tip} vs support width {0.84 * 0.96}")
+
+    # Normal support must NOT gain the key -- it is a tree-only setting, and
+    # emitting it everywhere would be noise Orca has to ignore.
+    normal = build_process_json(profile, **_BASE_KWARGS,
+                                enable_support=True, support_type="normal(auto)")
+    check("tree_support_tip_diameter" not in normal,
+          "process_json: normal support does not get a tree tip diameter")
+
+    # 9. bridge_angle 0 is a REAL value ("choose automatically"), not "unset".
+    #    Absence is what means unset, so 0 must survive as an emitted key.
+    zero = build_process_json(profile, **_BASE_KWARGS, bridge_angle=0)
+    check(zero.get("bridge_angle") == "0",
+          "process_json: bridge_angle 0 is emitted, not swallowed as unset",
+          zero.get("bridge_angle"))
+
+
 def main() -> int:
     test_machine_json_derives_from_profile()
     test_process_json_clamps_and_validates()
+    test_process_json_optional_settings()
     test_filament_json_defaults_and_clamps()
 
     if _FAILURES:
