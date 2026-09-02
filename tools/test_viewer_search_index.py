@@ -24,11 +24,20 @@ Every one of those is decidable from index.html alone. So this file re-derives
 each row's label and crumb the same way indexScroll()/crumbFor() do and
 asserts the properties a user actually sees. It is a contract test on the
 markup, in the spirit of test_serve_mesh_params.py's cross-file tests: if
-someone adds a control whose label collides or whose section is missing, this
+someone adds a control whose label collides or whose crumb goes missing, this
 fails instead of the search quietly showing two identical rows.
 
-The mirrored logic is deliberately tiny (a document-order sweep carrying the
-last heading forward) and is documented on both sides.
+SCOPE, after a follow-up correction
+------------------------------------
+The first pass of this fix also section-qualified the LEFT sidebar (every
+crumb became "Model > Shape" etc.) and added a compound "Planar > Quality"
+prefix to the planar bar. Neither was asked for and both were reverted: the
+non-planar side keeps the exact crumb it has always shown (its wizard step, or
+"Viewer"), and the planar bar shows its group name ALONE -- "Quality", not
+"Planar > Quality" -- since the bar is one visible panel with those headings
+already on screen, so the prefix was noise. This file's assertions follow that
+corrected shape; do not "fix" it back toward compound crumbs without checking
+with the user first.
 """
 from __future__ import annotations
 
@@ -63,8 +72,9 @@ def check(cond: bool, label: str, detail: str = "") -> None:
 
 
 class _RowScanner(HTMLParser):
-    """Collect every .drow / label.row and every h3.section-heading, in
-    document order, with the id/class stack each sits under.
+    """Collect every .drow / label.row and every section-heading (h2 or h3
+    with an id starting 'sec-head-'), in document order, with the id/class
+    stack each sits under.
 
     Labels and heading text are taken from DIRECT TEXT NODES ONLY -- the same
     rule as designer.js's ownText(). That is what drops a row's info button
@@ -89,9 +99,7 @@ class _RowScanner(HTMLParser):
             return
         self.stack.append((tag, a.get("id"), cls))
         depth = len(self.stack)
-        # h2 as well as h3: Print stats and Display use <h2>, and a scan that
-        # only saw h3 was exactly how the Viewer panel's rows ended up
-        # attributed to the wrong section.
+        # h2 as well as h3: Print stats and Display use <h2>.
         if tag in ("h2", "h3") and a.get("id", "").startswith("sec-head-"):
             self._h3_depth = depth
             self._h3_buf = []
@@ -167,10 +175,13 @@ def registered_sections() -> list[tuple[str, str, str]]:
 def build_index() -> list[dict]:
     """Re-derive designer.js's search index from the markup.
 
-    Section attribution mirrors sectionOf(): the registered section whose BODY
-    contains the row -- not the nearest heading above it. Containment is the
-    rule because the markup is not a flat heading/body alternation (see
-    sectionOf()'s comment in designer.js for the three places they differ).
+    Mirrors indexScroll()/sectionOf()/crumbFor() exactly:
+      * section is resolved (by CONTAINMENT in the registry, not "nearest
+        heading above the row") for PLANAR rows only;
+      * a planar row's crumb is its group name alone ("Quality"), never a
+        compound "Planar > Quality";
+      * a left-sidebar row's crumb is exactly what it has always been -- its
+        wizard step, or "Viewer" -- unqualified by section.
     """
     p = _RowScanner()
     p.feed(INDEX_HTML.read_text(encoding="utf-8"))
@@ -196,18 +207,22 @@ def build_index() -> list[dict]:
         else:
             step = next((i for i in ids if i in _STEP_LABEL), None)
             base = _STEP_LABEL.get(step, "Design")
-        # Innermost containing registered section, matching sectionOf()'s
-        # first-match-wins over a non-nested registry.
+        # Section is resolved for the planar bar ONLY. Innermost containing
+        # registered section, matching sectionOf()'s first-match-wins over a
+        # non-nested registry.
         sec = None
-        for anc in reversed(ids):
-            if anc in body_to_heading:
-                sec = body_to_heading[anc]
-                break
+        if where == "planar":
+            for anc in reversed(ids):
+                if anc in body_to_heading:
+                    sec = body_to_heading[anc]
+                    break
         rows.append({
             "label": node["label"],
             "base": base,
             "section": sec,
-            "crumb": f"{base} > {sec}" if sec else base,
+            # Planar: the group name alone. Everything else: the step/Viewer
+            # label it has always shown -- never a compound crumb.
+            "crumb": (sec or base) if where == "planar" else base,
             "planar": where == "planar",
         })
     return rows
@@ -257,120 +272,138 @@ def test_labels_carry_no_child_decoration(rows):
           f"{long[:4]}")
 
 
-def test_every_row_has_a_section(rows):
-    """A row with no section shows a bare crumb like "Design", which is what
-    made the planar bar's results useless. Planar rows especially must resolve
-    to their group."""
-    orphan_planar = [r for r in rows if r["planar"] and not r["section"]]
-    check(not orphan_planar,
-          "crumbs: every planar-bar row resolves to its own group heading",
-          f"{[r['label'] for r in orphan_planar][:6]}")
-
-    # A handful of rows genuinely sit in no collapsible section -- they are
-    # loose in the Print step. Their crumb is just "Print", which is honest
-    # and unambiguous, so this is an allow-list rather than a failure. It is
-    # pinned so a NEW sectionless row shows up here instead of quietly
-    # rendering a bare step crumb next to fully-qualified neighbours.
-    expected_sectionless = {
-        ("Nozzle (mm)", "Print"),
-        ("Print speed (mm/s)", "Print"),
-        ("Line width override", "Print"),
-    }
-    orphans = {(r["label"], r["crumb"]) for r in rows if not r["section"]}
-    check(orphans == expected_sectionless,
-          "crumbs: the only sectionless rows are the known loose Print ones",
-          f"unexpected {sorted(orphans - expected_sectionless)}, "
-          f"missing {sorted(expected_sectionless - orphans)}")
+# The planar bar's groups, exactly as their headings read on screen. A planar
+# crumb must be one of these and nothing else -- in particular never a
+# "Planar > ..." compound, and never a bare "Planar" fallback.
+_PLANAR_GROUPS = {"Quality", "Strength", "Speed", "Support", "Others",
+                  "Seam blend"}
 
 
-def test_planar_rows_are_not_labelled_design(rows):
-    """The reported bug, pinned directly: the planar bar is not 'Design'."""
-    mislabelled = [r for r in rows if r["planar"] and r["base"] != "Planar"]
-    check(not mislabelled,
-          "crumbs: no planar-bar row is attributed to Design",
-          f"{[(r['label'], r['crumb']) for r in mislabelled][:6]}")
+def test_planar_rows_crumb_as_their_group(rows):
+    """The reported bug, pinned directly: a planar row must show its OWN
+    group ("Quality") -- not "Design" (the original bug) and not a compound
+    "Planar > Quality" (an over-correction reverted at the user's request)."""
+    planar = [r for r in rows if r["planar"]]
+    bad = [(r["label"], r["crumb"]) for r in planar if r["crumb"] not in _PLANAR_GROUPS]
+    check(not bad,
+          "crumbs: every planar row shows its group name alone",
+          f"{bad[:6]}")
+
+    compound = [(r["label"], r["crumb"]) for r in rows if ">" in r["crumb"]]
+    check(not compound,
+          "crumbs: no result shows a compound 'Panel > Section' crumb",
+          f"{compound[:6]}")
 
     wall_gen = [r for r in rows if r["label"] == "Wall generator"]
-    check(len(wall_gen) == 1 and wall_gen[0]["crumb"] == "Planar > Quality",
-          "crumbs: 'Wall generator' reports as Planar > Quality",
+    check(len(wall_gen) == 1 and wall_gen[0]["crumb"] == "Quality",
+          "crumbs: 'Wall generator' reports as Quality",
           f"{[(r['label'], r['crumb']) for r in wall_gen]}")
 
 
-def test_no_two_results_look_identical(rows):
-    """The property a user actually cares about: two rows must never render
-    as the same label AND the same crumb, because the dropdown then offers a
-    choice with no way to tell which is which. Quality's "Outer wall" (a line
-    width) and Speed's "Outer wall" (a speed) were exactly this."""
-    counts = collections.Counter((r["label"], r["crumb"]) for r in rows)
-    dupes = sorted(k for k, v in counts.items() if v > 1)
+def test_left_sidebar_crumbs_are_untouched(rows):
+    """The non-planar side keeps the unqualified crumb it has always had.
+
+    Section-qualifying the left sidebar was a change to a part of the UI this
+    fix has no business touching -- the reported bug (and the user's explicit
+    instruction) was about the PLANAR side only. Pinned here so it cannot
+    drift back toward "Model > Shape" style crumbs.
+    """
+    allowed = {"Model", "Texture", "Print", "Generate", "Viewer", "Design"}
+    bad = [(r["label"], r["crumb"]) for r in rows
+           if not r["planar"] and r["crumb"] not in allowed]
+    check(not bad,
+          "crumbs: left-sidebar rows still show only their step (or Viewer)",
+          f"{bad[:6]}")
+
+
+def test_no_two_planar_results_look_identical(rows):
+    """The property a user actually cares about, scoped to the planar bar:
+    two planar rows must never render as the same label AND the same crumb.
+    Quality's "Outer wall" (a line width) and Speed's "Outer wall" (a speed)
+    were exactly this -- the group name alone is what now keeps them apart."""
+    planar_counts = collections.Counter(
+        (r["label"], r["crumb"]) for r in rows if r["planar"])
+    dupes = sorted(k for k, v in planar_counts.items() if v > 1)
     check(not dupes,
-          "results: no two indexed rows render as the same label + crumb",
+          "results: no two planar rows render as the same label + crumb",
           f"{dupes}")
+
+    # The pairs that used to be indistinguishable, spot-checked by name so a
+    # regression names the case rather than just a count.
+    by_planar_label = collections.defaultdict(list)
+    for r in rows:
+        if r["planar"]:
+            by_planar_label[r["label"]].append(r["crumb"])
+    for label in ("Outer wall", "Inner wall", "Top surface",
+                  "Sparse infill", "Internal solid infill"):
+        got = sorted(by_planar_label.get(label, []))
+        check(got == ["Quality", "Speed"],
+              f"crumb: {label!r} is split across Quality and Speed", f"{got}")
+
+    # The left sidebar has two long-standing ambiguous pairs -- the design's
+    # own Height/Layer height against the imported mesh's -- that predate this
+    # fix and are out of its scope (the left sidebar is deliberately left
+    # unqualified; see test_left_sidebar_crumbs_are_untouched). Pinned as
+    # known-and-accepted so the list cannot silently grow.
+    known_left = {("Height (mm)", "Model"), ("Layer height", "Model")}
+    left_counts = collections.Counter(
+        (r["label"], r["crumb"]) for r in rows if not r["planar"])
+    left_dupes = {k for k, v in left_counts.items() if v > 1}
+    check(left_dupes == known_left,
+          "results: the left sidebar's ambiguous pairs are only the known ones",
+          f"unexpected {sorted(left_dupes - known_left)}, "
+          f"resolved {sorted(known_left - left_dupes)}")
 
 
 def test_designer_js_still_uses_this_shape(rows):
     """Guard the mirrored logic above against silently going stale.
 
-    If designer.js stops taking direct text nodes, stops sweeping headings, or
-    goes back to deriving the crumb from the step alone, the assertions here
-    would still pass while the real UI regressed. These are cheap source
-    checks on the three pieces this file assumes.
+    If designer.js stops taking direct text nodes, stops attributing planar
+    rows by containment, or starts compound-prefixing crumbs again, the
+    assertions here would still pass while the real UI regressed. These are
+    cheap source checks on the pieces this file assumes.
     """
     js = DESIGNER_JS.read_text(encoding="utf-8")
     check("function ownText(" in js and "nodeType === 3" in js,
           "source: designer.js still takes labels from direct text nodes")
     check("function sectionOf(" in js and "bodyEl.contains(row)" in js,
-          "source: designer.js still attributes rows by section CONTAINMENT, "
-          "not by the nearest heading above them")
-    check("function crumbFor(" in js and "m.section" in js,
-          "source: designer.js still builds the crumb from panel + section")
+          "source: designer.js still attributes planar rows by section "
+          "CONTAINMENT, not by the nearest heading above them")
+    check("function crumbFor(" in js and "m.panel" in js and "m.section" in js,
+          "source: designer.js still builds the planar crumb from its group "
+          "alone, and the left sidebar from step/Viewer alone")
     check("indexScroll(planarScroll, 'Planar')" in js,
           "source: the planar bar is indexed with its own panel label")
 
 
-def test_every_registered_section_exists(rows):
+def test_dead_registrations_are_the_known_ones(rows):
     """A registerSection() call whose elements are missing does nothing --
-    silently. That is how this bug hid: designer.js had always registered
-    'importstl' against a '#sec-head-importstl' that was never in the markup,
-    so the section was not collapsible AND its rows had no section to be
-    attributed to. registerSection() returns early on a null, so nothing ever
-    complained.
+    silently: registerSection() returns early on a null heading/body, so
+    nothing ever complains.
+
+    'importstl' and 'cooling' are exactly this, and BOTH PREDATE this fix and
+    live on the non-planar side -- deliberately left alone rather than fixed,
+    per the instruction to not touch the non-planar side. What this fix
+    actually depends on is that every PLANAR section resolves, which is
+    checked separately below.
     """
     html = INDEX_HTML.read_text(encoding="utf-8")
     dead = []
     for key, head_id, body_id in registered_sections():
         missing = [i for i in (head_id, body_id) if f'id="{i}"' not in html]
         if missing:
-            dead.append((key, missing))
-    check(not dead,
-          "sections: every registerSection() call resolves to real elements",
-          f"{dead}")
+            dead.append(key)
+    known_dead = {"importstl", "cooling"}
+    check(set(dead) == known_dead,
+          "sections: the only dead registerSection() calls are the known "
+          "non-planar ones (left untouched on purpose)",
+          f"unexpected {sorted(set(dead) - known_dead)}, "
+          f"revived {sorted(known_dead - set(dead))}")
 
-
-def test_known_crumbs(rows):
-    """Spot-check the specific attributions that were wrong, so a regression
-    names the case rather than just a count."""
-    want = {
-        "Wall generator": "Planar > Quality",
-        "Order of walls": "Planar > Quality",
-        "Skirt loops": None,          # appears twice, checked below
-        "Show travels": "Viewer > Display",
-        "Use this STL as": "Model > Import STL",
-    }
-    by_label = collections.defaultdict(list)
-    for r in rows:
-        by_label[r["label"]].append(r["crumb"])
-    for label, expected in want.items():
-        if expected is None:
-            continue
-        got = by_label.get(label, [])
-        check(got == [expected], f"crumb: {label!r} -> {expected}", f"got {got}")
-
-    # "Skirt loops" legitimately exists in two places; they must be
-    # distinguishable rather than deduplicated away.
-    got = sorted(by_label.get("Skirt loops", []))
-    check(len(got) == 2 and len(set(got)) == 2,
-          "crumb: the two 'Skirt loops' rows carry different crumbs", f"{got}")
+    planar_dead = [k for k in dead if k.startswith("mb-")]
+    check(not planar_dead,
+          "sections: every planar-bar section registers against real elements",
+          f"{planar_dead}")
 
 
 def main() -> int:
@@ -380,11 +413,10 @@ def main() -> int:
     rows = build_index()
     test_index_is_populated(rows)
     test_labels_carry_no_child_decoration(rows)
-    test_every_row_has_a_section(rows)
-    test_planar_rows_are_not_labelled_design(rows)
-    test_no_two_results_look_identical(rows)
-    test_every_registered_section_exists(rows)
-    test_known_crumbs(rows)
+    test_planar_rows_crumb_as_their_group(rows)
+    test_left_sidebar_crumbs_are_untouched(rows)
+    test_no_two_planar_results_look_identical(rows)
+    test_dead_registrations_are_the_known_ones(rows)
     test_designer_js_still_uses_this_shape(rows)
 
     if _FAILURES:

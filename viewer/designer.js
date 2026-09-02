@@ -1124,14 +1124,11 @@
 
   registerSection('shape', document.getElementById('sec-head-shape'), document.getElementById('sec-body-shape'), true);
   registerSection('asymmetry', document.getElementById('sec-head-asymmetry'), document.getElementById('sec-body-asymmetry'), false);
-  // defaultOpen true, not false: this section's heading was missing until now,
-  // so #import-panel has always rendered open. Registering it closed would
-  // hide the STL importer from everyone on their next load -- a behaviour
-  // change nobody asked for, smuggled in behind a search fix.
-  registerSection('importstl', document.getElementById('sec-head-importstl'), document.getElementById('import-panel'), true);
+  registerSection('importstl', document.getElementById('sec-head-importstl'), document.getElementById('import-panel'), false);
   registerSection('silhouette', document.getElementById('sec-head-silhouette'), document.getElementById('sec-body-silhouette'), false);
   registerSection('zwaves', document.getElementById('sec-head-zwaves'), document.getElementById('sec-body-zwaves'), false);
   registerSection('texturepattern', document.getElementById('sec-head-texturepattern'), document.getElementById('sec-body-texturepattern'), true);
+  registerSection('cooling', document.getElementById('sec-head-cooling'), document.getElementById('sec-body-cooling'), true);
   // No 'printer' section anymore -- the printer now lives in the always-on
   // #machine-bar, not a collapsible group (see B.1 in the machine-limits spec).
   registerSection('printstats', document.getElementById('sec-head-printstats'), document.getElementById('sec-body-printstats'), true);
@@ -5867,22 +5864,19 @@
       return out.replace(/\s+/g, ' ').trim();
     }
 
-    // Which collapsible section actually CONTAINS this row, from the app's own
-    // registry (sectionList, built by registerSection above) rather than from
-    // "the nearest heading above it". The two disagree wherever the markup is
-    // not a flat heading/body alternation, and every such place was wrong:
-    //   * #import-panel's rows sit after the Asymmetry heading but belong to
-    //     Import STL, so mesh Height/Layer height claimed to be in Asymmetry;
-    //   * Print stats and Display use <h2>, which a 'h3.section-heading' sweep
-    //     skips entirely, so the whole Viewer panel inherited "Export as solid";
-    //   * Nozzle / Print speed / Line width override are in no section at all
-    //     and would silently borrow the previous one.
-    // Containment cannot make those mistakes, and it needs no second copy of
-    // the heading-to-body mapping that registerSection already owns.
+    // Which collapsible section CONTAINS this row, from the app's own registry
+    // (sectionList, built by registerSection above). Used for the planar bar
+    // ONLY -- see crumbFor() for why the left sidebar deliberately does not
+    // get section-qualified crumbs.
+    //
+    // Containment rather than "the nearest heading above the row": the two
+    // disagree wherever the markup is not a flat heading/body alternation, and
+    // containment needs no second copy of the heading-to-body mapping that
+    // registerSection already owns.
     function sectionOf(row){
       for(var i = 0; i < sectionList.length; i++)
         if(sectionList[i].bodyEl.contains(row)) return ownText(sectionList[i].headingEl);
-      return null;   // genuinely sectionless: the crumb is just the step
+      return null;
     }
 
     // build index once over every reachable row in the sidebar (+ the
@@ -5901,25 +5895,36 @@
         var ctrl = null;
         for(var b in BLOCK_CTRL){ var el = document.getElementById(b);
           if(el && el.contains(row)){ ctrl = document.getElementById(BLOCK_CTRL[b]); break; } }
+        // Section resolved for the planar bar only: the left sidebar's rows
+        // keep the crumb they have always had (see crumbFor).
         index.push({ row:row, lc:label.toLowerCase(), label:label, mode:mode, step:step,
-                     section:sectionOf(row), panel:panelLabel, ctrl:ctrl, scrollEl:scrollEl });
+                     section:panelLabel ? sectionOf(row) : null,
+                     panel:panelLabel, ctrl:ctrl, scrollEl:scrollEl });
       });
     }
     indexScroll(scroll, null);
-    // The planar bar sits outside every .step-panel, so `step` is null for
-    // all 41 of its rows and the old crumb fell through to a bare "Design" --
+    // The planar bar sits outside every .step-panel, so `step` is null for all
+    // of its rows and the crumb used to fall through to a bare "Design" --
     // 38% of the index landing in one meaningless bucket, and the reason
-    // "Wall generator" claimed to be in Design rather than Planar > Quality.
+    // "Wall generator" claimed to live in Design.
     indexScroll(planarScroll, 'Planar');
 
-    // "Model > Shape", "Planar > Quality", "Viewer > Display". The section
-    // half is what makes the results distinguishable: without it the Quality
-    // and Speed groups both contribute an "Outer wall" and an "Inner wall"
-    // row that no user could tell apart in the dropdown. ASCII '>' rather
-    // than a chevron glyph, per CLAUDE.md's ASCII-only rule.
+    // Planar rows crumb as their GROUP alone -- "Quality", "Speed", "Support".
+    // Not "Planar > Quality": the bar is one visible panel with those exact
+    // headings on screen, so the group name is already the whole address and
+    // the prefix is noise.
+    //
+    // Left-sidebar rows keep the crumb they have always had (the wizard step,
+    // or "Viewer"), deliberately unqualified. Section-qualifying them was a
+    // change to the non-planar side that was never asked for, and it is not
+    // this fix's business: the bug was that PLANAR rows said "Design".
+    //
+    // The group name alone still separates the pairs that used to be
+    // indistinguishable -- Quality's "Outer wall" (a line width) from Speed's
+    // "Outer wall" (a speed) -- which was the other half of the problem.
     function crumbFor(m){
-      var base = m.panel || (m.mode === 'viewer' ? 'Viewer' : (STEP_LABEL[m.step] || 'Design'));
-      return m.section ? base + ' > ' + m.section : base;
+      if(m.panel) return m.section || m.panel;
+      return m.mode === 'viewer' ? 'Viewer' : (STEP_LABEL[m.step] || 'Design');
     }
 
     var matches = [], activeIdx = -1;
