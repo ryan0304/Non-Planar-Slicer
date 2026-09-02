@@ -276,6 +276,13 @@
                       min="0.9" max="1.5" step="0.05"></div>
                 </div>
 
+                <!-- designer.js has always called registerSection('importstl',
+                     ..., '#import-panel'), but this heading did not exist, so
+                     that call resolved to null and did nothing: the section was
+                     never collapsible, and every row inside it was attributed
+                     to whatever heading happened to precede it (Asymmetry) in
+                     the control search. -->
+                <h3 class="section-heading" id="sec-head-importstl">Import STL</h3>
                 <div id="import-panel">
                   <!-- STL drop zone removed per request. Files are now uploaded via the main Load button. -->
                   <div id="stl-status" class="busy-line" style="display:none"></div>

@@ -1124,11 +1124,14 @@
 
   registerSection('shape', document.getElementById('sec-head-shape'), document.getElementById('sec-body-shape'), true);
   registerSection('asymmetry', document.getElementById('sec-head-asymmetry'), document.getElementById('sec-body-asymmetry'), false);
-  registerSection('importstl', document.getElementById('sec-head-importstl'), document.getElementById('import-panel'), false);
+  // defaultOpen true, not false: this section's heading was missing until now,
+  // so #import-panel has always rendered open. Registering it closed would
+  // hide the STL importer from everyone on their next load -- a behaviour
+  // change nobody asked for, smuggled in behind a search fix.
+  registerSection('importstl', document.getElementById('sec-head-importstl'), document.getElementById('import-panel'), true);
   registerSection('silhouette', document.getElementById('sec-head-silhouette'), document.getElementById('sec-body-silhouette'), false);
   registerSection('zwaves', document.getElementById('sec-head-zwaves'), document.getElementById('sec-body-zwaves'), false);
   registerSection('texturepattern', document.getElementById('sec-head-texturepattern'), document.getElementById('sec-body-texturepattern'), true);
-  registerSection('cooling', document.getElementById('sec-head-cooling'), document.getElementById('sec-body-cooling'), true);
   // No 'printer' section anymore -- the printer now lives in the always-on
   // #machine-bar, not a collapsible group (see B.1 in the machine-limits spec).
   registerSection('printstats', document.getElementById('sec-head-printstats'), document.getElementById('sec-body-printstats'), true);
@@ -5849,14 +5852,47 @@
                        'loop-rows':'d-pattern' };
     var STEP_LABEL = { model:'Model', texture:'Texture', print:'Print', generate:'Generate' };
 
+    // An element's OWN text, ignoring nested elements. Both the things this
+    // index reads carry decorative element children that textContent would
+    // swallow into the label: a row's optional info button (.fm-info-btn,
+    // whose glyph is U+24D8) and a section heading's collapse chevron
+    // (.sec-chevron, appended by registerSection above). Reading textContent
+    // is why a result rendered as "Wall generator (i)" instead of "Wall
+    // generator". Direct text nodes only is the one rule that handles both,
+    // and it stays correct for any decoration added later.
+    function ownText(el){
+      var out = '';
+      for(var n = el.firstChild; n; n = n.nextSibling)
+        if(n.nodeType === 3) out += n.nodeValue;
+      return out.replace(/\s+/g, ' ').trim();
+    }
+
+    // Which collapsible section actually CONTAINS this row, from the app's own
+    // registry (sectionList, built by registerSection above) rather than from
+    // "the nearest heading above it". The two disagree wherever the markup is
+    // not a flat heading/body alternation, and every such place was wrong:
+    //   * #import-panel's rows sit after the Asymmetry heading but belong to
+    //     Import STL, so mesh Height/Layer height claimed to be in Asymmetry;
+    //   * Print stats and Display use <h2>, which a 'h3.section-heading' sweep
+    //     skips entirely, so the whole Viewer panel inherited "Export as solid";
+    //   * Nozzle / Print speed / Line width override are in no section at all
+    //     and would silently borrow the previous one.
+    // Containment cannot make those mistakes, and it needs no second copy of
+    // the heading-to-body mapping that registerSection already owns.
+    function sectionOf(row){
+      for(var i = 0; i < sectionList.length; i++)
+        if(sectionList[i].bodyEl.contains(row)) return ownText(sectionList[i].headingEl);
+      return null;   // genuinely sectionless: the crumb is just the step
+    }
+
     // build index once over every reachable row in the sidebar (+ the
     // planar-base bar, if present)
     var index = [];
-    function indexScroll(scrollEl){
+    function indexScroll(scrollEl, panelLabel){
       if(!scrollEl) return;
       Array.prototype.forEach.call(scrollEl.querySelectorAll('.drow, label.row'), function(row){
         var span = row.querySelector(':scope > span');
-        var label = span ? (span.textContent || '').trim() : '';
+        var label = span ? ownText(span) : '';
         if(!label) return;
         var mp = row.closest('.mode-panel');
         var mode = (mp && mp.id === 'mode-viewer') ? 'viewer' : 'design';
@@ -5865,11 +5901,26 @@
         var ctrl = null;
         for(var b in BLOCK_CTRL){ var el = document.getElementById(b);
           if(el && el.contains(row)){ ctrl = document.getElementById(BLOCK_CTRL[b]); break; } }
-        index.push({ row:row, lc:label.toLowerCase(), label:label, mode:mode, step:step, ctrl:ctrl, scrollEl:scrollEl });
+        index.push({ row:row, lc:label.toLowerCase(), label:label, mode:mode, step:step,
+                     section:sectionOf(row), panel:panelLabel, ctrl:ctrl, scrollEl:scrollEl });
       });
     }
-    indexScroll(scroll);
-    indexScroll(planarScroll);
+    indexScroll(scroll, null);
+    // The planar bar sits outside every .step-panel, so `step` is null for
+    // all 41 of its rows and the old crumb fell through to a bare "Design" --
+    // 38% of the index landing in one meaningless bucket, and the reason
+    // "Wall generator" claimed to be in Design rather than Planar > Quality.
+    indexScroll(planarScroll, 'Planar');
+
+    // "Model > Shape", "Planar > Quality", "Viewer > Display". The section
+    // half is what makes the results distinguishable: without it the Quality
+    // and Speed groups both contribute an "Outer wall" and an "Inner wall"
+    // row that no user could tell apart in the dropdown. ASCII '>' rather
+    // than a chevron glyph, per CLAUDE.md's ASCII-only rule.
+    function crumbFor(m){
+      var base = m.panel || (m.mode === 'viewer' ? 'Viewer' : (STEP_LABEL[m.step] || 'Design'));
+      return m.section ? base + ' > ' + m.section : base;
+    }
 
     var matches = [], activeIdx = -1;
     function esc(s){ return s.replace(/[&<>"]/g,function(c){
@@ -5889,7 +5940,7 @@
         it.setAttribute('role','option');
         it.id = 'psi-' + i;
         it.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
-        var crumb = m.mode==='viewer' ? 'Viewer' : (STEP_LABEL[m.step]||'Design');
+        var crumb = crumbFor(m);
         it.innerHTML = '<span>'+esc(m.label)+'</span><span class="psi-crumb">'+crumb+'</span>';
         it.addEventListener('mousedown', function(e){ e.preventDefault(); choose(m); });
         it.addEventListener('mouseenter', function(){ setActive(i); });
