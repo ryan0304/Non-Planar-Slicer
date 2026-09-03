@@ -873,6 +873,26 @@ def _parse_mesh_hybrid_params(body, height):
             % (blend_height,))
     blend_height = min(blend_height, height)
 
+    # Seam style + coverage: SEPARATE knobs from blend_height (how far the
+    # transition spans). seam_style picks the transition CURVE -- "fillet"
+    # (smooth round-over) or "chamfer" (straight beveled facet); seam_coverage
+    # is what fraction of blend_height the corner actually spans, sent by the
+    # client as a 0-100 percentage (matching the UI's slider), converted to
+    # the 0-1 fraction blend_stack() expects. Defaults ("fillet", 100 -> 1.0)
+    # reproduce today's exact smoothstep-over-the-whole-span curve, so an
+    # untouched control changes nothing.
+    seam_style = body.get("mesh_base_seam_style")
+    if seam_style is None or seam_style == "":
+        seam_style = "fillet"
+    if seam_style not in ("fillet", "chamfer"):
+        raise ValueError(
+            "mesh_base_seam_style must be 'fillet' or 'chamfer', got %r"
+            % (seam_style,))
+
+    raw_coverage = _finite_float(
+        "mesh_base_seam_coverage", body.get("mesh_base_seam_coverage"), 100.0)
+    seam_coverage = max(0.0, min(raw_coverage, 100.0)) / 100.0
+
     raw_wall_count = _finite_float(
         "mesh_base_wall_count", body.get("mesh_base_wall_count"), 3)
     wall_count = max(1, min(int(raw_wall_count), 8))
@@ -958,6 +978,24 @@ def _parse_mesh_hybrid_params(body, height):
                 % (label, val, sorted(allowed)))
         return val
 
+    def _opt_mm_or_pct(field, lo, hi):
+        """A value that is either a plain millimetre number or that number
+        followed by '%' (Orca's own avoid_crossing_perimeters_max_detour
+        convention). The numeric part goes through the same non-finite
+        rejection _finite_float already gives every other boundary here; a
+        '%' suffix is preserved on the way back out. Unlike _opt_num, this
+        cannot use _finite_float's own type coercion directly (the raw value
+        may carry a trailing '%'), so the suffix is stripped first."""
+        raw = body.get(field)
+        if raw is None or raw == "":
+            return None
+        s = str(raw).strip()
+        pct = s.endswith('%')
+        num_part = s[:-1].strip() if pct else s
+        val = _finite_float(field, num_part, None)
+        val = max(lo, min(val, hi))
+        return "%g%%" % val if pct else "%g" % val
+
     def _put(key, val):
         if val is not None:
             overrides[key] = val
@@ -996,6 +1034,18 @@ def _parse_mesh_hybrid_params(body, height):
         "mesh_base_wall_sequence", _ALLOWED_WALL_SEQUENCES, "wall order"))
     _put("wall_generator", _opt_enum(
         "mesh_base_wall_generator", _ALLOWED_WALL_GENERATORS, "wall generator"))
+
+    # Avoid crossing walls: a checkbox that defaults OFF, same "absence is a
+    # real value, not unset" contract as enable_support below -- routes a
+    # travel move around already-printed walls instead of straight over them.
+    # Max detour length is a normal optional override (mm, or mm followed by
+    # '%'), emitted whether or not the checkbox is currently on -- Orca
+    # ignoring a setting it is not using is harmless, same reasoning as the
+    # Support fields below.
+    if body.get("mesh_base_avoid_crossing_walls"):
+        overrides["avoid_crossing_perimeters"] = True
+    _put("avoid_crossing_perimeters_max_detour",
+         _opt_mm_or_pct("mesh_base_avoid_crossing_detour", 0.0, 1000.0))
 
     # Strength.
     _put("top_surface_pattern", _opt_enum(
@@ -1055,6 +1105,8 @@ def _parse_mesh_hybrid_params(body, height):
         "mesh_base_id": mesh_base_id,
         "scale": scale,
         "blend_height": blend_height,
+        "seam_style": seam_style,
+        "seam_coverage": seam_coverage,
         "wall_count": wall_count,
         "infill_density": infill_density,
         "infill_pattern": infill_pattern,
@@ -1580,15 +1632,14 @@ def generate_design(body):
             fan_speed=fan_overhang_min,
         )
     elif hybrid_params is not None:
-        # build_profile_spiral (the wall generator hybrid mode uses) has no
-        # Zone Override or Point Edit Modifier support -- those are
-        # continuous_spiral.py/spiral_path()-only subsystems. Say so, the
-        # same way loop fabric mode already does above, rather than letting
-        # a request that set them look silently applied.
-        if zone_specs:
-            zone_scope_issue = (
-                "zone overrides only apply to the parametric wall (not a "
-                "hybrid planar base) - ignored for this design.")
+        # build_profile_spiral (the wall generator hybrid mode uses) now has
+        # Zone Override support, applying only within the wall it builds
+        # above the seam -- the planar base is a separate Orca-sliced solid
+        # with no zone concept, so this can never reach it. Point Edit
+        # Modifiers remain a continuous_spiral.py/spiral_path()-only
+        # subsystem -- say so, the same way loop fabric mode already does
+        # above, rather than letting a request that set them look silently
+        # applied.
         if _point_edit_active(body):
             point_edit_issue = (
                 "point edit modifiers only apply to the parametric wall "
@@ -1610,19 +1661,15 @@ def generate_design(body):
             r_fade_out=pattern_fade_out, r_alternate=pattern_alternate,
             xy_twist_turns=xy_twist, cage=cage, ovality=ovality,
             spine_offset=spine_offset,
+            zones=zone_specs or None,
             overhang_flow_k=overhang_flow_k,
             fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
             fan_off_layers=fan_off_layers, width_callback=width_fn,
         )
     elif mesh_hybrid_params is not None:
-        # Same scope as the parametric hybrid branch above: build_profile_spiral
-        # (which this mesh base's own upper wall also uses) has no Zone
-        # Override or Point Edit Modifier support -- those are
-        # continuous_spiral.py/spiral_path()-only subsystems.
-        if zone_specs:
-            zone_scope_issue = (
-                "zone overrides only apply to the parametric wall (not a "
-                "mesh planar base) - ignored for this design.")
+        # Same scope as the parametric hybrid branch above: Zone Overrides now
+        # reach this mesh base's own upper wall (build_profile_spiral), never
+        # the mesh base itself. Point Edit Modifiers remain unsupported here.
         if _point_edit_active(body):
             point_edit_issue = (
                 "point edit modifiers only apply to the parametric wall "
@@ -1634,6 +1681,8 @@ def generate_design(body):
             layer_height=layer_height, points_per_turn=240,
             shape_fn=shape, radius=radius, height=height,
             blend_height=mesh_hybrid_params["blend_height"],
+            seam_style=mesh_hybrid_params["seam_style"],
+            seam_coverage=mesh_hybrid_params["seam_coverage"],
             wall_count=mesh_hybrid_params["wall_count"],
             infill_density=mesh_hybrid_params["infill_density"],
             infill_pattern=mesh_hybrid_params["infill_pattern"],
@@ -1649,6 +1698,7 @@ def generate_design(body):
             r_fade_out=pattern_fade_out, r_alternate=pattern_alternate,
             xy_twist_turns=xy_twist, cage=cage, ovality=ovality,
             spine_offset=spine_offset,
+            zones=zone_specs or None,
             overhang_flow_k=overhang_flow_k,
             fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
             fan_off_layers=fan_off_layers, width_callback=width_fn,

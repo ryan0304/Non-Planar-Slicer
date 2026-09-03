@@ -383,6 +383,29 @@ def interpolate_contours(c0: Contour, c1: Contour, frac: float) -> Contour:
             for (x0, y0), (x1, y1) in zip(c0, c1)]
 
 
+def _blend_weight(t: float, blend_intensity: float) -> float:
+    """The interpolation weight for one blend layer, shared between
+    ``blend_stack`` and any caller that needs to reproduce the same curve for
+    a diagnostic (e.g. ``hybrid.py``'s ``blend_top_weight`` report field) --
+    a second, independently-typed copy of this formula is exactly how the two
+    could silently drift apart.
+
+    ``blend_intensity`` (0..1) dials between a straight linear ramp (0.0) and
+    the full smoothstep ease (1.0, ``w'(0) = w'(1) = 0``, see ``blend_stack``'s
+    own docstring for why that avoids a crease ring). Linear interpolation
+    between the two curves, not between two blend heights -- so a caller can
+    ask for "the same span, gentler or harsher" independently of "how far up
+    the wall the transition spans" (``blend_height``).
+
+    ``blend_stack`` calls this with ``blend_intensity`` pinned to exactly 0.0
+    ("chamfer") or exactly 1.0 ("fillet") -- the continuous dial stays here
+    because it is still the shared curve definition, but the public knob is
+    now the named style, not an arbitrary intensity value.
+    """
+    w_smooth = t * t * (3.0 - 2.0 * t)
+    return t + blend_intensity * (w_smooth - t)
+
+
 def blend_stack(
     mesh_ring: Contour,
     shape_fn: Callable[[float], float],
@@ -392,6 +415,8 @@ def blend_stack(
     points_per_turn: int,
     blend_height: float,
     radius_envelope: Callable[[float], float] | None = None,
+    seam_style: str = "fillet",
+    seam_coverage: float = 1.0,
 ) -> tuple[list[Contour], list[float]]:
     """Wall stack that starts at the mesh outline and eases into the shape.
 
@@ -411,30 +436,50 @@ def blend_stack(
       the absolute Z of the seam is passed to ``build_profile_spiral`` as
       ``base_z``, separately.
 
-    Blending
-    --------
+    Seam corner: chamfer vs. fillet
+    --------------------------------
     Ring 0 is the mesh ring itself, unconditionally and exactly -- never a
     lerp of it, so the first wall layer lands on the base outline it was
-    measured from.  From there, over *blend_height* (also measured from ring 0),
-    ring *i* is ``interpolate_contours(mesh_ring, parametric[i], w)`` with
+    measured from. *blend_height* is the seam height available for the
+    transition; *seam_coverage* (0..1) is the fraction of that seam height the
+    chamfer/fillet actually spans:
 
-        t = (i * layer_height) / blend_height        clamped to [0, 1]
-        w = 3t^2 - 2t^3                              (smoothstep)
+        corner_extent = blend_height * seam_coverage
 
-    Smoothstep rather than linear because ``w'(0) = w'(1) = 0``: the shape
-    change per layer starts and ends at zero, so the wall leaves the mesh
-    outline and reaches the parametric outline without a kink at either end. A
-    linear ramp is slope-discontinuous at both, which shows up as a visible
-    crease ring on the print exactly at the seam and at the top of the blend.
+    Over ``[0, corner_extent]`` (measured from ring 0), ring *i* is
+    ``interpolate_contours(mesh_ring, parametric[i], w)`` with
 
-    Above the blend the rings are the parametric ones verbatim (assigned, not
-    lerped with ``w = 1``, so "pure parametric" is exact rather than
-    float-dependent).
+        t = (i * layer_height) / corner_extent        clamped to [0, 1]
+        w = _blend_weight(t, 1.0 if seam_style == "fillet" else 0.0)
 
-    Edge cases: ``blend_height == 0`` gives a hard seam -- ring 0 is the mesh
-    ring, ring 1 onward is fully parametric.  ``blend_height >= height`` makes
-    the blend span the whole wall; if it is strictly greater, the topmost ring
-    is still partway through the blend, which is what was asked for.
+    ``seam_style = "fillet"`` pins the weight to the full smoothstep curve
+    ``3t^2 - 2t^3`` (``w'(0) = w'(1) = 0``): the shape change per layer starts
+    and ends at zero, so the wall leaves the mesh outline and reaches the
+    parametric outline as a smooth round-over, with no kink at either end.
+    ``seam_style = "chamfer"`` pins the weight to the pure linear ramp ``t``:
+    slope-discontinuous at both ends, which is deliberate -- it is what
+    produces a visible, straight beveled facet at the seam and again where the
+    corner meets the parametric wall, instead of a curve. This is the
+    "harsher/more abrupt, distinctly faceted" look, not a defect.
+
+    At the defaults (``seam_style = "fillet"``, ``seam_coverage = 1.0``),
+    ``corner_extent == blend_height`` and the weight is exactly the smoothstep
+    curve -- this function's output is BYTE-IDENTICAL to before this seam-style
+    split existed (when the equivalent was ``blend_intensity = 1.0``).
+
+    Once ``t >= 1.0`` (i.e. above ``corner_extent``) the rings are the
+    parametric ones verbatim (assigned, not lerped with ``w = 1``, so "pure
+    parametric" is exact rather than float-dependent) -- this includes any
+    remaining span between ``corner_extent`` and ``blend_height`` when
+    ``seam_coverage < 1.0``: the corner finishes early and the wall becomes
+    the plain parametric shape sooner, exactly as ``seam_coverage`` promises.
+
+    Edge cases: ``blend_height == 0`` or ``seam_coverage == 0`` both give a
+    hard seam -- ring 0 is the mesh ring, ring 1 onward is fully parametric.
+    ``blend_height >= height`` makes the (uncovered) blend span the whole
+    wall; if it is strictly greater, the topmost ring is still partway through
+    the corner (when ``seam_coverage`` keeps ``corner_extent`` that large),
+    which is what was asked for.
     """
     if len(mesh_ring) != points_per_turn:
         raise ValueError(
@@ -442,7 +487,8 @@ def blend_stack(
             "and the parametric rings must share an index-to-angle mapping"
             % (len(mesh_ring), points_per_turn))
     for name, val in (("height", height), ("layer_height", layer_height),
-                      ("blend_height", blend_height)):
+                      ("blend_height", blend_height),
+                      ("seam_coverage", seam_coverage)):
         if not math.isfinite(val):
             raise ValueError(
                 "%s must be a finite number -- a non-finite value survives "
@@ -454,25 +500,32 @@ def blend_stack(
         raise ValueError("height must be positive, got %r" % (height,))
     if blend_height < 0.0:
         raise ValueError("blend_height must not be negative, got %r" % (blend_height,))
+    if seam_style not in ("fillet", "chamfer"):
+        raise ValueError(
+            "seam_style must be 'fillet' or 'chamfer', got %r" % (seam_style,))
+    seam_coverage = max(0.0, min(seam_coverage, 1.0))
+    intensity = 1.0 if seam_style == "fillet" else 0.0
 
     parametric = stack_from_shape(
         shape_fn, radius, height, layer_height, points_per_turn,
         radius_envelope=radius_envelope,
     )
 
+    corner_extent = blend_height * seam_coverage
+
     contours: list[Contour] = []
     for i, para in enumerate(parametric):
         if i == 0:
             contours.append(list(mesh_ring))     # exact, always
             continue
-        if blend_height <= 0.0:
+        if corner_extent <= 0.0:
             t = 1.0                              # hard seam: no blend to be in
         else:
-            t = (i * layer_height) / blend_height
+            t = (i * layer_height) / corner_extent
         if t >= 1.0:
             contours.append(list(para))          # exactly the parametric ring
         else:
-            w = t * t * (3.0 - 2.0 * t)          # smoothstep, see docstring
+            w = _blend_weight(t, intensity)
             contours.append(interpolate_contours(mesh_ring, para, w))
 
     heights = [i * layer_height for i in range(len(parametric))]

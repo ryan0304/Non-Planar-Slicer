@@ -215,6 +215,8 @@ def build_process_json(
     seam_position: str | None = None,
     wall_sequence: str | None = None,
     wall_generator: str | None = None,
+    avoid_crossing_perimeters: bool = False,
+    avoid_crossing_perimeters_max_detour: str | None = None,
     # --- Strength ----------------------------------------------------------
     top_surface_pattern: str | None = None,
     bottom_surface_pattern: str | None = None,
@@ -246,7 +248,10 @@ def build_process_json(
 
     Every parameter below ``support_threshold_angle`` is OPTIONAL and
     defaults to None, meaning "emit nothing for this key and let the
-    inherited base profile's own value stand". That is what keeps the
+    inherited base profile's own value stand" -- with one exception,
+    ``avoid_crossing_perimeters``, which (like ``enable_support`` above it)
+    has a real hard default (False) and is ALWAYS emitted, since a checkbox's
+    unticked state is a real value, not "unset". That is what keeps the
     parametric hybrid's output unchanged by this expansion: a caller that
     does not pass them produces exactly the JSON it produced before they
     existed. It is also what makes a blank UI field honest -- an untouched
@@ -322,6 +327,24 @@ def build_process_json(
             )
         return val
 
+    # A value that is either a plain millimetre number or that number
+    # followed by '%' (relative to the direct travel distance) -- Orca's own
+    # convention for avoid_crossing_perimeters_max_detour. The numeric part
+    # goes through the same non-finite rejection _num already gives every
+    # other boundary here; a '%' suffix is preserved on the way back out.
+    def _mm_or_pct(name, val, lo, hi):
+        s = str(val).strip()
+        pct = s.endswith('%')
+        num_part = s[:-1].strip() if pct else s
+        try:
+            n = float(num_part)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{name} must be a number optionally followed by '%', got {val!r}"
+            )
+        n = _num(name, n, lo, hi)
+        return f"{n:g}%" if pct else f"{n:g}"
+
     # The bound is a multiple of the profile's own nozzle diameter, not a
     # millimetre figure typed into this module. GcodeWriter's volumetric-flow
     # cap still applies to every replayed move regardless -- this is the outer
@@ -381,6 +404,9 @@ def build_process_json(
         # overhangs, unlike the parametric path's simple silhouette.
         "enable_support": "1" if enable_support else "0",
         "support_threshold_angle": str(support_threshold_angle),
+        # Avoid crossing walls defaults OFF, same rationale as enable_support
+        # above (today's behaviour is unchanged for an existing design).
+        "avoid_crossing_perimeters": "1" if avoid_crossing_perimeters else "0",
     }
 
     # --- Optional keys: absent stays absent. See the docstring. -------------
@@ -407,6 +433,15 @@ def build_process_json(
     if wall_generator is not None:
         out["wall_generator"] = _enum(
             "wall generator", wall_generator, _ALLOWED_WALL_GENERATORS)
+    if avoid_crossing_perimeters_max_detour is not None:
+        # Only meaningful while avoid_crossing_perimeters is on, but emitted
+        # regardless -- Orca ignoring a setting it is not currently using is
+        # harmless (same reasoning as the Support fields below), whereas
+        # dropping it here would make a saved value vanish the moment the
+        # checkbox was unticked.
+        out["avoid_crossing_perimeters_max_detour"] = _mm_or_pct(
+            "avoid_crossing_perimeters_max_detour",
+            avoid_crossing_perimeters_max_detour, 0.0, 1000.0)
 
     # Strength.
     if top_surface_pattern is not None:

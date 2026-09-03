@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 import trident_gcode.hybrid as hybrid
 from trident_gcode.profile import PrinterProfile
 from trident_gcode.gcode import GcodeWriter
-from trident_gcode.paths import circle
+from trident_gcode.paths import circle, ZoneOverride
 
 
 _FAILURES: list[str] = []
@@ -183,11 +183,137 @@ def test_radius_envelope_rescaling_is_consistent():
         hybrid.slice_stl_to_gcode = real_slice
 
 
+# ---------------------------------------------------------------------------
+# 5. Zone Overrides reach the wall (build_profile_spiral, via the
+#    **profile_spiral_kwargs passthrough -- build_hybrid_print itself needed
+#    no signature change) but never the base/seam portion below it.
+# ---------------------------------------------------------------------------
+def test_zone_overrides_reach_the_wall_not_the_base():
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = _fake_slice
+    try:
+        profile = PrinterProfile()
+        common = dict(
+            shape_fn=circle(3.0), radius=3.0, height=20.0,
+            transition_height=0.4, layer_height=0.3, points_per_turn=60,
+            wall_count=2, infill_density=0.2, infill_pattern="grid",
+            orca_path="unused-because-monkeypatched",
+            center=(102.5, 102.5), z_amp=0.3, z_waves=3,
+        )
+        w1 = _new_writer(profile)
+        hybrid.build_hybrid_print(w1, zones=None, **common)
+        text1 = w1.text()
+
+        zone = ZoneOverride(t_lo=0.3, t_hi=0.6, blend=0.02,
+                             r_pattern="vwave", r_amp=1.0)
+        w2 = _new_writer(profile)
+        hybrid.build_hybrid_print(w2, zones=[zone], **common)
+        text2 = w2.text()
+
+        check(text1 != text2,
+              "zone overrides: a real texture zone changes the wall's G-code")
+        base1 = text1.split("; wall spiral")[0]
+        base2 = text2.split("; wall spiral")[0]
+        check(base1 == base2,
+              "zone overrides: the base/seam portion (before the wall "
+              "spiral) is byte-identical whether or not a wall zone is set")
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+
+
+# ---------------------------------------------------------------------------
+# 6. fan_off_layers is a TOTAL count from the absolute start of the print
+#    (base + wall combined), not restarted at the wall's own layer 0 -- the
+#    bug the user reported (fan stayed off through the whole Orca-sliced
+#    base PLUS one more wall layer, since build_profile_spiral's own
+#    fan_off_layers<=0 default ("wait one warm-up turn") had no idea a base
+#    had already printed). transition_height=0.4/layer_height=0.3 here gives
+#    n_base_layers = max(2, round(0.4/0.3)) = 2.
+# ---------------------------------------------------------------------------
+def test_fan_off_layers_counts_from_the_base():
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = _fake_slice
+    try:
+        profile = PrinterProfile()
+        common = dict(
+            shape_fn=circle(3.0), radius=3.0, height=20.0,
+            transition_height=0.4, layer_height=0.3, points_per_turn=60,
+            wall_count=2, infill_density=0.2, infill_pattern="grid",
+            orca_path="unused-because-monkeypatched",
+            center=(102.5, 102.5), z_amp=0.3, z_waves=3,
+        )
+        seam_marker = "; hybrid: non-planar wall begins here"
+
+        def _fan_on_lands_before_wall_spiral(text):
+            """True if the M106 line appears between the seam marker and
+            "; wall spiral" (the "already on at the seam" case)."""
+            after_seam = text.split(seam_marker, 1)[1]
+            m_idx = after_seam.find("M106")
+            spiral_idx = after_seam.find("; wall spiral")
+            return m_idx != -1 and (spiral_idx == -1 or m_idx < spiral_idx)
+
+        def _wall_points_before_fan_on(text):
+            """Number of extruding G1 lines inside the wall spiral BEFORE the
+            M106 line -- None if M106 lands before "; wall spiral" at all
+            (the immediate case has no wall points to count)."""
+            wall_text = text.split("; wall spiral", 1)[1]
+            m_idx = wall_text.find("M106")
+            if m_idx == -1:
+                return None
+            before = wall_text[:m_idx]
+            return sum(1 for ln in before.splitlines()
+                       if ln.startswith("G1") and " E" in ln)
+
+        # fan_off_layers=0 (unset/default): the base (2 layers) already
+        # satisfies "0 layers off" -- fan must be on immediately at the seam.
+        w0 = _new_writer(profile)
+        hybrid.build_hybrid_print(w0, fan_off_layers=0, **common)
+        text0 = w0.text()
+        check(_fan_on_lands_before_wall_spiral(text0),
+              "fan_off_layers=0: fan turns on immediately at the seam, not "
+              "one wall turn later")
+
+        # fan_off_layers=1: still <= n_base_layers(2) -- also immediate.
+        w1 = _new_writer(profile)
+        hybrid.build_hybrid_print(w1, fan_off_layers=1, **common)
+        text1 = w1.text()
+        check(_fan_on_lands_before_wall_spiral(text1),
+              "fan_off_layers=1 (<= the base's own 2 layers): fan still "
+              "turns on immediately at the seam")
+
+        # fan_off_layers=5: n_base_layers(2) + 3 -- the base already covers 2
+        # of the 5 requested, so the wall should wait exactly 3 more full
+        # turns (3 * points_per_turn = 180 points), not all 5.
+        w2 = _new_writer(profile)
+        hybrid.build_hybrid_print(w2, fan_off_layers=5, **common)
+        text2 = w2.text()
+        n_before = _wall_points_before_fan_on(text2)
+        check(n_before == 3 * 60,
+              "fan_off_layers=5 with a 2-layer base: fan turns on exactly "
+              "3 wall turns (180 points) into the wall, not 5",
+              str(n_before))
+
+        # The base/seam portion itself never carries a fan call, and is
+        # identical regardless of fan_off_layers.
+        base0 = text0.split(seam_marker, 1)[0]
+        base2 = text2.split(seam_marker, 1)[0]
+        check(base0 == base2,
+              "fan_off_layers: the base/seam portion (before the seam "
+              "marker) is byte-identical regardless of the fan setting")
+        check("M106" not in base0,
+              "fan_off_layers: the base portion itself never carries a "
+              "fan-on call of its own")
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+
+
 def main() -> int:
     test_happy_path()
     test_placement_mismatch_is_refused()
     test_unknown_infill_pattern_fails_fast()
     test_radius_envelope_rescaling_is_consistent()
+    test_zone_overrides_reach_the_wall_not_the_base()
+    test_fan_off_layers_counts_from_the_base()
 
     if _FAILURES:
         print(f"\n{len(_FAILURES)} FAILURE(S):")

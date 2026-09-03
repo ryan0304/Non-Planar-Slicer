@@ -9,6 +9,14 @@
 
   var TWO_PI = 2.0 * Math.PI;
   var _MAX_AMP_STEP = 0.6;
+  // Wall ring resolution for THIS preview (half the server's real 240,
+  // "half resolution for speed" -- see the pointsPerTurn declaration
+  // below). window.getMeshTopContour()'s angle-resample must be asked for
+  // this SAME count, or its ring's index j would mean a different azimuth
+  // than the parametric wall's own theta at step i -- exactly the twist
+  // top_contour_from_mesh's own docstring warns about. One constant, read
+  // in both places, so the two can never drift apart.
+  var MESH_RING_PPT = 120;
   // Wave-amplitude clamp. MUST equal the SELECTED printer's z_amp_max -- it
   // mirrors serve.py's amp_ceiling(profile), which is what the real generator
   // clamps amp_profile to. This was a hardcoded 0.95 (the Trident's own
@@ -910,6 +918,37 @@
   // can convert a right-click's world Y into a height fraction `t` (for
   // Zone Overrides) without a second copy of this math -- see
   // window.previewWallOffset below.
+  // Port of trident_gcode/profile_stack.py's _blend_weight() -- the shared
+  // curve both blend_stack() and this preview must use, or the two could
+  // silently drift apart. blendIntensity is the 0..1 fraction (already
+  // converted from the UI's 0-100 percentage by the caller). At
+  // blendIntensity=1 this is exactly the smoothstep curve `3t^2-2t^3`
+  // (blend_stack's own historical default, before blend_intensity existed);
+  // at 0 it is a plain linear ramp -- see that Python function's docstring
+  // for why the smooth end avoids a crease ring at the seam.
+  function _meshBlendWeight(t, blendIntensity){
+    var wSmooth = t * t * (3.0 - 2.0 * t);
+    return t + blendIntensity * (wSmooth - t);
+  }
+
+  // Linear lookup on a mesh_base ring (points_per_turn [x,y] pairs, index j
+  // meaning theta = 2*pi*j/n -- window.getMeshTopContour()'s own convention,
+  // matching top_contour_from_mesh's angle-resample) at an arbitrary
+  // continuous theta. The wall loop below samples theta continuously (many
+  // points per turn are not exactly on a ring index once xy_twist rotates
+  // the sampling angle), so this interpolates between the two nearest ring
+  // samples rather than requiring an exact index hit.
+  function _meshRingXYAt(ring, theta){
+    var n = ring.length;
+    var f = (theta / TWO_PI) * n;
+    var i0 = Math.floor(f) % n;
+    if(i0 < 0) i0 += n;
+    var i1 = (i0 + 1) % n;
+    var frac = f - Math.floor(f);
+    var p0 = ring[i0], p1 = ring[i1];
+    return [p0[0] + frac * (p1[0] - p0[0]), p0[1] + frac * (p1[1] - p0[1])];
+  }
+
   function previewWallOffset(design, spec){
     spec = spec || { base_layers: 0, brim: 0 };
     var layerHeight = design.layer_height;
@@ -987,6 +1026,43 @@
     var lw = off.lw, firstLayerSquish = off.firstLayerSquish, s0 = off.s0;
     var baseLayers = off.baseLayers, brimLoops = off.brimLoops;
     var baseZ = off.baseZ, wallOff = off.wallOff;
+
+    // ---- mesh-hybrid planar base: the wall starts at the MESH's own top, --
+    // not squish*layer_height -- and there is no disk-stack base to draw:
+    // trident_gcode/hybrid.py's build_mesh_hybrid_print always calls
+    // build_profile_spiral with base_layers=0 for the wall it resumes (the
+    // solid base is the user's own STL, sliced by Orca, not this app's own
+    // disk fill), so previewWallOffset()'s disk-stack math above does not
+    // apply here at all -- override it rather than let the draft show base
+    // rings the server will never print. window.getMeshTopContour() (viewer.js)
+    // does the actual mesh slicing; this file only knows design-level state,
+    // not the loaded THREE geometry.
+    var meshBlend = null;
+    if(spec.mesh_base_active && typeof window.getMeshTopContour === 'function'){
+      var mbInfo = window.getMeshTopContour(layerHeight, MESH_RING_PPT);
+      if(mbInfo && mbInfo.achievedBaseHeightMm > 0){
+        wallOff = mbInfo.achievedBaseHeightMm;
+        baseZ = mbInfo.achievedBaseHeightMm;
+        baseLayers = 0;
+        if(mbInfo.ring){
+          // seam_style picks the transition CURVE ("fillet" = smoothstep,
+          // matching _blend_weight(t, 1.0); "chamfer" = a straight ramp,
+          // matching _blend_weight(t, 0.0) -- see trident_gcode/profile_stack.py).
+          // seam_coverage is stored as a 0-100 UI percentage (mirrors
+          // fan_overhang_min/max's own convention) -- convert to the 0-1
+          // fraction and scale blendHeightMm by it to get the actual corner
+          // extent, mirroring blend_stack()'s "corner_extent = blend_height *
+          // seam_coverage" exactly (the same conversion buildGenerateBody()
+          // already applies at its own request-body boundary).
+          var blendHeightMm = Math.max(0, design.mesh_base_blend_height || 0);
+          var seamCoverage = Math.max(0, Math.min(1,
+            (design.mesh_base_seam_coverage != null ? design.mesh_base_seam_coverage : 100) / 100));
+          var seamIntensity = (design.mesh_base_seam_style === 'chamfer') ? 0.0 : 1.0;
+          var cornerExtentMm = blendHeightMm * seamCoverage;
+          meshBlend = { ring: mbInfo.ring, blendHeightMm: cornerExtentMm, intensity: seamIntensity };
+        }
+      }
+    }
 
     // ---- loop fabric: a different generator, so a different preview --------
     // serve.py routes a parametric loops design to build_loop_fabric(), which
@@ -1103,7 +1179,7 @@
     var patternFadeOut = design.pattern_fade_out || 0;
     var patternAlternate = !!design.pattern_alternate;
 
-    var pointsPerTurn = 120;   // half resolution for speed
+    var pointsPerTurn = MESH_RING_PPT;   // half the server's 240 -- resolution for speed
     var turns = height / layerHeight;
     var totalSteps = Math.max(2, Math.round(turns * pointsPerTurn));
 
@@ -1250,6 +1326,24 @@
       // Printer XY (centred on origin).
       var px = r * Math.cos(theta);
       var py = r * Math.sin(theta);
+
+      // Mesh-hybrid seam blend: ease from the mesh's own outline (ring 0,
+      // exact) toward this parametric point over Blend height mm, at the
+      // curve Blend intensity dials -- mirrors profile_stack.py's
+      // blend_stack()/interpolate_contours() exactly (see _meshBlendWeight
+      // above). blendHeightMm<=0 is a hard seam (no gradual span to show in
+      // a continuous preview -- blend_stack's own ring-0-only case), so it
+      // is left unblended here rather than approximated.
+      if(meshBlend && meshBlend.blendHeightMm > 0){
+        var heightAboveSeam = t * height;
+        var tBlend = heightAboveSeam / meshBlend.blendHeightMm;
+        if(tBlend < 1.0){
+          var wBlend = _meshBlendWeight(Math.max(0, tBlend), meshBlend.intensity);
+          var meshXY = _meshRingXYAt(meshBlend.ring, theta);
+          px = meshXY[0] + wBlend * (px - meshXY[0]);
+          py = meshXY[1] + wBlend * (py - meshXY[1]);
+        }
+      }
 
       // Asymmetry (mirrors Python paths.py): ovality squashes the section
       // (same `ov` computed once above, ahead of the base disks), the spine

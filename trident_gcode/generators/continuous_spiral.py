@@ -37,7 +37,8 @@ def _overhang_flow(tilt: float | None, k: float) -> float:
 OVERHANG_FAN_FULL_TILT = math.radians(45.0)
 
 
-def _fan_on_threshold(fan_off_layers: int, base_layers: int, ppt: int) -> int:
+def _fan_on_threshold(fan_off_layers: int, base_layers: int, ppt: int,
+                       *, primed: bool = False) -> int:
     """Wall-loop point index at which the part-cooling fan is allowed to turn
     on, given a TOTAL layer count (base + wall combined, from the absolute
     start of the print) that should stay fan-off.
@@ -48,11 +49,23 @@ def _fan_on_threshold(fan_off_layers: int, base_layers: int, ppt: int) -> int:
     fan calls at all regardless of this setting (there is nowhere in that
     emission to turn it on), so a requested count at or below ``base_layers``
     just means "turn on right after the base", same as the default.
+
+    ``primed`` -- True when the caller already printed one full off-fan
+    revolution before the wall spiral even starts, that is neither a base
+    layer nor a wall turn on its own (build_continuous_spiral's "flat priming
+    loop", emitted whenever base_layers == 0 to anchor the first-layer
+    squish). That revolution still counts toward an EXPLICIT fan_off_layers
+    request -- found live: fan_off_layers=1 left the part-cooling fan off
+    through the priming loop AND the wall's own first turn (two full
+    revolutions), one layer more than requested, because the priming loop
+    was invisible to this count. Deliberately only applied in the
+    ``fan_off_layers > 0`` branch: the implicit default below must stay
+    byte-identical to output generated before ``primed`` existed.
     """
     if fan_off_layers > 0:
-        effective = fan_off_layers
-    else:
-        effective = base_layers if base_layers > 0 else 1
+        already_off = base_layers + (1 if primed else 0)
+        return max(0, fan_off_layers - already_off) * ppt
+    effective = base_layers if base_layers > 0 else 1
     return max(0, effective - base_layers) * ppt
 
 
@@ -512,7 +525,11 @@ def build_continuous_spiral(
         # tilt-adaptive tracking still only starts after the wall's first turn
         # (a pre-existing cold-start window, independent of fan_off_layers).
         # Otherwise the requested total off-layer count sets the threshold.
-        fan_on_i = ppt if fan_immediate else _fan_on_threshold(fan_off_layers, base_layers, ppt)
+        # primed=True exactly when base_layers==0 -- the same condition that
+        # gates the "flat priming loop" emitted above, so this always agrees
+        # with whether that extra off-fan revolution actually happened.
+        fan_on_i = ppt if fan_immediate else _fan_on_threshold(
+            fan_off_layers, base_layers, ppt, primed=(base_layers == 0))
         skip_until = -1
         for i, p in enumerate(pts):
             if i <= skip_until:

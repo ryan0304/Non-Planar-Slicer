@@ -44,6 +44,7 @@ from .orca_slice import (
     slice_stl_to_gcode,
 )
 from .profile_stack import (
+    _blend_weight,
     blend_stack,
     mesh_xy_midpoint,
     stack_from_shape,
@@ -271,6 +272,34 @@ def build_hybrid_print(
         seam_z=achieved_base_height,
     )
 
+    # 5b. Fan: fan_off_layers is a TOTAL count from the absolute start of the
+    #     print (base + wall combined), same convention continuous_spiral.py's
+    #     _fan_on_threshold() documents for a NATIVE disk-stack base ("a
+    #     requested count at or below base_layers just means turn on right
+    #     after the base, same as the default"). The Orca-sliced base above
+    #     never gets a fan call of its own (orca_replay.py's own docstring:
+    #     "fan speed... never read from Orca's text at all" -- there is
+    #     nowhere in that replay to turn it on mid-base, exactly like the
+    #     native base's own limitation), so it always prints n_base_layers
+    #     layers fully cold regardless of fan_off_layers. Once that many (or
+    #     more) layers were requested off, the base alone already satisfies
+    #     the request -- the fan must turn on IMMEDIATELY at the seam, not
+    #     wait one more wall turn on top of it (the bug this fixes: a
+    #     fan_off_layers of 0/unset used to fall through to
+    #     _fan_on_threshold's own "wait one warm-up turn" default, landing
+    #     the first M106 a whole extra wall layer after the seam). Only a
+    #     request for MORE layers off than the base alone provides should
+    #     make the wall wait any additional turns, and only for the
+    #     REMAINDER -- the base's own layers already count toward the total.
+    fan_off_layers = profile_spiral_kwargs.pop("fan_off_layers", 0)
+    fan_overhang_min = profile_spiral_kwargs.get("fan_overhang_min")
+    fan_overhang_max = profile_spiral_kwargs.get("fan_overhang_max")
+    fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
+    fan_already_on = fan_off_layers <= n_base_layers
+    wall_fan_off_layers = 0 if fan_already_on else fan_off_layers - n_base_layers
+    if fan_already_on:
+        writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
+
     # 6. Upper (non-planar) contour stack + wall, resuming from wherever
     #     the replay left the toolhead.
     upper_height = height - achieved_base_height
@@ -285,6 +314,7 @@ def build_hybrid_print(
         resume=True, base_z=achieved_base_height, base_layers=0,
         center=(cx, cy),
         z_amp_envelope=(_wall_amp_env if amp_envelope is not None else None),
+        fan_off_layers=wall_fan_off_layers, fan_already_on=fan_already_on,
         **profile_spiral_kwargs,
     )
 
@@ -332,6 +362,8 @@ def build_mesh_hybrid_print(
     radius_envelope: Callable[[float], float] | None = None,
     amp_envelope: Callable[[float], float] | None = None,
     filament_name: str | None = None,
+    seam_style: str = "fillet",
+    seam_coverage: float = 1.0,
     **profile_spiral_kwargs,
 ) -> dict:
     """Emit a hybrid print whose planar base is the user's OWN solid STL.
@@ -395,6 +427,16 @@ def build_mesh_hybrid_print(
     ``n_layers = max(1, round(height / layer_height))``. The report says which
     of the two happened: ``blend_reaches_parametric`` and ``blend_top_weight``.
 
+    *seam_style* ("fillet" default, or "chamfer") and *seam_coverage* (0..1,
+    default 1.0) are the seam-corner knobs, independent of *blend_height*:
+    "fillet" is a smooth round-over (the default smoothstep ease), "chamfer"
+    is a straight beveled facet (a linear ramp), and *seam_coverage* is what
+    fraction of *blend_height* the corner actually spans -- 1.0 uses the whole
+    span, less finishes the corner early so the wall becomes the plain
+    parametric shape sooner. Passed straight to :func:`blend_stack`; see
+    ``_blend_weight`` for the exact formula. The defaults reproduce the
+    pre-seam-style output (``blend_intensity = 1.0``) exactly.
+
     Overhang
     --------
     Neither this function nor ``blend_stack`` applies a printable-overhang
@@ -420,13 +462,16 @@ def build_mesh_hybrid_print(
         )
     for name, val in (("scale", scale), ("layer_height", layer_height),
                       ("height", height), ("blend_height", blend_height),
-                      ("radius", radius)):
+                      ("radius", radius), ("seam_coverage", seam_coverage)):
         if not isinstance(val, (int, float)) or isinstance(val, bool) \
                 or not math.isfinite(float(val)):
             raise ValueError(
                 "%s must be a finite number, got %r -- a non-finite value "
                 "passes every comparison downstream instead of tripping it, "
                 "so it is rejected here rather than clamped" % (name, val))
+    if seam_style not in ("fillet", "chamfer"):
+        raise ValueError(
+            "seam_style must be 'fillet' or 'chamfer', got %r" % (seam_style,))
     if scale <= 0.0:
         raise ValueError("scale must be positive, got %r" % (scale,))
     if layer_height <= 0.0:
@@ -571,6 +616,19 @@ def build_mesh_hybrid_print(
             "surface under it. Refusing to continue." % (
                 orca_top_z, achieved_base_height, tolerance))
 
+    # 7b. Fan: same absolute-layer-count fix as build_hybrid_print() above --
+    #     see that function's own step 5b for the full rationale. n_base_layers
+    #     here is Orca's own achieved layer count (informational, step 2
+    #     above), not a value this module chose.
+    fan_off_layers = profile_spiral_kwargs.pop("fan_off_layers", 0)
+    fan_overhang_min = profile_spiral_kwargs.get("fan_overhang_min")
+    fan_overhang_max = profile_spiral_kwargs.get("fan_overhang_max")
+    fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
+    fan_already_on = fan_off_layers <= n_base_layers
+    wall_fan_off_layers = 0 if fan_already_on else fan_off_layers - n_base_layers
+    if fan_already_on:
+        writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
+
     # 8. The wall: starts as the mesh's own top outline and eases into the
     #    parametric shape. radius_envelope/amp_envelope map over THIS segment
     #    alone (see the height-semantics note in the docstring) -- no
@@ -578,6 +636,7 @@ def build_mesh_hybrid_print(
     contours, heights = blend_stack(
         mesh_ring, shape_fn, radius, height, layer_height, points_per_turn,
         blend_height, radius_envelope=radius_envelope,
+        seam_style=seam_style, seam_coverage=seam_coverage,
     )
     wall_report = build_profile_spiral(
         writer, contours, heights,
@@ -585,6 +644,7 @@ def build_mesh_hybrid_print(
         resume=True, base_z=achieved_base_height, base_layers=0,
         center=(cx, cy),
         z_amp_envelope=amp_envelope,
+        fan_off_layers=wall_fan_off_layers, fan_already_on=fan_already_on,
         **profile_spiral_kwargs,
     )
 
@@ -597,10 +657,14 @@ def build_mesh_hybrid_print(
             if d > max_step:
                 max_step = d
     if len(contours) > 1:
-        t_top = 1.0 if blend_height <= 0.0 else (
-            (len(contours) - 1) * layer_height / blend_height)
+        corner_extent = blend_height * max(0.0, min(seam_coverage, 1.0))
+        t_top = 1.0 if corner_extent <= 0.0 else (
+            (len(contours) - 1) * layer_height / corner_extent)
         t_top = min(max(t_top, 0.0), 1.0)
-        top_weight = t_top * t_top * (3.0 - 2.0 * t_top)
+        # Same curve blend_stack() used above -- see _blend_weight's own
+        # docstring for why this must not be a second, independently-typed
+        # copy of the formula.
+        top_weight = _blend_weight(t_top, 1.0 if seam_style == "fillet" else 0.0)
     else:
         top_weight = 0.0          # a one-ring wall IS the mesh ring
 
@@ -615,6 +679,8 @@ def build_mesh_hybrid_print(
         "total_height_mm": total_height,
         "wall_top_z_mm": achieved_base_height + heights[-1],
         "blend_height_mm": blend_height,
+        "seam_style": seam_style,
+        "seam_coverage": seam_coverage,
         "blend_top_weight": top_weight,
         "blend_reaches_parametric": top_weight >= 1.0 - 1e-12,
         "blend_max_step_mm": max_step,

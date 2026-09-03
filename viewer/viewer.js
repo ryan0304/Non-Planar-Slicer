@@ -191,6 +191,68 @@ const printerGroup = new THREE.Group(); scene.add(printerGroup);
 
 let pathObj = null, travelObj = null, hybridSeamObj = null;
 
+// ---- hybrid seam marker: hover-and-dwell tooltip ---------------------------
+// The plane built below (search "Hybrid planar/non-planar handoff marker")
+// has no DOM element to hang the shared #fm-tooltip hover (designer.js,
+// mouseenter/mouseleave on .fm-hover-target) off of -- it's a THREE.js mesh
+// inside the canvas -- so this raycasts on pointer move instead, and only
+// shows the tooltip once the cursor has sat on the plane for DWELL_MS, the
+// same "hover a while, then explain" read as a native title attribute.
+// Found live: without an explanation the plane reads as a rendering glitch
+// ("stringing") rather than the intentional hybrid seam marker it is -- it
+// needed a name, not a removal.
+(function bindSeamTooltip() {
+  const canvas = renderer.domElement;
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const tip = document.getElementById('fm-tooltip');
+  if (!tip) return;
+  const DWELL_MS = 2000;
+  const TEXT = 'Hybrid Base Seam - planar base ends here, non-planar wall begins above.';
+  let timer = 0;
+  let shown = false;
+  let lastX = 0, lastY = 0;
+
+  function hide() {
+    if (timer) { clearTimeout(timer); timer = 0; }
+    if (shown) { tip.style.display = 'none'; shown = false; }
+  }
+  function show(clientX, clientY) {
+    tip.textContent = TEXT;
+    tip.style.display = 'block';
+    const margin = 8, gap = 14;
+    tip.style.left = '0px'; tip.style.top = '0px';
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let x = clientX + gap, y = clientY + gap;
+    if (x + tw + margin > window.innerWidth) x = clientX - gap - tw;
+    if (y + th + margin > window.innerHeight) y = clientY - gap - th;
+    tip.style.left = Math.max(margin, Math.round(x)) + 'px';
+    tip.style.top = Math.max(margin, Math.round(y)) + 'px';
+    shown = true;
+  }
+  function hitsSeam(clientX, clientY) {
+    if (!hybridSeamObj) return false;
+    const rect = canvas.getBoundingClientRect();
+    ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    return raycaster.intersectObject(hybridSeamObj).length > 0;
+  }
+  canvas.addEventListener('pointermove', function (e) {
+    lastX = e.clientX; lastY = e.clientY;
+    if (hitsSeam(e.clientX, e.clientY)) {
+      if (!timer && !shown) {
+        timer = setTimeout(function () { timer = 0; show(lastX, lastY); }, DWELL_MS);
+      }
+    } else {
+      hide();
+    }
+  });
+  canvas.addEventListener('pointerleave', hide);
+  canvas.addEventListener('pointerdown', hide);
+  window.__hideSeamTooltip = hide;
+})();
+
 // ---- toolpath bead mesh -----------------------------------------------------
 // The real toolpath renders as one box per extrude segment (InstancedMesh,
 // one draw call regardless of segment count), lit like any other object in
@@ -698,6 +760,7 @@ function buildGeometry(d) {
     scene.remove(hybridSeamObj);
     hybridSeamObj.geometry.dispose(); hybridSeamObj.material.dispose();
     hybridSeamObj = null;
+    if (window.__hideSeamTooltip) window.__hideSeamTooltip();
   }
 
   const colorMode = document.getElementById('t-colormode').value;   // 'height' | 'overhang' | 'plain'
@@ -1857,6 +1920,17 @@ let meshBaseScale = 1;
 let meshBaseSourceBuffer = null; // identity check: same ArrayBuffer -> skip re-parsing
 let meshPreviewObj = null;       // the live Mesh in the scene; rebuilt every draft refresh from the cached geometry above
 
+// Raw (unscaled, printer-frame, UNTRANSLATED) triangle data + bounds, cached
+// alongside meshBaseGeometry above for window.getMeshTopContour() below --
+// see that function's own comment for why the seam ring needs a true planar
+// slice rather than anything Three.js's own surface Raycaster can answer.
+// Rebuilt only when the source ArrayBuffer changes (same guard as the THREE
+// geometry above), never on a scale/blend-height/blend-intensity edit -- the
+// triangle data itself never changes, only the uniform scale multiplying it.
+let meshBaseRawTris = null;      // [[[x,y,z],[x,y,z],[x,y,z]], ...] raw file mm
+let meshBaseRawBoundsMin = null; // [x,y,z] raw file mm, server-computed (opts.boundsMin)
+let meshBaseRawBoundsMax = null; // [x,y,z] raw file mm, server-computed (opts.boundsMax)
+
 // designer.js calls this after a successful /api/upload_mesh (with the
 // upload's own raw ArrayBuffer and the response's `bounds`), on every mesh
 // scale-input edit, and whenever the selected printer's bed centre changes.
@@ -1876,6 +1950,14 @@ window.setMeshBasePreview = function (arrayBuffer, opts) {
     let geom;
     try { geom = stlLoader.parse(arrayBuffer); }
     catch (e) { return; } // malformed buffer -- /api/upload_mesh already validated the file server-side
+    // Extract raw (printer-frame, unrotated) triangles BEFORE the render
+    // geometry below gets baked into world axes -- window.getMeshTopContour()
+    // needs the mesh in the same (x,y,z) convention trident_gcode/mesh.py's
+    // slice_segments() and profile_stack.py's mesh_xy_midpoint() use, so the
+    // ported slice math can mirror them directly with no axis juggling.
+    meshBaseRawTris = _extractRawTriangles(geom);
+    meshBaseRawBoundsMin = [opts.boundsMin[0], opts.boundsMin[1], opts.boundsMin[2]];
+    meshBaseRawBoundsMax = [opts.boundsMax[0], opts.boundsMax[1], opts.boundsMax[2]];
     // Bake the printer->world axis remap into the geometry ONCE (see this
     // file's "---- bed ----" comment above): rotating -90deg about X sends a
     // raw STL vertex (x,y,z) -> (x, z, -y) -- printer X -> world X, printer
@@ -1944,7 +2026,196 @@ window.clearMeshBasePreview = function () {
   meshBaseWorldPos = null;
   meshBaseScale = 1;
   meshBaseSourceBuffer = null;
+  meshBaseRawTris = null;
+  meshBaseRawBoundsMin = null;
+  meshBaseRawBoundsMax = null;
   render();
+};
+
+// Non-indexed [[x,y,z],[x,y,z],[x,y,z]] triangle list from a freshly-parsed
+// STLLoader geometry, straight off its position attribute (STL has no
+// meaningful shared vertices, but handle an indexed geometry defensively
+// anyway -- nothing guarantees STLLoader never produces one).
+function _extractRawTriangles(geom) {
+  const pos = geom.attributes.position;
+  const idx = geom.index;
+  const tris = [];
+  const nTris = idx ? (idx.count / 3) : (pos.count / 3);
+  for (let t = 0; t < nTris; t++) {
+    const tri = [];
+    for (let v = 0; v < 3; v++) {
+      const vi = idx ? idx.getX(t * 3 + v) : (t * 3 + v);
+      tri.push([pos.getX(vi), pos.getY(vi), pos.getZ(vi)]);
+    }
+    tris.push(tri);
+  }
+  return tris;
+}
+
+// ---------------------------------------------------------------------------
+// window.getMeshTopContour(): live-preview port of trident_gcode/profile_
+// stack.py's top_contour_from_mesh() + mesh_xy_midpoint(), and of hybrid.py's
+// build_mesh_hybrid_print() seam-height derivation. Called by preview_math.js
+// (generatePreview()) whenever a mesh is loaded as the planar base, so the
+// draft can show the SAME seam the server will actually cut -- see the
+// "Design tab draft preview never drew the mesh base" fix this belongs to.
+//
+// This is deliberately a faithful geometric port, not an approximation: a
+// raycast against the mesh's rendered SURFACE (e.g. THREE.Raycaster) answers
+// a different question (where the outer skin sits at a given XY) than a true
+// planar cross-section, and would silently mislead near any overhang, boss,
+// or non-convex rim on the mount -- exactly the kind of feature this whole
+// codebase exists to preserve rather than approximate away.
+//
+// Returns null if no mesh is loaded. Otherwise returns
+//   { achievedBaseHeightMm, ring }
+// where achievedBaseHeightMm mirrors hybrid.py's `achieved_base_height =
+// mesh_height` (the SCALED mesh's own maxz-minz) -- the caller needs this
+// even when `ring` comes back null, to still position the wall on top of the
+// base (Part A of this fix) even if the seam-blend ring itself (Part B)
+// could not be computed. `ring` is `points_per_turn` [x,y] pairs in the
+// mesh's own origin-centred frame, in SCALED real mm (matching the units the
+// parametric preview's own rings already use) -- or null when the live
+// cross-section does not meet the same requirements the server enforces
+// (single simple loop, star-convex about the mesh's own bbox XY midpoint):
+// a live preview must degrade gracefully on an in-progress/invalid edit,
+// never throw, so every failure path below returns ring: null rather than
+// raising.
+window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
+  if (!meshBaseRawTris || !meshBaseRawBoundsMin || !meshBaseRawBoundsMax) return null;
+  if (!(layerHeightMm > 0) || !isFinite(layerHeightMm)) return null;
+  if (!(pointsPerTurn >= 3)) return null;
+
+  const k = meshBaseScale;
+  const rawMinZ = meshBaseRawBoundsMin[2], rawMaxZ = meshBaseRawBoundsMax[2];
+  const meshHeightScaled = k * (rawMaxZ - rawMinZ);
+  if (!(meshHeightScaled > 0) || !isFinite(meshHeightScaled)) return null;
+
+  const result = { achievedBaseHeightMm: meshHeightScaled, ring: null };
+  // hybrid.py's own floor: under two layers, there is no seam ring to slice
+  // (and Generate itself will refuse the print) -- just skip the ring.
+  if (meshHeightScaled < 2.0 * layerHeightMm) return result;
+
+  // Same z hybrid.py's build_mesh_hybrid_print samples at: half a layer below
+  // the mesh's own true top (SCALED mm, measured from the translated minz=0),
+  // converted back to the RAW (unscaled) frame this cached triangle data is
+  // still in.
+  const targetZScaled = meshHeightScaled - layerHeightMm * 0.5;
+  const targetZRaw = rawMinZ + targetZScaled / k;
+
+  // ---- mesh_xy_midpoint(tris): raw bbox XY midpoint, the ray origin -------
+  const ox = (meshBaseRawBoundsMin[0] + meshBaseRawBoundsMax[0]) / 2.0;
+  const oy = (meshBaseRawBoundsMin[1] + meshBaseRawBoundsMax[1]) / 2.0;
+
+  // ---- slice_segments(tris, h): every triangle edge crossing z=h ---------
+  const segs = [];
+  for (let i = 0; i < meshBaseRawTris.length; i++) {
+    const tri = meshBaseRawTris[i];
+    const hits = [];
+    for (let e = 0; e < 3; e++) {
+      const p0 = tri[e], p1 = tri[(e + 1) % 3];
+      const below0 = p0[2] < targetZRaw, below1 = p1[2] < targetZRaw;
+      if (below0 !== below1) {
+        const t = (targetZRaw - p0[2]) / (p1[2] - p0[2]);
+        hits.push([p0[0] + t * (p1[0] - p0[0]), p0[1] + t * (p1[1] - p0[1])]);
+      }
+    }
+    if (hits.length === 2) segs.push(hits);
+  }
+  if (!segs.length) return result;
+
+  // ---- stitch_loops(segs): connect endpoints into closed loops -----------
+  const EPS = 1e-4;
+  const key = (p) => Math.round(p[0] / EPS) + ',' + Math.round(p[1] / EPS);
+  const endmap = new Map();
+  segs.forEach((s, i) => {
+    [s[0], s[1]].forEach((p) => {
+      const kk = key(p);
+      if (!endmap.has(kk)) endmap.set(kk, []);
+      endmap.get(kk).push(i);
+    });
+  });
+  const used = new Array(segs.length).fill(false);
+  const loops = [];
+  for (let start = 0; start < segs.length; start++) {
+    if (used[start]) continue;
+    used[start] = true;
+    let [p, q] = segs[start];
+    const loop = [p, q];
+    let cur = q;
+    const startKey = key(p);
+    for (;;) {
+      const k2 = key(cur);
+      const bucket = endmap.get(k2) || [];
+      let nxt = -1;
+      for (const j of bucket) { if (!used[j]) { nxt = j; break; } }
+      if (nxt < 0) break;
+      used[nxt] = true;
+      const [a, b] = segs[nxt];
+      cur = (key(a) === k2) ? b : a;
+      loop.push(cur);
+      if (key(cur) === startKey) break;
+    }
+    if (loop.length >= 4) loops.push(loop);
+  }
+  // Exactly one usable loop expected -- multiple islands/holes-at-this-height
+  // are the same ambiguous case the server rejects outright (ValueError in
+  // top_contour_from_mesh); the preview just skips the ring instead.
+  if (loops.length !== 1) return result;
+
+  // ---- local = loop - origin, star-convexity about (0,0) -----------------
+  const local = loops[0].map((p) => [p[0] - ox, p[1] - oy]);
+  const n = local.length;
+  // top_contour_from_mesh tests star-convexity about the RAY ORIGIN (0,0) in
+  // this local frame, not the polygon's own centroid (see _is_star_convex's
+  // docstring on why those can disagree) -- mirror that exactly, never
+  // average `local` into a second center here.
+  let total = 0;
+  let signOk = true;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = local[i];
+    const [x1, y1] = local[(i + 1) % n];
+    if ((x0 === 0 && y0 === 0) || (x1 === 0 && y1 === 0)) return result; // origin on the outline
+    let d = Math.atan2(y1, x1) - Math.atan2(y0, x0);
+    d = Math.atan2(Math.sin(d), Math.cos(d)); // wrap to [-pi, pi]
+    total += d;
+  }
+  if (Math.abs(Math.abs(total) - 2.0 * Math.PI) > 1e-3) return result; // origin outside, or self-wraps
+  const sweepSign = total >= 0 ? 1 : -1;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = local[i];
+    const [x1, y1] = local[(i + 1) % n];
+    let d = Math.atan2(y1, x1) - Math.atan2(y0, x0);
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    if (sweepSign * d < -1e-6) { signOk = false; break; }
+  }
+  if (!signOk) return result;
+
+  // ---- _ray_radius(local, theta), angle-resampled ------------------------
+  const ring = [];
+  for (let j = 0; j < pointsPerTurn; j++) {
+    const theta = 2.0 * Math.PI * j / pointsPerTurn;
+    const dx = Math.cos(theta), dy = Math.sin(theta);
+    let best = null;
+    for (let i = 0; i < n; i++) {
+      const [ax, ay] = local[i];
+      const [bx, by] = local[(i + 1) % n];
+      const ex = bx - ax, ey = by - ay;
+      const denom = dx * ey - dy * ex;
+      if (denom === 0) continue;
+      const u = (ax * dy - ay * dx) / denom;
+      if (u < -1e-9 || u > 1.0 + 1e-9) continue;
+      const s = (ax * ey - ay * ex) / denom;
+      if (s > 0 && (best === null || s > best)) best = s;
+    }
+    if (best === null || !isFinite(best)) return result; // no crossing at this angle -- abandon the ring
+    // Scale to real mm here (raw local units * mesh scale), matching the
+    // units the parametric preview's own rings already use.
+    ring.push([k * best * dx, k * best * dy]);
+  }
+
+  result.ring = ring;
+  return result;
 };
 
 // Rebuilds the live Mesh wrapper from the cached geometry/material/placement

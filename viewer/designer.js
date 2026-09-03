@@ -206,7 +206,18 @@
     // spec'd default the moment an STL loads; a design with no mesh loaded
     // simply never reads these fields.
     mesh_base_mode: "planar_base", mesh_base_blend_height: 0,
-    mesh_base_wall_count: 3, mesh_base_infill_density: 0.15,
+    // seam_style picks the corner CURVE ("fillet" = smooth round-over,
+    // "chamfer" = a straight beveled facet); seam_coverage is stored here as
+    // the 0-100 UI percentage (mirrors fan_overhang_min/max's own convention
+    // below) -- converted to the 0-1 fraction serve.py/blend_stack() expects
+    // only at buildGenerateBody's request-body boundary, never here.
+    mesh_base_seam_style: "fillet",
+    mesh_base_seam_coverage: 100,
+    mesh_base_wall_count: 3,
+    // Stored as a 0-100 UI percentage, same convention as fan_overhang_min/
+    // max and mesh_base_seam_coverage above -- converted to the 0-1
+    // fraction serve.py expects only at buildGenerateBody's boundary.
+    mesh_base_infill_density: 15,
     mesh_base_infill_pattern: "grid",
     // Solid top/bottom cap layers for the mesh planar base (right-hand
     // Planar base bar). Fixes a real bug: with 0 top layers the base's
@@ -224,6 +235,12 @@
     mesh_base_first_layer_speed: null,
     mesh_base_brim_type: '', mesh_base_brim_width: null,
     mesh_base_enable_support: false, mesh_base_support_threshold: null,
+    // Avoid crossing walls: same "checkbox's absent state is a real value
+    // (off), not unset" contract as mesh_base_enable_support above. The
+    // detour length follows the OPTIONAL/"unset means don't send" contract
+    // instead (an empty string), since it is meaningless until the checkbox
+    // is on but should not be lost if the user sets it before ticking the box.
+    mesh_base_avoid_crossing_walls: false, mesh_base_avoid_crossing_detour: '',
     // The rest of the OrcaSlicer Process settings, grouped in the right-hand
     // bar the way Orca's own Process tab groups them (Quality / Strength /
     // Speed / Support / Others). Same "absent means unset" contract as the
@@ -4069,10 +4086,39 @@
   bindSelect('d-basestyle', 'base_style');
   bindNumber('d-skirt', 'skirt', true);
   bindNumber('d-hybrid-height', 'hybrid_base_height');
+  // bindNumber alone never re-checks Point Edit / Zone Overrides scope --
+  // unlike the mesh-base and loop-fabric paths (mesh upload/clear, d-pattern
+  // change), toggling THIS field on its own used to leave the two out-of-
+  // scope notes and entry-button dimming stale until some other field also
+  // changed. Both functions already read design.hybrid_base_height directly,
+  // so this only needs to fire them on edit, not duplicate their logic.
+  document.getElementById('d-hybrid-height').addEventListener('input', function(){
+    if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
+    if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+  });
   bindNumber('d-hybrid-walls', 'hybrid_wall_count', true);
   bindNumber('d-hybrid-infill', 'hybrid_infill_density');
   bindSelect('d-hybrid-pattern', 'hybrid_infill_pattern');
   bindNumber('d-meshbase-blend', 'mesh_base_blend_height');
+  bindSelect('d-meshbase-seam-style', 'mesh_base_seam_style');
+  // Seam coverage slider: same 0-100 percentage-slider pattern as
+  // bindFanSlider (fan_overhang_min/max) below -- design[field] stores the
+  // 0-100 UI value directly; buildGenerateBody converts /100 at the request
+  // boundary. Not bindNumber(): that helper has no live "%"-suffixed readout.
+  (function(){
+    var slider = document.getElementById('d-meshbase-seam-coverage');
+    var read = document.getElementById('meshbase-seam-coverage-read');
+    if(!slider) return;
+    slider.value = design.mesh_base_seam_coverage != null ? design.mesh_base_seam_coverage : 100;
+    if(read) read.textContent = slider.value + '%';
+    slider.addEventListener('input', function(){
+      design.mesh_base_seam_coverage = parseFloat(slider.value);
+      if(read) read.textContent = slider.value + '%';
+      persistDesign('num:d-meshbase-seam-coverage');
+      schedulePreview();
+    });
+    slider.addEventListener('change', endHistRun);
+  })();
   bindNumber('d-meshbase-walls', 'mesh_base_wall_count', true);
   bindNumber('d-meshbase-infill', 'mesh_base_infill_density');
   bindSelect('d-meshbase-pattern', 'mesh_base_infill_pattern');
@@ -4154,6 +4200,43 @@
     });
   }
   syncPlanarSupportRows();
+  // Avoid crossing walls: same plain-checkbox, real-default-OFF contract as
+  // Support enable above -- its absent state (off) is a real value, not
+  // "unset", so it lives outside MESH_BASE_OPTIONAL too.
+  (function(){
+    var el = document.getElementById('d-meshbase-avoidcross');
+    if(!el) return;
+    el.checked = !!design.mesh_base_avoid_crossing_walls;
+    el.addEventListener('change', function(){
+      design.mesh_base_avoid_crossing_walls = el.checked;
+      persistDesign();
+      schedulePreview();
+      syncPlanarAvoidCrossRow();
+    });
+  })();
+  // Max detour length: a plain text field (not bindOptionalNumber -- it must
+  // accept a trailing '%'), OPTIONAL/"unset means don't send" contract like
+  // every row in MESH_BASE_OPTIONAL. Stored trimmed; blank means unset.
+  (function(){
+    var el = document.getElementById('d-meshbase-avoidcross-detour');
+    if(!el) return;
+    el.value = design.mesh_base_avoid_crossing_detour || '';
+    el.addEventListener('input', function(){
+      design.mesh_base_avoid_crossing_detour = el.value.trim();
+      persistDesign('text:d-meshbase-avoidcross-detour');
+      schedulePreview();
+    });
+    el.addEventListener('change', endHistRun);
+  })();
+  // The detour row does nothing while the checkbox is off -- same dimming
+  // treatment (not hiding) as syncPlanarSupportRows() above, so a saved
+  // value stays visible even while inert.
+  function syncPlanarAvoidCrossRow(){
+    var on = !!design.mesh_base_avoid_crossing_walls;
+    var row = document.getElementById('row-meshbase-avoidcross-detour');
+    if(row) row.classList.toggle('row-inert', !on);
+  }
+  syncPlanarAvoidCrossRow();
   // The base and the non-planar wall share ONE layer height, owned by the
   // left sidebar's #d-lh. Mirrored here as read-only text so the Quality
   // group is not missing the setting Orca puts at the top of its own Quality
@@ -4587,13 +4670,19 @@
     });
   }
 
-  // Point edit modifiers only reach the parametric wall spiral -- loop fabric
-  // and STL import ignore them server-side (mirrors updateCageNote()'s
-  // precedent for the same limitation on the asymmetric shape cage).
+  // Point edit modifiers only reach the parametric wall spiral -- loop fabric,
+  // STL import, and a hybrid planar base all ignore them server-side (mirrors
+  // updateCageNote()'s precedent for the same limitation on the asymmetric
+  // shape cage). hybrid_base_height covers the parametric Orca-sliced base;
+  // meshState.mesh_id already covers the mesh-STL base (any mesh_base_mode)
+  // because build_mesh_hybrid_print's upper wall has the same gap -- see
+  // serve.py's point_edit_issue/zone_scope_issue branches for both bases.
   function updatePointEditScopeNote(){
     var note = document.getElementById('pe-scope-note');
     var btn = document.getElementById('point-edit-btn');
-    var outOfScope = design.pattern === 'loops' || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+    var outOfScope = design.pattern === 'loops'
+      || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id)
+      || (design.hybrid_base_height > 0);
     if(note) note.style.display = outOfScope ? '' : 'none';
     if(btn) btn.classList.toggle('pe-out-of-scope', outOfScope);
   }
@@ -4875,13 +4964,22 @@
     var dot = document.getElementById('zo-active-dot');
     if(dot) dot.classList.toggle('active', zoneOverridesAnyEnabled());
   }
-  // Zone overrides only reach the parametric wall spiral -- loop fabric and
-  // STL import ignore them server-side, same limitation (and same UI
-  // treatment) as updatePointEditScopeNote() above.
+  // Zone overrides reach build_profile_spiral, the wall generator used by
+  // the plain parametric wall AND both hybrid modes (a parametric OR mesh
+  // planar base) -- in every case they apply only to the wall itself, never
+  // the base below it (build_profile_spiral never builds the base). Loop
+  // fabric replaces the wall entirely and has no zone concept, so it stays
+  // out of scope. mesh_texture mode is a DIFFERENT generator path
+  // (generate_mesh_texture_design in serve.py) that genuinely still has no
+  // Zone Override support -- distinguished from a mesh HYBRID base (which
+  // does) by design.mesh_base_mode, the same field effectiveBaseSpec() uses
+  // for mesh_base_active.
   function updateZoneScopeNote(){
     var note = document.getElementById('zo-scope-note');
     var btn = document.getElementById('zone-btn');
-    var outOfScope = design.pattern === 'loops' || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+    var outOfScope = design.pattern === 'loops'
+      || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id
+            && design.mesh_base_mode !== 'planar_base');
     if(note) note.style.display = outOfScope ? '' : 'none';
     if(btn) btn.classList.toggle('zo-out-of-scope', outOfScope);
     if(typeof refreshZoneRings === 'function') refreshZoneRings();
@@ -5419,8 +5517,12 @@
   function refreshZoneRings(){
     if(!window.showZoneRings || !window.hideZoneRings) return;
     if(window.__zoneRingDragActive) return;
+    // Same scope as updateZoneScopeNote() above -- a mesh HYBRID base
+    // (design.mesh_base_mode === 'planar_base') is in scope, mesh_texture
+    // mode is not (see that function's own comment for why).
     var outOfScope = design.pattern === 'loops' ||
-      !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+      !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id
+         && design.mesh_base_mode !== 'planar_base');
     var zones = (design.zone_overrides || []);
     var live = [];
     zones.forEach(function(z, idx){
@@ -5683,7 +5785,17 @@
       // so the draft has to draw the fabric rather than a spiral. Carried on
       // the same object for the same reason as the fields above: one place
       // decides, and the request and the draft cannot disagree about it.
-      loop_fabric: lf
+      loop_fabric: lf,
+      // True mesh-HYBRID planar base (an uploaded STL sliced by Orca as the
+      // solid base, non-planar wall resumed on top) -- narrower than `mesh`
+      // above, which also covers mesh_texture (whole-model draping, a
+      // DIFFERENT generator that still honours base_layers/brim, see this
+      // function's own comment). preview_math.js's generatePreview() reads
+      // this to override wallOff/baseZ to the mesh's own top height and
+      // suppress the disk-stack base entirely, mirroring hybrid.py's
+      // build_mesh_hybrid_print (always base_layers=0 for the wall it
+      // resumes -- the printed base is the user's STL, not a disk fill).
+      mesh_base_active: mesh && design.mesh_base_mode === 'planar_base'
     };
   }
 
@@ -6324,8 +6436,17 @@
     _set('d-hybrid-infill', design.hybrid_infill_density != null ? design.hybrid_infill_density : 0.15);
     _set('d-hybrid-pattern', design.hybrid_infill_pattern || 'grid');
     _set('d-meshbase-blend', design.mesh_base_blend_height || 0);
+    _set('d-meshbase-seam-style', design.mesh_base_seam_style || 'fillet');
+    var mbSeamCovSlider = document.getElementById('d-meshbase-seam-coverage');
+    if(mbSeamCovSlider){
+      mbSeamCovSlider.value = design.mesh_base_seam_coverage != null ? design.mesh_base_seam_coverage : 100;
+    }
+    var mbSeamCovRead = document.getElementById('meshbase-seam-coverage-read');
+    if(mbSeamCovRead){
+      mbSeamCovRead.textContent = (design.mesh_base_seam_coverage != null ? design.mesh_base_seam_coverage : 100) + '%';
+    }
     _set('d-meshbase-walls', design.mesh_base_wall_count || 3);
-    _set('d-meshbase-infill', design.mesh_base_infill_density != null ? design.mesh_base_infill_density : 0.15);
+    _set('d-meshbase-infill', design.mesh_base_infill_density != null ? design.mesh_base_infill_density : 15);
     _set('d-meshbase-pattern', design.mesh_base_infill_pattern || 'grid');
     _set('d-meshbase-toplayers', design.mesh_base_top_layers != null ? design.mesh_base_top_layers : 3);
     _set('d-meshbase-bottomlayers', design.mesh_base_bottom_layers != null ? design.mesh_base_bottom_layers : 3);
@@ -6341,6 +6462,11 @@
     var mbSupportEl = document.getElementById('d-meshbase-support-enable');
     if(mbSupportEl) mbSupportEl.checked = !!design.mesh_base_enable_support;
     if(typeof syncPlanarSupportRows === 'function') syncPlanarSupportRows();
+    var mbAvoidCrossEl = document.getElementById('d-meshbase-avoidcross');
+    if(mbAvoidCrossEl) mbAvoidCrossEl.checked = !!design.mesh_base_avoid_crossing_walls;
+    var mbAvoidCrossDetourEl = document.getElementById('d-meshbase-avoidcross-detour');
+    if(mbAvoidCrossDetourEl) mbAvoidCrossDetourEl.value = design.mesh_base_avoid_crossing_detour || '';
+    if(typeof syncPlanarAvoidCrossRow === 'function') syncPlanarAvoidCrossRow();
     if(typeof syncPlanarLayerHeightRead === 'function') syncPlanarLayerHeightRead();
     var flhEl = document.getElementById('d-flh');
     if(flhEl) flhEl.value = design.first_layer_height != null ? design.first_layer_height : '';
@@ -6813,6 +6939,14 @@
       bedCx: bedCx,
       bedCy: bedCy
     });
+    // The wall's own draft (generatePreview) reads the mesh's height through
+    // window.getMeshTopContour() -- a scale edit changes that height, so the
+    // wall draft is just as stale here as the orange mesh itself would be
+    // without the setMeshBasePreview() call above. Neither used to trigger a
+    // redraw at all (nor did a successful upload, nor Blend height/intensity
+    // below) -- this was the root of "adjusting Blend intensity shows nothing
+    // in the draft preview".
+    schedulePreview();
   }
   var meshScaleEl = document.getElementById('mesh-scale');
   if(meshScaleEl) meshScaleEl.addEventListener('input', refreshMeshBasePreview);
@@ -7044,8 +7178,15 @@
         body.mesh_base_id = meshState.mesh_id;
         body.mesh_base_scale = parseFloat(document.getElementById('mesh-scale').value) || 1.0;
         body.mesh_base_blend_height = design.mesh_base_blend_height || 0;
+        body.mesh_base_seam_style = design.mesh_base_seam_style || 'fillet';
+        // Sent as the 0-100 UI percentage -- serve.py's _parse_mesh_hybrid_params
+        // divides by 100 itself (same wire convention as fan_min/fan_max below).
+        body.mesh_base_seam_coverage = design.mesh_base_seam_coverage != null ? design.mesh_base_seam_coverage : 100;
         body.mesh_base_wall_count = Math.round(design.mesh_base_wall_count || 3);
-        body.mesh_base_infill_density = design.mesh_base_infill_density != null ? design.mesh_base_infill_density : 0.15;
+        // design.mesh_base_infill_density is stored as a 0-100 UI percentage;
+        // serve.py's mesh_base_infill_density wire field is a 0-1 fraction
+        // (unchanged contract), so this is the one place the /100 happens.
+        body.mesh_base_infill_density = (design.mesh_base_infill_density != null ? design.mesh_base_infill_density : 15) / 100;
         body.mesh_base_infill_pattern = design.mesh_base_infill_pattern || 'grid';
         // Solid top/bottom cap layers -- right-hand Planar base bar only,
         // never sent on the mesh_texture path below (that path has no
@@ -7070,6 +7211,12 @@
           if(v != null && v !== '') body[row[1]] = v;
         });
         if(design.mesh_base_enable_support) body.mesh_base_enable_support = true;
+        // Avoid crossing walls: same "only sent when true" contract as
+        // Enable support above (absence already means off server-side).
+        if(design.mesh_base_avoid_crossing_walls) body.mesh_base_avoid_crossing_walls = true;
+        if(design.mesh_base_avoid_crossing_detour) {
+          body.mesh_base_avoid_crossing_detour = design.mesh_base_avoid_crossing_detour;
+        }
       } else {
         body.mode = 'mesh_texture';
         body.mesh_id = meshState.mesh_id;

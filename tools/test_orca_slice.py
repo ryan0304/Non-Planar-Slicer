@@ -217,6 +217,7 @@ _OPTIONAL_EMITS = [
     ("support_object_first_layer_gap", "support_object_first_layer_gap", 0.2),
     ("skirt_loops", "skirt_loops", 1),
     ("brim_object_gap", "brim_object_gap", 0.1),
+    ("avoid_crossing_perimeters_max_detour", "avoid_crossing_perimeters_max_detour", "50%"),
 ]
 
 
@@ -275,6 +276,9 @@ def test_process_json_optional_settings():
         ("outer_wall_line_width", float("nan")),
         ("support_object_xy_distance", float("inf")),
         ("bridge_angle", float("nan")),
+        ("avoid_crossing_perimeters_max_detour", "NaN"),
+        ("avoid_crossing_perimeters_max_detour", "NaN%"),
+        ("avoid_crossing_perimeters_max_detour", "not_a_number"),
     ):
         try:
             build_process_json(profile, **_BASE_KWARGS, **{kwarg: bad})
@@ -383,10 +387,64 @@ def test_process_json_optional_settings():
           zero.get("bridge_angle"))
 
 
+# ---------------------------------------------------------------------------
+# Avoid crossing walls: avoid_crossing_perimeters is a hard-default bool
+# (like enable_support -- ALWAYS emitted, unticked is a real value not
+# "unset"); avoid_crossing_perimeters_max_detour is a normal optional
+# mm-or-percent string, covered generically above but with its own
+# percent-preservation and clamping specifics checked here.
+# ---------------------------------------------------------------------------
+def test_avoid_crossing_walls():
+    profile = PrinterProfile()
+
+    off = build_process_json(profile, **_BASE_KWARGS)
+    check(off["avoid_crossing_perimeters"] == "0",
+          "process_json: avoid_crossing_perimeters defaults to '0' (always "
+          "emitted, like enable_support)", off["avoid_crossing_perimeters"])
+
+    on = build_process_json(profile, **_BASE_KWARGS, avoid_crossing_perimeters=True)
+    check(on["avoid_crossing_perimeters"] == "1",
+          "process_json: avoid_crossing_perimeters=True emits '1'",
+          on["avoid_crossing_perimeters"])
+
+    pct = build_process_json(
+        profile, **_BASE_KWARGS, avoid_crossing_perimeters_max_detour="50%")
+    check(pct["avoid_crossing_perimeters_max_detour"] == "50%",
+          "process_json: a percent detour round-trips with its '%' preserved",
+          pct["avoid_crossing_perimeters_max_detour"])
+
+    mm = build_process_json(
+        profile, **_BASE_KWARGS, avoid_crossing_perimeters_max_detour="10")
+    check(mm["avoid_crossing_perimeters_max_detour"] == "10",
+          "process_json: a bare mm detour round-trips with no '%'",
+          mm["avoid_crossing_perimeters_max_detour"])
+
+    clamped_hi = build_process_json(
+        profile, **_BASE_KWARGS, avoid_crossing_perimeters_max_detour="9999%")
+    check(clamped_hi["avoid_crossing_perimeters_max_detour"] == "1000%",
+          "process_json: an oversized percent detour clamps to 1000%, keeps '%'",
+          clamped_hi["avoid_crossing_perimeters_max_detour"])
+
+    clamped_lo = build_process_json(
+        profile, **_BASE_KWARGS, avoid_crossing_perimeters_max_detour="-50")
+    check(clamped_lo["avoid_crossing_perimeters_max_detour"] == "0",
+          "process_json: a negative mm detour clamps to 0",
+          clamped_lo["avoid_crossing_perimeters_max_detour"])
+
+    try:
+        build_process_json(
+            profile, **_BASE_KWARGS, avoid_crossing_perimeters_max_detour="%")
+        check(False, "process_json: a bare '%' with no number is rejected",
+              "no exception raised")
+    except ValueError:
+        check(True, "process_json: a bare '%' with no number is rejected")
+
+
 def main() -> int:
     test_machine_json_derives_from_profile()
     test_process_json_clamps_and_validates()
     test_process_json_optional_settings()
+    test_avoid_crossing_walls()
     test_filament_json_defaults_and_clamps()
 
     if _FAILURES:

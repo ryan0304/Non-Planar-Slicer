@@ -18,7 +18,7 @@ from typing import Callable
 from ..blobs import LoopSpec, compute_loop_sites
 from ..gcode import GcodeWriter
 from ..paths import (_R_PATTERNS, _fade_envelope, _MAX_AMP_STEP, R_PATTERN_NAMES,
-                    cage_scale)
+                    cage_scale, ZoneOverride, zone_weight, zone_twist_integral)
 from ..profile_stack import Contour, contour_normals, interpolate_contours
 from .base_fill import layered_base_and_brim, brim_outer_radius, blend_layer_z
 from .continuous_spiral import emit_loop, _overhang_fan, _fan_on_threshold
@@ -89,6 +89,11 @@ def build_profile_spiral(
     r_fade_out: float = 0.0,
     r_envelope: Callable[[float], float] | None = None,
     r_alternate: bool = False,
+    # Zone Overrides: height-band regions generated with a different texture
+    # pattern/amp/twist and/or xy-twist than the rest of the wall. None
+    # (default) is byte-identical to before this parameter existed -- every
+    # zone-related block below is skipped entirely when zones is falsy.
+    zones: list[ZoneOverride] | None = None,
     # XY twist
     xy_twist_turns: float = 0.0,
     # Asymmetric control cage (N rows x M cols radius-scale grid, see
@@ -114,6 +119,7 @@ def build_profile_spiral(
     fan_overhang_min: float | None = None,
     fan_overhang_max: float | None = None,
     fan_off_layers: int = 0,
+    fan_already_on: bool = False,
     width_callback: Callable[[float], float] | None = None,
     resume: bool = False,
 ) -> dict:
@@ -128,6 +134,33 @@ def build_profile_spiral(
         *points_per_turn* vertices, CCW wound.
     heights : list[float]
         Z height for each contour (same length as *contours*).
+    zones : list[ZoneOverride] | None
+        Height-band regions (t_lo/t_hi as a fraction of THIS wall's own span,
+        0=first contour/seam, 1=top -- never the whole object, so a zone on a
+        hybrid/mesh-hybrid wall automatically stays off the planar base
+        below it, which this function never builds) generated with a
+        different r_pattern/r_amp/r_twist_turns and/or xy_twist_turns than
+        the rest of the wall. Same semantics, same zone_weight()/
+        zone_twist_integral() crossfade math as paths.py's spiral_path() --
+        see ZoneOverride's own docstring for why an abrupt switch at the zone
+        edges is unsafe (a stepped radius or twist would print a new turn
+        with nothing underneath it) and why overlapping zones are weight-
+        normalized. None (default) is byte-identical to before this
+        parameter existed -- every zone-related block is skipped outright.
+    fan_already_on : bool
+        False (default) reproduces today's output byte-for-byte: the fan-on
+        trigger inside the wall-spiral loop below fires the first time
+        ``step_idx`` reaches ``fan_on_threshold`` (from ``fan_off_layers``),
+        exactly as it always has. True means the CALLER already turned the
+        fan on before this function was ever invoked (a hybrid print whose
+        Orca-sliced base already used up all of, or more than,
+        ``fan_off_layers``' worth of the total print -- see
+        trident_gcode/hybrid.py, which is the only caller that ever passes
+        True) -- the loop's own trigger is then skipped entirely, since
+        set_fan() firing a second time here would be redundant at best and
+        would also make ``fan_on_threshold``'s ``fan_off_layers<=0`` default
+        branch (one warm-up turn) wrongly re-delay a fan this function did
+        not turn on in the first place.
     width_callback : Callable[[float], float] | None
         If provided, called with the height fraction t in [0,1] for each wall
         point (same t used for z_amp_envelope/r_envelope); its return value
@@ -176,6 +209,13 @@ def build_profile_spiral(
         raise ValueError(
             f"unknown r_pattern '{r_pattern}', expected one of {R_PATTERN_NAMES}"
         )
+    if zones:
+        for _z in zones:
+            if _z.r_pattern is not None and _z.r_pattern not in _R_PATTERNS:
+                raise ValueError(
+                    f"unknown r_pattern '{_z.r_pattern}' in a zone override, "
+                    f"expected one of {R_PATTERN_NAMES}"
+                )
 
     profile = writer.profile
     cx, cy = center if center is not None else profile.bed_center
@@ -271,7 +311,13 @@ def build_profile_spiral(
     writer.unretract()
 
     # ---- base / brim emission ----------------------------------------------
-    _fan_on = False
+    # fan_already_on=True means the caller (trident_gcode/hybrid.py) already
+    # issued writer.set_fan(...) before this function was invoked -- see this
+    # parameter's own docstring above. Starting _fan_on True here makes the
+    # loop's own "if step_idx >= fan_on_threshold and not _fan_on:" trigger
+    # false from step 0 onward, so it never fires a redundant/wrongly-delayed
+    # second fan-on.
+    _fan_on = fan_already_on
     if base_seq:
         writer.comment(
             f"solid base ({base_layers} layers) + brim ({brim_loops} loops)")
@@ -351,8 +397,22 @@ def build_profile_spiral(
             px, py = blended[j]
 
             # ---- XY twist: rotate point with height ------------------------
-            if xy_twist_turns != 0.0:
-                angle = -xy_twist_turns * 2.0 * math.pi * t
+            # Zone Overrides: a zone's own xy_twist_turns is treated as a RATE
+            # and integrated (zone_twist_integral), so the extra rotation
+            # accumulates continuously instead of stepping at the zone edges
+            # (paths.py's ZoneOverride docstring) -- mirrors spiral_path()'s
+            # own shape_angle adjustment exactly, just applied to the already-
+            # sampled point instead of before shape(theta) is evaluated.
+            angle = -xy_twist_turns * 2.0 * math.pi * t
+            if zones:
+                extra = 0.0
+                for z in zones:
+                    if z.xy_twist_turns is not None:
+                        extra += ((z.xy_twist_turns - xy_twist_turns)
+                                  * zone_twist_integral(z, t))
+                if extra != 0.0:
+                    angle -= extra * 2.0 * math.pi
+            if angle != 0.0:
                 cos_a, sin_a = math.cos(angle), math.sin(angle)
                 px, py = px * cos_a - py * sin_a, px * sin_a + py * cos_a
 
@@ -368,7 +428,20 @@ def build_profile_spiral(
                 py *= scale
 
             # ---- radial texture displacement along outward normal ----------
-            if r_pattern is not None:
+            # Zone Overrides: same crossfade spiral_path() uses (paths.py) --
+            # a zone in scope here (zone_weight > 0) that actually sets one of
+            # r_pattern/r_amp/r_twist_turns needs the SAME outward-normal
+            # displacement machinery the global texture already uses below,
+            # so active_zones must be known before deciding whether normals
+            # are needed at all (a zone can be active even when the global
+            # r_pattern is None).
+            active_zones = ([(z, zone_weight(z, t)) for z in zones]
+                             if zones else [])
+            active_zones = [(z, w) for z, w in active_zones
+                             if w > 0.0 and (z.r_pattern is not None
+                                             or z.r_amp is not None
+                                             or z.r_twist_turns is not None)]
+            if r_pattern is not None or active_zones:
                 # Compute normals on the blended contour (cached per contour
                 # index for non-blended cases).
                 if i_next == i:
@@ -387,10 +460,47 @@ def build_profile_spiral(
                 b = 2.0 * math.pi * r_bands * t
                 env = (r_envelope(t) if r_envelope is not None
                        else _fade_envelope(t, r_fade_in, r_fade_out))
-                pattern_fn = _R_PATTERNS[r_pattern]
-                disp = r_amp * env * pattern_fn(a, b)
-                px += disp * nx
-                py += disp * ny
+                if not active_zones:
+                    if r_pattern:
+                        pattern_fn = _R_PATTERNS[r_pattern]
+                        disp = r_amp * env * pattern_fn(a, b)
+                        px += disp * nx
+                        py += disp * ny
+                else:
+                    # Overlapping zones: rescale every weight by
+                    # max(1, sum-of-weights) so the combined displacement can
+                    # never exceed the deepest single zone's own r_amp -- see
+                    # paths.py's spiral_path() texture-crossfade comment for
+                    # the full argument (a convex combination of terms each
+                    # bounded by r_amp can never exceed r_amp itself). Exact
+                    # no-op when zones do not overlap (at most one trapezoid
+                    # is non-zero at any t, so norm is exactly 1.0).
+                    norm = 1.0
+                    wsum = 0.0
+                    for _zz, w in active_zones:
+                        wsum += w
+                    if wsum > 1.0:
+                        norm = wsum
+                    base_w = 1.0
+                    add = 0.0
+                    for z, w in active_zones:
+                        wn = w / norm
+                        base_w -= wn
+                        name = z.r_pattern if z.r_pattern is not None else r_pattern
+                        amp = z.r_amp if z.r_amp is not None else r_amp
+                        if z.r_twist_turns is None or z.r_twist_turns == r_twist_turns:
+                            a_z = a
+                        else:
+                            a_z = (r_waves * theta_tex
+                                   + 2.0 * math.pi * (z.r_twist_turns * t + r_phase))
+                            if r_alternate and i % 2 == 1:
+                                a_z += math.pi
+                        if name:
+                            add += amp * env * _R_PATTERNS[name](a_z, b) * wn
+                    if r_pattern and base_w > 0.0:
+                        add += r_amp * env * _R_PATTERNS[r_pattern](a, b) * base_w
+                    px += add * nx
+                    py += add * ny
 
             # ---- ovality: stretch/squash the final wall coordinates -------
             # Applied after texture so ridges ride the elliptical wall,

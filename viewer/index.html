@@ -498,7 +498,7 @@
                       data-tip-html="Physically deform and sculpt the final 3D toolpath.<br><br>Includes tools for Point Mask, Protection, Free-Form Deformation, Smooth, and Radial Push.">&#9432;</span>
                   </div>
                   <div class="hint" id="pe-scope-note" style="display:none;margin-top:4px">Point edit modifiers only
-                    apply to the parametric wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
+                    apply to the parametric wall (not loop fabric, STL mode, or a hybrid planar base) &#8212; ignored for this design.</div>
                 </div>
 
                 <div class="group" style="padding: 12px; border-top: 1px solid var(--line);">
@@ -511,7 +511,7 @@
                   </div>
                   <div class="hint zo-caution" id="zo-scope-note"
                     style="display:none; margin-top:6px; color:var(--warn)">Zone overrides only apply to the parametric
-                    wall (not loop fabric or STL mode) &#8212; ignored for this design.</div>
+                    wall (not loop fabric, or STL texture mode) &#8212; ignored for this design.</div>
                 </div>
               </div>
               <!-- ---- Step 3: Print ---- -->
@@ -776,27 +776,42 @@
           <hr>
           <h3 class="section-heading" id="sec-head-mbquality">Quality</h3>
           <div id="sec-body-mbquality">
-            <div class="drow" id="row-meshbase-lh"><span>Layer height
-                <button type="button" class="fm-info-btn"
-                  data-tip="Set in the left sidebar and shared with the non-planar wall above -- the base and the wall print at one layer height, so there is deliberately only one control for it.">&#9432;</button>
-              </span><span class="mb-read" id="d-meshbase-lh-read">--</span></div>
+            <div class="drow" id="row-meshbase-lh"><span class="fm-hover-target" data-tip="Set in the left sidebar and shared with the non-planar wall above -- the base and the wall print at one layer height, so there is deliberately only one control for it.">Layer height</span><span class="mb-read" id="d-meshbase-lh-read">--</span></div>
 
             <div class="mb-subhead">Line width</div>
             <div class="hint tight-top">Millimetres. Blank keeps OrcaSlicer's own
               nozzle-relative percentage (e.g. 110% of nozzle diameter).</div>
-            <div class="drow" id="row-meshbase-lw-outer"><span>Outer wall</span>
+            <div class="drow" id="row-meshbase-lw-outer"><span class="fm-hover-target" data-tip="Bead width for the outermost wall pass. This is the surface the eye actually sees, so it is usually kept close to the nozzle diameter for the cleanest finish.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0.05mm, 2mm]">Outer wall</span>
               <input type="number" id="d-meshbase-lw-outer" min="0.05" max="2" step="0.01" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-lw-inner"><span>Inner wall</span>
+            <div class="drow" id="row-meshbase-lw-inner"><span class="fm-hover-target" data-tip="Bead width for every wall pass except the outermost. Hidden under the outer wall, so it can safely run wider for faster printing.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0.05mm, 2mm]">Inner wall</span>
               <input type="number" id="d-meshbase-lw-inner" min="0.05" max="2" step="0.01" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-lw-top"><span>Top surface</span>
+            <div class="drow" id="row-meshbase-lw-top"><span class="fm-hover-target" data-tip="Bead width for the solid top-cap infill lines. A touch narrower than the wall width often gives a smoother, more even top finish.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0.05mm, 2mm]">Top surface</span>
               <input type="number" id="d-meshbase-lw-top" min="0.05" max="2" step="0.01" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-lw-infill"><span>Sparse infill</span>
+            <div class="drow" id="row-meshbase-lw-infill"><span class="fm-hover-target" data-tip="Bead width for the sparse infill lines inside the base. Wider beads fill the interior faster with fewer passes.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0.05mm, 2mm]">Sparse infill</span>
               <input type="number" id="d-meshbase-lw-infill" min="0.05" max="2" step="0.01" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-lw-solid"><span>Internal solid infill</span>
+            <div class="drow" id="row-meshbase-lw-solid"><span class="fm-hover-target" data-tip="Bead width for solid infill layers other than the top/bottom caps -- for example a dense layer under a support interface.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0.05mm, 2mm]">Internal solid infill</span>
               <input type="number" id="d-meshbase-lw-solid" min="0.05" max="2" step="0.01" placeholder="auto"></div>
 
             <div class="mb-subhead">Walls</div>
-            <div class="drow" id="row-meshbase-seam"><span>Seam position</span>
+            <div class="drow" id="row-meshbase-seam"><span class="fm-hover-target" data-tip="Where OrcaSlicer starts and ends each wall loop. Back tucks the seam out of sight for a typical print orientation. Nearest starts each seam wherever the nozzle already is, for the shortest travel. Aligned stacks every layer's seam at one spot (a visible line, but easy to clean up). Random scatters the seam so no single spot is ever weakened.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [Aligned, Nearest, Back, Random]">Seam position</span>
               <select id="d-meshbase-seam" class="mid-select">
                 <option value="">(default)</option>
                 <option value="aligned">Aligned</option>
@@ -805,17 +820,20 @@
                 <option value="random">Random</option>
               </select>
             </div>
-            <div class="drow" id="row-meshbase-wallgen"><span>Wall generator
-                <button type="button" class="fm-info-btn"
-                  data-tip="Classic keeps every wall exactly one nozzle wide. Arachne varies the bead width so thin features that fall between whole multiples of the line width still get filled instead of being dropped - usually the better choice for a modelled part with thin ribs or lettering.">&#9432;</button>
-              </span>
+            <div class="drow" id="row-meshbase-wallgen"><span class="fm-hover-target" data-tip="Classic keeps every wall exactly one nozzle wide. Arachne varies the bead width so thin features that fall between whole multiples of the line width still get filled instead of being dropped - usually the better choice for a modelled part with thin ribs or lettering.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [Classic, Arachne]">Wall generator</span>
               <select id="d-meshbase-wallgen" class="mid-select">
                 <option value="">(default)</option>
                 <option value="classic">Classic</option>
                 <option value="arachne">Arachne</option>
               </select>
             </div>
-            <div class="drow" id="row-meshbase-wallorder"><span>Order of walls</span>
+            <div class="drow" id="row-meshbase-wallorder"><span class="fm-hover-target" data-tip="Print order between the outer and inner wall loops on each layer. Outer first gives the cleanest visible surface (the inner walls press against an already-solid outer wall). Inner first (or inner-outer-inner) can look better on overhanging or highly detailed shapes, at some cost to outer-surface finish.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [Inner first, Outer first, Inner-outer-inner]">Order of walls</span>
               <select id="d-meshbase-wallorder" class="mid-select">
                 <option value="">(default)</option>
                 <option value="inner wall/outer wall">Inner first</option>
@@ -823,21 +841,39 @@
                 <option value="inner-outer-inner wall">Inner-outer-inner</option>
               </select>
             </div>
+
+            <div class="mb-subhead">Travel</div>
+            <label class="row" id="row-meshbase-avoidcross"><span class="fm-hover-target" data-tip="When a travel move (the nozzle moving without extruding) would otherwise cross straight over an already-printed wall, route around it instead -- hides travel-induced stringing and blobs that would otherwise show through a thin or translucent wall.
+
+Default: Off
+Range: [On, Off]">Avoid crossing walls</span>
+              <input type="checkbox" id="d-meshbase-avoidcross"></label>
+            <div class="drow" id="row-meshbase-avoidcross-detour"><span class="fm-hover-target" data-tip="How far a travel move may detour to avoid crossing a wall before giving up and crossing anyway in a straight line. A plain number is millimetres; add a percent sign (e.g. 50%) for a detour length relative to the direct travel distance instead. Only takes effect while Avoid crossing walls is on -- still sent when it's off (a saved value should not vanish just because the checkbox is unticked), but OrcaSlicer ignores it either way.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 1000mm] or [0%, 1000%]">Avoid crossing walls - Max detour length</span>
+              <input type="text" id="d-meshbase-avoidcross-detour" placeholder="auto" style="width:80px; text-align:right"></div>
           </div>
 
           <!-- ---------------------------------------------------------- -->
           <hr>
           <h3 class="section-heading" id="sec-head-mbstrength">Strength</h3>
           <div id="sec-body-mbstrength">
-            <div class="drow" id="row-meshbase-walls"><span>Wall loops</span>
+            <div class="drow" id="row-meshbase-walls"><span class="fm-hover-target" data-tip="Number of concentric wall passes around the base's outline before infill begins. More loops add strength and print time, and give infill less unsupported span to bridge across.
+
+Default: 3
+Range: [1, 8]">Wall loops</span>
               <input type="number" id="d-meshbase-walls" min="1" max="8" step="1"></div>
 
             <div class="mb-subhead">Top / bottom shell</div>
-            <div class="drow" id="row-meshbase-toplayers"><span>Top shell layers
-                <button type="button" class="fm-info-btn"
-                  data-tip="Solid layers capping the TOP of the planar base before the non-planar wall begins. 0 leaves the base's interior open to its own sparse infill instead of a solid cap -- the see-through-to-infill bug this control exists to fix.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-toplayers" min="0" max="8" step="1"></div>
-            <div class="drow" id="row-meshbase-toppattern"><span>Top pattern</span>
+            <div class="drow" id="row-meshbase-toplayers"><span class="fm-hover-target" data-tip="Solid layers capping the TOP of the planar base before the non-planar wall begins. 0 leaves the base's interior open to its own sparse infill instead of a solid cap -- the see-through-to-infill bug this control exists to fix.
+
+Default: 3
+Range: [0, 8]">Top shell layers</span><input type="number" id="d-meshbase-toplayers" min="0" max="8" step="1"></div>
+            <div class="drow" id="row-meshbase-toppattern"><span class="fm-hover-target" data-tip="Infill pattern for the solid top-cap layers only. Monotonic prints every line in the same direction for the most even, consistent finish; Concentric follows the outline; the others trade a touch of finish quality for print speed.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [Monotonic, Monotonic line, Concentric, Zig zag, Rectilinear, Aligned rectilinear, Hilbert curve, Archimedean chords, Octagram spiral]">Top pattern</span>
               <select id="d-meshbase-toppattern" class="mid-select">
                 <option value="">(default)</option>
                 <option value="monotonic">Monotonic</option>
@@ -851,9 +887,15 @@
                 <option value="octagramspiral">Octagram spiral</option>
               </select>
             </div>
-            <div class="drow" id="row-meshbase-bottomlayers"><span>Bottom shell layers</span>
+            <div class="drow" id="row-meshbase-bottomlayers"><span class="fm-hover-target" data-tip="Solid layers at the very bottom of the planar base, directly on the bed -- the mirror of Top shell layers above.
+
+Default: 3
+Range: [0, 8]">Bottom shell layers</span>
               <input type="number" id="d-meshbase-bottomlayers" min="0" max="8" step="1"></div>
-            <div class="drow" id="row-meshbase-bottompattern"><span>Bottom pattern</span>
+            <div class="drow" id="row-meshbase-bottompattern"><span class="fm-hover-target" data-tip="Infill pattern for the solid bottom layers touching the bed. Monotonic or Concentric give the smoothest first-layer adhesion surface.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [Monotonic, Monotonic line, Concentric, Zig zag, Rectilinear, Aligned rectilinear, Hilbert curve, Archimedean chords, Octagram spiral]">Bottom pattern</span>
               <select id="d-meshbase-bottompattern" class="mid-select">
                 <option value="">(default)</option>
                 <option value="monotonic">Monotonic</option>
@@ -869,9 +911,15 @@
             </div>
 
             <div class="mb-subhead">Infill</div>
-            <div class="drow" id="row-meshbase-infill"><span>Sparse infill density</span>
-              <input type="number" id="d-meshbase-infill" min="0" max="1" step="0.05"></div>
-            <div class="drow" id="row-meshbase-pattern"><span>Sparse infill pattern</span>
+            <div class="drow" id="row-meshbase-infill"><span class="fm-hover-target" data-tip="How solid the base's interior is, as a percentage. 0% is hollow (weakest, fastest); 100% is fully solid. Matches how OrcaSlicer's own UI shows this setting.
+
+Default: 15%
+Range: [0%, 100%]">Sparse infill density (%)</span>
+              <input type="number" id="d-meshbase-infill" min="0" max="100" step="5"></div>
+            <div class="drow" id="row-meshbase-pattern"><span class="fm-hover-target" data-tip="Shape of the sparse infill lattice inside the base. Grid and Cubic are fast and strong for typical loads. Gyroid gives even strength in every direction and prints quietly. Honeycomb is the strongest per gram but slowest. Line/Triangles/Concentric/Rectilinear trade strength for print speed.
+
+Default: Grid
+Range: [Grid, Line, Triangles, Cubic, Gyroid, Honeycomb, Concentric, Rectilinear]">Sparse infill pattern</span>
               <select id="d-meshbase-pattern" class="mid-select">
                 <option value="grid">Grid</option>
                 <option value="line">Line</option>
@@ -883,10 +931,10 @@
                 <option value="rectilinear">Rectilinear</option>
               </select>
             </div>
-            <div class="drow" id="row-meshbase-bridgeangle"><span>Bridge direction (deg)
-                <button type="button" class="fm-info-btn"
-                  data-tip="Direction bridges are laid across an opening. 0 is a real value meaning 'let OrcaSlicer choose automatically'; leave the field BLANK to send nothing at all.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-bridgeangle" min="0" max="360" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-bridgeangle"><span class="fm-hover-target" data-tip="Direction bridges are laid across an opening. 0 is a real value meaning 'let OrcaSlicer choose automatically'; leave the field BLANK to send nothing at all.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0deg, 360deg]">Bridge direction (deg)</span><input type="number" id="d-meshbase-bridgeangle" min="0" max="360" step="1" placeholder="auto"></div>
           </div>
 
           <!-- ---------------------------------------------------------- -->
@@ -897,71 +945,116 @@
               target: OrcaSlicer still slows for small perimeters, overhangs and cooling,
               so a small part often prints slower than the number typed here.</div>
             <div class="mb-subhead">Initial layer</div>
-            <div class="drow" id="row-meshbase-speed-first"><span>Initial layer</span>
+            <div class="drow" id="row-meshbase-speed-first"><span class="fm-hover-target" data-tip="Print speed for the very first layer's wall passes. Kept slow by default for reliable bed adhesion.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Initial layer</span>
               <input type="number" id="d-meshbase-speed-first" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-firstinfill"><span>Initial layer infill</span>
+            <div class="drow" id="row-meshbase-speed-firstinfill"><span class="fm-hover-target" data-tip="Print speed for the first layer's interior fill, separate from its walls above -- infill can usually run faster than the wall even on layer 1.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Initial layer infill</span>
               <input type="number" id="d-meshbase-speed-firstinfill" min="1" step="1" placeholder="auto"></div>
 
             <div class="mb-subhead">Other layers</div>
-            <div class="drow" id="row-meshbase-speed-outer"><span>Outer wall</span>
+            <div class="drow" id="row-meshbase-speed-outer"><span class="fm-hover-target" data-tip="Print speed for the outermost wall pass, after the first layer. Usually the slowest of the wall speeds since it sets the visible surface finish.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Outer wall</span>
               <input type="number" id="d-meshbase-speed-outer" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-inner"><span>Inner wall</span>
+            <div class="drow" id="row-meshbase-speed-inner"><span class="fm-hover-target" data-tip="Print speed for every wall pass except the outermost. Hidden under the outer wall, so it can usually run faster.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Inner wall</span>
               <input type="number" id="d-meshbase-speed-inner" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-infill"><span>Sparse infill</span>
+            <div class="drow" id="row-meshbase-speed-infill"><span class="fm-hover-target" data-tip="Print speed for the sparse infill lines inside the base.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Sparse infill</span>
               <input type="number" id="d-meshbase-speed-infill" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-solid"><span>Internal solid infill</span>
+            <div class="drow" id="row-meshbase-speed-solid"><span class="fm-hover-target" data-tip="Print speed for solid infill layers other than the top/bottom caps.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Internal solid infill</span>
               <input type="number" id="d-meshbase-speed-solid" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-topsurface"><span>Top surface</span>
+            <div class="drow" id="row-meshbase-speed-topsurface"><span class="fm-hover-target" data-tip="Print speed for the solid top-cap layers. Often kept slower than the outer wall for the cleanest top finish.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Top surface</span>
               <input type="number" id="d-meshbase-speed-topsurface" min="1" step="1" placeholder="auto"></div>
 
             <div class="mb-subhead">Travel and overhangs</div>
-            <div class="drow" id="row-meshbase-speed-travel"><span>Travel</span>
+            <div class="drow" id="row-meshbase-speed-travel"><span class="fm-hover-target" data-tip="Non-extruding move speed between print moves within the base.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Travel</span>
               <input type="number" id="d-meshbase-speed-travel" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-speed-overhang"><span>Overhang
-                <button type="button" class="fm-info-btn"
-                  data-tip="OrcaSlicer splits overhang slowdown into four bands by how unsupported the extrusion is. This single control sets the three genuinely-overhanging bands (2/4, 3/4, 4/4) to one speed; the 1/4 band keeps OrcaSlicer's own 'no slowdown'.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-speed-overhang" min="1" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-accel"><span>Acceleration
-                <button type="button" class="fm-info-btn"
-                  data-tip="Default print acceleration in mm/s^2. Lowering it helps thin or tall models by reducing the jerk that makes them wobble. Clamped to the selected printer's own max acceleration.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-accel" min="1" step="50" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-speed-overhang"><span class="fm-hover-target" data-tip="OrcaSlicer splits overhang slowdown into four bands by how unsupported the extrusion is. This single control sets the three genuinely-overhanging bands (2/4, 3/4, 4/4) to one speed; the 1/4 band keeps OrcaSlicer's own 'no slowdown'.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s, no fixed ceiling -- clamped to the selected printer's own max speed]">Overhang</span><input type="number" id="d-meshbase-speed-overhang" min="1" step="1" placeholder="auto"></div>
+            <div class="drow" id="row-meshbase-accel"><span class="fm-hover-target" data-tip="Default print acceleration in mm/s^2. Lowering it helps thin or tall models by reducing the jerk that makes them wobble. Clamped to the selected printer's own max acceleration.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [1 mm/s^2, no fixed ceiling -- clamped to the selected printer's own max acceleration]">Acceleration</span><input type="number" id="d-meshbase-accel" min="1" step="50" placeholder="auto"></div>
           </div>
 
           <!-- ---------------------------------------------------------- -->
           <hr>
           <h3 class="section-heading" id="sec-head-mbsupport">Support</h3>
           <div id="sec-body-mbsupport">
-            <label class="row" id="row-meshbase-support-enable"><span>Enable support</span>
+            <label class="row" id="row-meshbase-support-enable"><span class="fm-hover-target" data-tip="Turns on OrcaSlicer's own generated support material for this planar base only, for overhangs steeper than the threshold angle below.
+
+Default: Off
+Range: [On, Off]">Enable support</span>
               <input type="checkbox" id="d-meshbase-support-enable"></label>
             <div class="hint tight-top" id="meshbase-support-off-hint">The rows below only take
               effect while Enable support is on.</div>
-            <div class="drow" id="row-meshbase-support-type"><span>Type
-                <button type="button" class="fm-info-btn"
-                  data-tip="Only the automatic types are offered. OrcaSlicer's manual types build support solely where enforcers are painted in its own 3-D view, which a command-line slice can never have -- offering them would be a control that silently produces no support.">&#9432;</button>
-              </span>
+            <div class="drow" id="row-meshbase-support-type"><span class="fm-hover-target" data-tip="Only the automatic types are offered. OrcaSlicer's manual types build support solely where enforcers are painted in its own 3-D view, which a command-line slice can never have -- offering them would be a control that silently produces no support.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [Normal (auto), Tree (auto)]">Type</span>
               <select id="d-meshbase-support-type" class="mid-select">
                 <option value="">(default)</option>
                 <option value="normal(auto)">Normal (auto)</option>
                 <option value="tree(auto)">Tree (auto)</option>
               </select>
             </div>
-            <div class="drow" id="row-meshbase-support-threshold"><span>Threshold angle (deg)
-                <button type="button" class="fm-info-btn"
-                  data-tip="Overhang angle (from vertical) beyond which support material is generated. Blank = OrcaSlicer's own default.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-support-threshold" min="0" max="90" step="1"
+            <div class="drow" id="row-meshbase-support-threshold"><span class="fm-hover-target" data-tip="Overhang angle (from vertical) beyond which support material is generated. Blank = OrcaSlicer's own default.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0deg, 90deg]">Threshold angle (deg)</span><input type="number" id="d-meshbase-support-threshold" min="0" max="90" step="1"
                 placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-support-topz"><span>Top Z distance (mm)</span>
+            <div class="drow" id="row-meshbase-support-topz"><span class="fm-hover-target" data-tip="Vertical gap OrcaSlicer leaves between the top of a support tower and the model surface it holds up, so support snaps off cleanly instead of fusing to the part.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 5mm]">Top Z distance (mm)</span>
               <input type="number" id="d-meshbase-support-topz" min="0" max="5" step="0.05" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-support-bottomz"><span>Bottom Z distance (mm)</span>
+            <div class="drow" id="row-meshbase-support-bottomz"><span class="fm-hover-target" data-tip="Vertical gap between the bottom of a support tower and the model surface below it -- for example a support starting mid-air over a hole.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 5mm]">Bottom Z distance (mm)</span>
               <input type="number" id="d-meshbase-support-bottomz" min="0" max="5" step="0.05" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-support-iflayers"><span>Top interface layers</span>
+            <div class="drow" id="row-meshbase-support-iflayers"><span class="fm-hover-target" data-tip="Dense transition layers printed between the support tower and the model's underside, for a cleaner support-removal surface.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0, 10]">Top interface layers</span>
               <input type="number" id="d-meshbase-support-iflayers" min="0" max="10" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-support-ifspacing"><span>Top interface spacing (mm)</span>
+            <div class="drow" id="row-meshbase-support-ifspacing"><span class="fm-hover-target" data-tip="Line spacing within the dense interface layers above. Tighter spacing gives a smoother underside but is slower to print and harder to remove.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 10mm]">Top interface spacing (mm)</span>
               <input type="number" id="d-meshbase-support-ifspacing" min="0" max="10" step="0.05" placeholder="auto">
             </div>
-            <div class="drow" id="row-meshbase-support-xy"><span>Object XY distance (mm)</span>
+            <div class="drow" id="row-meshbase-support-xy"><span class="fm-hover-target" data-tip="Horizontal gap OrcaSlicer leaves between support material and the model's own walls, so support does not fuse to the part.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 10mm]">Object XY distance (mm)</span>
               <input type="number" id="d-meshbase-support-xy" min="0" max="10" step="0.05" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-support-firstgap"><span>Object first layer gap (mm)</span>
+            <div class="drow" id="row-meshbase-support-firstgap"><span class="fm-hover-target" data-tip="Extra XY gap applied on the very first layer of support only, since the first layer prints wider and needs more clearance to release.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 5mm]">Object first layer gap (mm)</span>
               <input type="number" id="d-meshbase-support-firstgap" min="0" max="5" step="0.05" placeholder="auto">
             </div>
           </div>
@@ -970,9 +1063,15 @@
           <hr>
           <h3 class="section-heading" id="sec-head-mbothers">Others</h3>
           <div id="sec-body-mbothers">
-            <div class="drow" id="row-meshbase-skirt"><span>Skirt loops</span>
+            <div class="drow" id="row-meshbase-skirt"><span class="fm-hover-target" data-tip="Purge/priming outline loops printed clear of the base before it starts, at first-layer speed -- helps prime the nozzle and shields the print from drafts.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0, 10]">Skirt loops</span>
               <input type="number" id="d-meshbase-skirt" min="0" max="10" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-brim-type"><span>Brim type</span>
+            <div class="drow" id="row-meshbase-brim-type"><span class="fm-hover-target" data-tip="Extra first-layer material printed around the base's outline (or into its holes) purely for bed adhesion, trimmed away after printing. Outer only is the usual choice; Inner/Outer and inner also brim any holes in the base.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [No brim, Outer only, Inner only, Outer and inner, Auto brim]">Brim type</span>
               <select id="d-meshbase-brim-type" class="mid-select">
                 <option value="">(default)</option>
                 <option value="no_brim">No brim</option>
@@ -982,9 +1081,15 @@
                 <option value="auto_brim">Auto brim</option>
               </select>
             </div>
-            <div class="drow" id="row-meshbase-brim-width"><span>Brim width (mm)</span>
+            <div class="drow" id="row-meshbase-brim-width"><span class="fm-hover-target" data-tip="How far the brim extends outward from the base's outline. Wider brims hold down warping-prone filaments better but add cleanup afterward.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 100mm]">Brim width (mm)</span>
               <input type="number" id="d-meshbase-brim-width" min="0" max="100" step="1" placeholder="auto"></div>
-            <div class="drow" id="row-meshbase-brim-gap"><span>Brim-object gap (mm)</span>
+            <div class="drow" id="row-meshbase-brim-gap"><span class="fm-hover-target" data-tip="Small gap left between the brim and the base's own outline, so the brim peels away cleanly instead of fusing to the part.
+
+Default: unset -- OrcaSlicer's own value for the selected printer and filament
+Range: [0mm, 5mm]">Brim-object gap (mm)</span>
               <input type="number" id="d-meshbase-brim-gap" min="0" max="5" step="0.05" placeholder="auto"></div>
           </div>
 
@@ -994,10 +1099,28 @@
           <div id="sec-body-mbseam">
             <div class="hint tight-top">Not an OrcaSlicer setting -- eases this app's own hand-off
               from the mount's outline into the non-planar wall above it.</div>
-            <div class="drow" id="row-meshbase-blend"><span>Blend height (mm)
-                <button type="button" class="fm-info-btn"
-                  data-tip="Eases the hand-off from the mount's own outline into the non-planar wall's starting shape over this many mm, instead of an abrupt seam. 0 = off. Clamped to the design Height.">&#9432;</button>
-              </span><input type="number" id="d-meshbase-blend" min="0" step="0.5"></div>
+            <div class="drow" id="row-meshbase-blend"><span class="fm-hover-target" data-tip="Eases the hand-off from the mount's own outline into the non-planar wall's starting shape over this many mm, instead of an abrupt seam. 0 = off. Clamped to the design Height.
+
+Default: 0mm
+Range: [0mm, no fixed ceiling -- clamped to the design Height]">Blend height (mm)</span><input type="number" id="d-meshbase-blend" min="0" step="0.5"></div>
+            <div class="drow" id="row-meshbase-seam-style"><span class="fm-hover-target" data-tip="Shape of the corner where the mount's own outline meets the non-planar wall above it. Fillet is a smooth, rounded hand-off with no sharp edge. Chamfer is a straight beveled facet instead of a curve -- a deliberate, distinct angled cut rather than a defect.
+
+Default: Fillet
+Range: [Fillet, Chamfer]">Seam style</span>
+              <select id="d-meshbase-seam-style" class="mid-select">
+                <option value="fillet">Fillet</option>
+                <option value="chamfer">Chamfer</option>
+              </select>
+            </div>
+            <div class="drow" id="row-meshbase-seam-coverage"><span class="fm-hover-target" data-tip="How much of the Blend height above the chamfer/fillet actually spans. 100% uses the whole Blend height for the corner. Lower values finish the corner earlier, so the wall becomes the plain design shape sooner instead of transitioning the whole way.
+
+Default: 100%
+Range: [0%, 100%]">Seam coverage (%)</span>
+              <span style="display:inline-flex; align-items:center; gap:6px;">
+                <input type="range" id="d-meshbase-seam-coverage" min="0" max="100" step="5" style="width:100px">
+                <span id="meshbase-seam-coverage-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
+              </span>
+            </div>
           </div>
         </div>
       </div>

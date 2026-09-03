@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 import trident_gcode.hybrid as hybrid
 from trident_gcode.gcode import GcodeWriter
 from trident_gcode.mesh import load_stl
-from trident_gcode.paths import circle
+from trident_gcode.paths import circle, ZoneOverride
 from trident_gcode.profile import PrinterProfile
 from trident_gcode.profile_stack import stack_from_shape, top_contour_from_mesh
 
@@ -347,6 +347,123 @@ def test_blend_height_edges():
 
 
 # ---------------------------------------------------------------------------
+# 4b. seam_style/seam_coverage: SEPARATE knobs from blend_height. seam_style
+#     picks the transition CURVE over the same span; seam_coverage is what
+#     FRACTION of blend_height the curve actually spans before the wall
+#     becomes pure parametric.
+# ---------------------------------------------------------------------------
+def test_seam_style_coverage_edges():
+    parametric = stack_from_shape(circle(2.5), 2.5, 3.0, 0.2, 60)
+
+    # Omitting seam_style/seam_coverage must reproduce EXACTLY what explicit
+    # seam_style="fillet", seam_coverage=1.0 produces -- this is the whole
+    # safety net for check_regression.py's ref_mesh_hybrid_print.gcode staying
+    # byte-identical.
+    _r1, _w1, wall_default = _run(FakeOrca(), blend_height=1.0, capture_wall=True)
+    _r2, _w2, wall_explicit = _run(
+        FakeOrca(), blend_height=1.0, seam_style="fillet", seam_coverage=1.0,
+        capture_wall=True)
+    for i in (1, 2, 3):
+        diff = max(math.hypot(a[0] - b[0], a[1] - b[1])
+                   for a, b in zip(wall_default.contours[i], wall_explicit.contours[i]))
+        check(diff == 0.0,
+              f"seam_style/coverage omitted == explicit fillet/1.0, ring {i}", diff)
+
+    # seam_style="chamfer" at seam_coverage=1.0: a pure LINEAR ramp (w=t), not
+    # the default smoothstep curve. Checked at ring 1 (t=0.2, well off the
+    # t=0.5 point where linear and smoothstep happen to coincide) against a
+    # hand-computed lerp of the mesh ring and the parametric ring -- proves
+    # the actual geometry, not just that _blend_weight agrees with itself.
+    _r3, _w3, wall_lin = _run(
+        FakeOrca(), blend_height=1.0, seam_style="chamfer", seam_coverage=1.0,
+        capture_wall=True)
+    mesh_ring = wall_lin.contours[0]
+    i, t = 1, 1 * 0.2 / 1.0
+    expected_linear = [(mx + (px - mx) * t, my + (py - my) * t)
+                       for (mx, my), (px, py) in zip(mesh_ring, parametric[i])]
+    got = wall_lin.contours[i]
+    diff = max(math.hypot(a[0] - b[0], a[1] - b[1])
+               for a, b in zip(got, expected_linear))
+    check(diff < 1e-9,
+          "seam_style=chamfer: ring matches a pure linear lerp(mesh, "
+          "parametric, t), not the smoothstep curve", diff)
+
+    divergence = max(math.hypot(a[0] - b[0], a[1] - b[1])
+                     for a, b in zip(got, wall_default.contours[i]))
+    check(divergence > 1e-3,
+          "seam_style=chamfer ring genuinely differs from the default "
+          "(fillet) ring at the same layer", divergence)
+
+    # seam_coverage scales the corner extent against blend_height:
+    # coverage=0.5 with blend_height=10 must behave IDENTICALLY to
+    # blend_height=5 with coverage=1.0 (corner_extent = blend_height *
+    # seam_coverage = 5 either way) -- proves seam_coverage is a fraction of
+    # blend_height, not an independent mm value.
+    _r8, _w8, wall_half_cov = _run(
+        FakeOrca(), blend_height=10.0, seam_coverage=0.5, capture_wall=True)
+    _r9, _w9, wall_half_span = _run(
+        FakeOrca(), blend_height=5.0, seam_coverage=1.0, capture_wall=True)
+    for ring_i in range(len(wall_half_cov.contours)):
+        diff = max(math.hypot(a[0] - b[0], a[1] - b[1])
+                   for a, b in zip(wall_half_cov.contours[ring_i],
+                                    wall_half_span.contours[ring_i]))
+        check(diff < 1e-9,
+              f"seam_coverage=0.5 * blend_height=10 == blend_height=5 * "
+              f"coverage=1.0, ring {ring_i}", diff)
+
+    # seam_coverage=0.0 collapses to the existing hard-seam case: ring 0 is
+    # the mesh ring, ring 1 onward is exactly the parametric ring.
+    _r10, _w10, wall_zero_cov = _run(
+        FakeOrca(), blend_height=1.0, seam_coverage=0.0, capture_wall=True)
+    diff = max(math.hypot(a[0] - b[0], a[1] - b[1])
+               for a, b in zip(wall_zero_cov.contours[1], parametric[1]))
+    check(diff == 0.0,
+          "seam_coverage=0.0: ring 1 is exactly the parametric ring (hard seam)",
+          diff)
+
+    # Not a machine limit -- a fixed [0,1] clamp is correct here (CLAUDE.md's
+    # "no machine limit may be a module constant" is about PRINTER ceilings;
+    # this is a slicer-cosmetic curve shape).
+    _r4, _w4, wall_over = _run(
+        FakeOrca(), blend_height=1.0, seam_coverage=1.5, capture_wall=True)
+    diff = max(math.hypot(a[0] - b[0], a[1] - b[1])
+               for a, b in zip(wall_over.contours[i], wall_default.contours[i]))
+    check(diff == 0.0, "seam_coverage=1.5 clamps to 1.0 (same as default)", diff)
+
+    _r5, _w5, wall_under = _run(
+        FakeOrca(), blend_height=1.0, seam_coverage=-2.0, capture_wall=True)
+    diff = max(math.hypot(a[0] - b[0], a[1] - b[1])
+               for a, b in zip(wall_under.contours[i], parametric[i]))
+    check(diff == 0.0,
+          "seam_coverage=-2.0 clamps to 0.0 (hard seam, same as coverage=0.0)",
+          diff)
+
+    # Invalid seam_style is rejected, not silently coerced.
+    try:
+        _run(FakeOrca(), blend_height=1.0, seam_style="round")
+        check(False, "seam_style='round': raises ValueError", "no exception raised")
+    except ValueError as e:
+        check("seam_style" in str(e), "seam_style='round': raises ValueError",
+              str(e)[:120])
+
+    # blend_reaches_parametric / blend_top_weight (the shared-formula
+    # diagnostic in hybrid.py) must track whichever curve was actually used --
+    # needs blend_height >> height so the topmost ring's t stays strictly
+    # inside (0, 1); at t=1 every curve returns exactly 1.0 regardless of
+    # style (see _blend_weight), which would make this comparison vacuous.
+    r_smooth_top, _w6, _c6 = _run(FakeOrca(), blend_height=30.0, seam_style="fillet")
+    r_linear_top, _w7, _c7 = _run(FakeOrca(), blend_height=30.0, seam_style="chamfer")
+    check(0.0 < r_smooth_top["blend_top_weight"] < 1.0
+          and 0.0 < r_linear_top["blend_top_weight"] < 1.0,
+          "sanity: both top weights are mid-blend (not clamped to 0 or 1)",
+          str((r_smooth_top["blend_top_weight"], r_linear_top["blend_top_weight"])))
+    check(r_smooth_top["blend_top_weight"] != r_linear_top["blend_top_weight"],
+          "blend_top_weight differs between seam_style=chamfer and fillet "
+          "(same blend_height, different curve)",
+          str((r_linear_top["blend_top_weight"], r_smooth_top["blend_top_weight"])))
+
+
+# ---------------------------------------------------------------------------
 # 5. A mesh whose top is two separate loops is refused (the wall traces ONE
 #    outline, so the seam would print a shape that is not the model).
 # ---------------------------------------------------------------------------
@@ -443,6 +560,7 @@ def test_non_finite_inputs_are_rejected():
     for name, override in (("scale", {"scale": float("nan")}),
                            ("height", {"height": float("inf")}),
                            ("blend_height", {"blend_height": float("nan")}),
+                           ("seam_coverage", {"seam_coverage": float("nan")}),
                            ("layer_height", {"layer_height": float("inf")})):
         fake = FakeOrca()
         try:
@@ -457,6 +575,92 @@ def test_non_finite_inputs_are_rejected():
               f"slicer called {fake.calls} time(s)")
 
 
+# ---------------------------------------------------------------------------
+# 6. Zone Overrides reach the wall above a mesh-hybrid base (same
+#    **profile_spiral_kwargs passthrough as the parametric hybrid path --
+#    build_mesh_hybrid_print itself needed no signature change) but never
+#    the mesh base / seam portion below it.
+# ---------------------------------------------------------------------------
+def test_zone_overrides_reach_the_wall_not_the_mesh_base():
+    zone = ZoneOverride(t_lo=0.3, t_hi=0.6, blend=0.02, r_pattern="vwave", r_amp=1.0)
+    _r1, w1, _c1 = _run(FakeOrca(), zones=None)
+    text1 = w1.text()
+    _r2, w2, _c2 = _run(FakeOrca(), zones=[zone])
+    text2 = w2.text()
+
+    check(text1 != text2,
+          "zone overrides: a real texture zone changes the mesh-hybrid "
+          "wall's G-code")
+    base1 = text1.split("; wall spiral")[0]
+    base2 = text2.split("; wall spiral")[0]
+    check(base1 == base2,
+          "zone overrides: the mesh base/seam portion (before the wall "
+          "spiral) is byte-identical whether or not a wall zone is set")
+
+
+# ---------------------------------------------------------------------------
+# fan_off_layers is a TOTAL count from the absolute start of the print (mesh
+# base + wall combined), not restarted at the wall's own layer 0 -- same fix
+# as tools/test_hybrid.py's identically-named test, for
+# build_mesh_hybrid_print(). The default fixture (scale=0.1 -> 0.45 mm mesh,
+# layer_height=0.2) gives n_base_layers = max(1, round(0.45/0.2)) = 2.
+# ---------------------------------------------------------------------------
+def test_fan_off_layers_counts_from_the_base():
+    seam_marker = "; hybrid: non-planar wall begins here"
+
+    def _fan_on_lands_before_wall_spiral(text):
+        after_seam = text.split(seam_marker, 1)[1]
+        m_idx = after_seam.find("M106")
+        spiral_idx = after_seam.find("; wall spiral")
+        return m_idx != -1 and (spiral_idx == -1 or m_idx < spiral_idx)
+
+    def _wall_points_before_fan_on(text):
+        wall_text = text.split("; wall spiral", 1)[1]
+        m_idx = wall_text.find("M106")
+        if m_idx == -1:
+            return None
+        before = wall_text[:m_idx]
+        return sum(1 for ln in before.splitlines()
+                   if ln.startswith("G1") and " E" in ln)
+
+    # fan_off_layers=0 (unset/default): the mesh base (2 layers) already
+    # satisfies "0 layers off" -- fan must be on immediately at the seam.
+    _r0, w0, _c0 = _run(FakeOrca(), fan_off_layers=0)
+    text0 = w0.text()
+    check(_fan_on_lands_before_wall_spiral(text0),
+          "fan_off_layers=0: fan turns on immediately at the mesh seam, "
+          "not one wall turn later")
+
+    # fan_off_layers=1: still <= n_base_layers(2) -- also immediate.
+    _r1, w1, _c1 = _run(FakeOrca(), fan_off_layers=1)
+    text1 = w1.text()
+    check(_fan_on_lands_before_wall_spiral(text1),
+          "fan_off_layers=1 (<= the mesh base's own 2 layers): fan still "
+          "turns on immediately at the seam")
+
+    # fan_off_layers=5: n_base_layers(2) + 3 -- the mesh base already covers
+    # 2 of the 5 requested, so the wall should wait exactly 3 more full
+    # turns (3 * points_per_turn = 180 points), not all 5.
+    _r2, w2, _c2 = _run(FakeOrca(), fan_off_layers=5)
+    text2 = w2.text()
+    n_before = _wall_points_before_fan_on(text2)
+    check(n_before == 3 * 60,
+          "fan_off_layers=5 with a 2-layer mesh base: fan turns on exactly "
+          "3 wall turns (180 points) into the wall, not 5",
+          str(n_before))
+
+    # The mesh base/seam portion itself never carries a fan call, and is
+    # identical regardless of fan_off_layers.
+    base0 = text0.split(seam_marker, 1)[0]
+    base2 = text2.split(seam_marker, 1)[0]
+    check(base0 == base2,
+          "fan_off_layers: the mesh base/seam portion (before the seam "
+          "marker) is byte-identical regardless of the fan setting")
+    check("M106" not in base0,
+          "fan_off_layers: the mesh base portion itself never carries a "
+          "fan-on call of its own")
+
+
 def main() -> int:
     if not MESH_FIXTURE.exists():
         print(f"FAIL  mesh fixture missing: {MESH_FIXTURE}")
@@ -465,10 +669,13 @@ def main() -> int:
     test_height_semantics()
     test_ring0_is_mesh_top_contour()
     test_blend_height_edges()
+    test_seam_style_coverage_edges()
     test_multi_loop_top_is_refused()
     test_unsliceable_mesh_refused_before_slicing()
     test_orca_z_drift_raises()
     test_non_finite_inputs_are_rejected()
+    test_zone_overrides_reach_the_wall_not_the_mesh_base()
+    test_fan_off_layers_counts_from_the_base()
 
     if _FAILURES:
         print(f"\n{len(_FAILURES)} FAILURE(S):")

@@ -4298,6 +4298,12 @@ select.pm-field-input {
   line-height: 1.5;
   color: var(--ink);
   pointer-events: none;
+  /* Planar-panel tips (and any future data-tip) now carry a blank-line
+     separated "Default: .. / Range: .." block -- pre-line renders the
+     literal \n\n in the attribute as real line breaks while still
+     collapsing/wrapping runs of spaces like normal text. A data-tip-html
+     tip supplies its own <br> tags and is unaffected either way. */
+  white-space: pre-line;
 }
 
 .fm-reset-btn {

@@ -83,6 +83,7 @@ _FIELD_MAP = [
     ("mesh_base_support_interface_spacing", "support_interface_spacing", 0.5),
     ("mesh_base_support_xy", "support_object_xy_distance", 0.35),
     ("mesh_base_support_first_layer_gap", "support_object_first_layer_gap", 0.2),
+    ("mesh_base_avoid_crossing_detour", "avoid_crossing_perimeters_max_detour", "50%"),
 ]
 
 
@@ -121,7 +122,7 @@ def test_non_finite_rejected():
     for field in ("mesh_base_top_surface_speed", "mesh_base_acceleration",
                   "mesh_base_support_xy", "mesh_base_bridge_angle",
                   "mesh_base_lw_outer", "mesh_base_skirt_loops",
-                  "mesh_base_brim_gap"):
+                  "mesh_base_brim_gap", "mesh_base_seam_coverage"):
         for bad in (float("nan"), float("inf"), float("-inf")):
             try:
                 parse(**{field: bad})
@@ -138,7 +139,8 @@ def test_enums_and_ranges():
                        ("mesh_base_top_pattern", "spaghetti"),
                        ("mesh_base_bottom_pattern", "spaghetti"),
                        ("mesh_base_support_type", "normal(manual)"),
-                       ("mesh_base_brim_type", "enormous")):
+                       ("mesh_base_brim_type", "enormous"),
+                       ("mesh_base_seam_style", "round")):
         try:
             parse(**{field: bad})
             check(False, f"params: {field}={bad!r} rejected", "no exception")
@@ -191,6 +193,90 @@ def test_support_enable_is_a_real_boolean():
     check(p["process_overrides"].get("support_object_xy_distance") == 0.35,
           "params: support distances are forwarded even while support is off, "
           "so unticking the box does not silently discard them")
+
+
+def test_avoid_crossing_walls_is_a_real_boolean():
+    """avoid_crossing_perimeters follows the exact same "checkbox's absent
+    state is a real value, not unset" contract as enable_support above."""
+    check("avoid_crossing_perimeters" not in parse()["process_overrides"],
+          "params: avoid crossing walls off by default sends nothing "
+          "(build_process_json's own hard default False supplies the '0')")
+    check(parse(mesh_base_avoid_crossing_walls=True)["process_overrides"]
+          ["avoid_crossing_perimeters"] is True,
+          "params: avoid_crossing_perimeters is sent when ticked")
+    # The detour is still forwarded while the checkbox is off, so a saved
+    # value survives a toggle -- same reasoning as the support distances.
+    p = parse(mesh_base_avoid_crossing_detour="25%")
+    check(p["process_overrides"].get("avoid_crossing_perimeters_max_detour") == "25%",
+          "params: the detour is forwarded even while the checkbox is off, "
+          "so unticking it does not silently discard a saved value")
+
+    # A garbage detour string is rejected at the boundary, not silently
+    # dropped or defaulted -- this is new string-to-float parsing at a
+    # request boundary, so it needs the same non-finite/unparseable guard
+    # every other numeric field here has.
+    for bad in ("not_a_number", "NaN", "NaN%", "%"):
+        try:
+            parse(mesh_base_avoid_crossing_detour=bad)
+            check(False, f"params: mesh_base_avoid_crossing_detour={bad!r} rejected",
+                  "no exception -- an unparseable detour passed the boundary")
+        except ValueError:
+            check(True, f"params: mesh_base_avoid_crossing_detour={bad!r} rejected")
+
+
+def test_seam_style_and_coverage():
+    """mesh_base_seam_style/mesh_base_seam_coverage are SEPARATE top-level
+    keys from blend_height (not part of process_overrides -- they never reach
+    OrcaSlicer, only trident_gcode.hybrid.blend_stack). seam_coverage is sent
+    by the client as a 0-100 percentage and converted here to the 0-1
+    fraction blend_stack() expects; seam_style is a validated enum string.
+    """
+    p = parse()
+    check(p["seam_style"] == "fillet",
+          "params: seam_style defaults to 'fillet' when absent", p["seam_style"])
+    check(p["seam_coverage"] == 1.0,
+          "params: seam_coverage defaults to 1.0 (100%) when absent",
+          p["seam_coverage"])
+
+    p = parse(mesh_base_seam_style="", mesh_base_seam_coverage="")
+    check(p["seam_style"] == "fillet",
+          "params: an empty seam_style string is unset, same as absent",
+          p["seam_style"])
+    check(p["seam_coverage"] == 1.0,
+          "params: an empty seam_coverage string is unset, same as absent",
+          p["seam_coverage"])
+
+    p = parse(mesh_base_seam_style="chamfer")
+    check(p["seam_style"] == "chamfer",
+          "params: seam_style='chamfer' accepted", p["seam_style"])
+
+    p = parse(mesh_base_seam_coverage=50)
+    check(p["seam_coverage"] == 0.5,
+          "params: 50 (%) converts to the 0.5 fraction blend_stack() expects",
+          p["seam_coverage"])
+
+    p = parse(mesh_base_seam_coverage=0)
+    check(p["seam_coverage"] == 0.0,
+          "params: 0% is a real value (hard seam), not treated as unset",
+          p["seam_coverage"])
+
+    # Clamped to [0, 100] -- this is a slicer-cosmetic knob, not a machine
+    # limit, so a fixed sanity range (not a profile ceiling) is correct here.
+    p = parse(mesh_base_seam_coverage=250)
+    check(p["seam_coverage"] == 1.0,
+          "params: over 100% clamps to 1.0", p["seam_coverage"])
+    p = parse(mesh_base_seam_coverage=-30)
+    check(p["seam_coverage"] == 0.0,
+          "params: negative clamps to 0.0", p["seam_coverage"])
+
+    # An unrecognized seam_style is rejected outright, never silently
+    # defaulted to 'fillet' -- this is user input to an enum, not a number.
+    try:
+        parse(mesh_base_seam_style="round")
+        check(False, "params: mesh_base_seam_style='round' rejected",
+              "no exception -- an invalid style silently passed the boundary")
+    except ValueError:
+        check(True, "params: mesh_base_seam_style='round' rejected, not defaulted")
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +333,13 @@ def test_designer_js_sends_names_serve_py_reads():
     # deliberately does not carry, so it must be sent separately.
     check("mesh_base_enable_support" in js,
           "contract: the support checkbox is sent outside the table")
+    # Avoid crossing walls: same story -- a checkbox (real default, not
+    # MESH_BASE_OPTIONAL) plus a text field that cannot use bindOptionalNumber
+    # (it must accept a trailing '%'), so both are sent outside the table too.
+    check("mesh_base_avoid_crossing_walls" in js,
+          "contract: the avoid-crossing-walls checkbox is sent outside the table")
+    check("mesh_base_avoid_crossing_detour" in js,
+          "contract: the avoid-crossing-walls detour field is sent outside the table")
 
 
 def main() -> int:
@@ -255,6 +348,8 @@ def main() -> int:
     test_non_finite_rejected()
     test_enums_and_ranges()
     test_support_enable_is_a_real_boolean()
+    test_avoid_crossing_walls_is_a_real_boolean()
+    test_seam_style_and_coverage()
     test_every_override_is_a_real_build_process_json_kwarg()
     test_designer_js_sends_names_serve_py_reads()
 
