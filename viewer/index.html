@@ -1099,6 +1099,11 @@ Range: [0mm, 5mm]">Brim-object gap (mm)</span>
           <div id="sec-body-mbseam">
             <div class="hint tight-top">Not an OrcaSlicer setting -- eases this app's own hand-off
               from the mount's outline into the non-planar wall above it.</div>
+            <label class="row" id="row-meshbase-seam-blend-enable"><span class="fm-hover-target" data-tip="Turn the whole seam-blend hand-off on or off. Off is a hard seam -- the non-planar wall starts as its own plain shape immediately, with no easing from the mount's outline -- regardless of what Blend height is set to (it is not cleared, just ignored while this is off).
+
+Default: On
+Range: [On, Off]">Enable seam blend</span>
+              <input type="checkbox" id="d-meshbase-seam-blend-enable"></label>
             <div class="drow" id="row-meshbase-blend"><span class="fm-hover-target" data-tip="Eases the hand-off from the mount's own outline into the non-planar wall's starting shape over this many mm, instead of an abrupt seam. 0 = off. Clamped to the design Height.
 
 Default: 0mm
@@ -1115,7 +1120,7 @@ Range: [Fillet, Chamfer]">Seam style</span>
             <div class="drow" id="row-meshbase-seam-coverage"><span class="fm-hover-target" data-tip="How much of the Blend height above the chamfer/fillet actually spans. 100% uses the whole Blend height for the corner. Lower values finish the corner earlier, so the wall becomes the plain design shape sooner instead of transitioning the whole way.
 
 Default: 100%
-Range: [0%, 100%]">Seam coverage (%)</span>
+Range: [0%, 100%]">Seam intensity (%)</span>
               <span style="display:inline-flex; align-items:center; gap:6px;">
                 <input type="range" id="d-meshbase-seam-coverage" min="0" max="100" step="5" style="width:100px">
                 <span id="meshbase-seam-coverage-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>

@@ -1044,16 +1044,21 @@
         wallOff = mbInfo.achievedBaseHeightMm;
         baseZ = mbInfo.achievedBaseHeightMm;
         baseLayers = 0;
-        if(mbInfo.ring){
+        // Enable seam blend off forces the same hard seam buildGenerateBody()
+        // sends (mesh_base_blend_height=0 regardless of the stored value) --
+        // computed as 0 here rather than skipping the block outright, so the
+        // preview and the real request can never disagree about when
+        // blending is active.
+        if(mbInfo.ring && design.mesh_base_seam_blend_enabled !== false){
           // seam_style picks the transition CURVE ("fillet" = smoothstep,
           // matching _blend_weight(t, 1.0); "chamfer" = a straight ramp,
           // matching _blend_weight(t, 0.0) -- see trident_gcode/profile_stack.py).
-          // seam_coverage is stored as a 0-100 UI percentage (mirrors
-          // fan_overhang_min/max's own convention) -- convert to the 0-1
-          // fraction and scale blendHeightMm by it to get the actual corner
-          // extent, mirroring blend_stack()'s "corner_extent = blend_height *
-          // seam_coverage" exactly (the same conversion buildGenerateBody()
-          // already applies at its own request-body boundary).
+          // seam_coverage (UI label "Seam intensity (%)") is stored as a 0-100
+          // UI percentage (mirrors fan_overhang_min/max's own convention) --
+          // convert to the 0-1 fraction and scale blendHeightMm by it to get
+          // the actual corner extent, mirroring blend_stack()'s "corner_extent
+          // = blend_height * seam_coverage" exactly (the same conversion
+          // buildGenerateBody() already applies at its own request boundary).
           var blendHeightMm = Math.max(0, design.mesh_base_blend_height || 0);
           var seamCoverage = Math.max(0, Math.min(1,
             (design.mesh_base_seam_coverage != null ? design.mesh_base_seam_coverage : 100) / 100));

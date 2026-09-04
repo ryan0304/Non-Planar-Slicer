@@ -2076,11 +2076,43 @@ function _extractRawTriangles(geom) {
 // could not be computed. `ring` is `points_per_turn` [x,y] pairs in the
 // mesh's own origin-centred frame, in SCALED real mm (matching the units the
 // parametric preview's own rings already use) -- or null when the live
-// cross-section does not meet the same requirements the server enforces
-// (single simple loop, star-convex about the mesh's own bbox XY midpoint):
-// a live preview must degrade gracefully on an in-progress/invalid edit,
-// never throw, so every failure path below returns ring: null rather than
-// raising.
+// cross-section does not meet the same requirements the server enforces (one
+// unambiguous outer boundary -- holes fully inside it are fine, a second,
+// separate island is not -- star-convex about the mesh's own bbox XY
+// midpoint): a live preview must degrade gracefully on an in-progress/
+// invalid edit, never throw, so every failure path below returns ring: null
+// rather than raising.
+
+// _polygon_area(loop) (trident_gcode/mesh.py) -- shoelace formula, signed
+// (sign only used to compare magnitudes here, never to enforce winding: the
+// downstream star-convexity/ray-radius checks are winding-agnostic).
+function _polygonArea2D(loop) {
+  let a = 0;
+  const n = loop.length;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = loop[i], [x1, y1] = loop[(i + 1) % n];
+    a += x0 * y1 - x1 * y0;
+  }
+  return a / 2.0;
+}
+
+// _point_in_polygon(pt, poly) (trident_gcode/mesh.py) -- ray-casting
+// containment test, same edge convention (points exactly on an edge are
+// undefined, matching the Python docstring).
+function _pointInPolygon2D(pt, poly) {
+  const x = pt[0], y = pt[1];
+  let inside = false;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = poly[i], [x1, y1] = poly[(i + 1) % n];
+    if ((y0 > y) !== (y1 > y)) {
+      const xint = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
+      if (x < xint) inside = !inside;
+    }
+  }
+  return inside;
+}
+
 window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
   if (!meshBaseRawTris || !meshBaseRawBoundsMin || !meshBaseRawBoundsMax) return null;
   if (!(layerHeightMm > 0) || !isFinite(layerHeightMm)) return null;
@@ -2158,13 +2190,39 @@ window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
     }
     if (loop.length >= 4) loops.push(loop);
   }
-  // Exactly one usable loop expected -- multiple islands/holes-at-this-height
-  // are the same ambiguous case the server rejects outright (ValueError in
-  // top_contour_from_mesh); the preview just skips the ring instead.
-  if (loops.length !== 1) return result;
+  if (!loops.length) return result;
+
+  // ---- top_contour_from_mesh() step 1-2: pick the OUTER loop, tolerating --
+  // ---- holes -- a mount with screw holes has one big outer boundary plus --
+  // ---- several small loops fully CONTAINED in it, which is an explicitly --
+  // ---- fine case (Orca slices the true solid, holes and all); only a loop
+  // ---- that is NOT contained in the outer one (a genuine second island) is
+  // ---- the ambiguous case that must bail out. Mirrors profile_stack.py's
+  // ---- top_contour_from_mesh exactly, including its area_eps=0.01 sliver
+  // ---- filter -- previously this bailed on ANY second loop at all, which
+  // ---- silently broke the draft preview for every mesh with holes even
+  // ---- though the real generator handled them fine.
+  const AREA_EPS = 0.01;
+  const areas = loops.map(_polygonArea2D);
+  const absAreas = areas.map(Math.abs);
+  const bigArea = Math.max.apply(null, absAreas);
+  let outerIdx = 0;
+  let kept = loops.map((lp, i) => i);
+  if (bigArea > 0.0) {
+    kept = loops.map((lp, i) => i).filter((i) => absAreas[i] >= AREA_EPS * bigArea);
+    if (kept.length > 1) {
+      outerIdx = kept.reduce((best, i) => (absAreas[i] > absAreas[best] ? i : best), kept[0]);
+      for (const i of kept) {
+        if (i === outerIdx) continue;
+        if (!_pointInPolygon2D(loops[i][0], loops[outerIdx])) return result; // a genuine island -- ambiguous, bail
+      }
+    } else {
+      outerIdx = kept.length ? kept[0] : 0;
+    }
+  }
 
   // ---- local = loop - origin, star-convexity about (0,0) -----------------
-  const local = loops[0].map((p) => [p[0] - ox, p[1] - oy]);
+  const local = loops[outerIdx].map((p) => [p[0] - ox, p[1] - oy]);
   const n = local.length;
   // top_contour_from_mesh tests star-convexity about the RAY ORIGIN (0,0) in
   // this local frame, not the polygon's own centroid (see _is_star_convex's

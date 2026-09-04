@@ -206,11 +206,21 @@
     // spec'd default the moment an STL loads; a design with no mesh loaded
     // simply never reads these fields.
     mesh_base_mode: "planar_base", mesh_base_blend_height: 0,
+    // Enable seam blend: defaults ON (unlike mesh_base_enable_support, which
+    // defaults off) -- blend_height>0 has always blended since the feature
+    // shipped, so a toggle that started off would silently disable it for
+    // every existing design the moment this checkbox appeared. It exists
+    // only to give an explicit, discoverable "turn this off" beyond typing 0
+    // into Blend height -- toggling it off does not clear the stored height,
+    // only forces the request/preview to a hard seam (see buildGenerateBody
+    // and preview_math.js's meshBlend block).
+    mesh_base_seam_blend_enabled: true,
     // seam_style picks the corner CURVE ("fillet" = smooth round-over,
-    // "chamfer" = a straight beveled facet); seam_coverage is stored here as
-    // the 0-100 UI percentage (mirrors fan_overhang_min/max's own convention
-    // below) -- converted to the 0-1 fraction serve.py/blend_stack() expects
-    // only at buildGenerateBody's request-body boundary, never here.
+    // "chamfer" = a straight beveled facet); seam_coverage (UI label "Seam
+    // intensity (%)") is stored here as the 0-100 UI percentage (mirrors
+    // fan_overhang_min/max's own convention below) -- converted to the 0-1
+    // fraction serve.py/blend_stack() expects only at buildGenerateBody's
+    // request-body boundary, never here.
     mesh_base_seam_style: "fillet",
     mesh_base_seam_coverage: 100,
     mesh_base_wall_count: 3,
@@ -4101,10 +4111,12 @@
   bindSelect('d-hybrid-pattern', 'hybrid_infill_pattern');
   bindNumber('d-meshbase-blend', 'mesh_base_blend_height');
   bindSelect('d-meshbase-seam-style', 'mesh_base_seam_style');
-  // Seam coverage slider: same 0-100 percentage-slider pattern as
-  // bindFanSlider (fan_overhang_min/max) below -- design[field] stores the
-  // 0-100 UI value directly; buildGenerateBody converts /100 at the request
-  // boundary. Not bindNumber(): that helper has no live "%"-suffixed readout.
+  // Seam intensity slider (UI label; design field stays mesh_base_seam_coverage,
+  // matching the server contract's own name): same 0-100 percentage-slider
+  // pattern as bindFanSlider (fan_overhang_min/max) below -- design[field]
+  // stores the 0-100 UI value directly; buildGenerateBody converts /100 at
+  // the request boundary. Not bindNumber(): that helper has no live
+  // "%"-suffixed readout.
   (function(){
     var slider = document.getElementById('d-meshbase-seam-coverage');
     var read = document.getElementById('meshbase-seam-coverage-read');
@@ -4119,6 +4131,38 @@
     });
     slider.addEventListener('change', endHistRun);
   })();
+  // Enable seam blend: a plain checkbox, but DEFAULT ON (see the design
+  // default's own comment above for why) -- unlike Support enable/Avoid
+  // crossing walls, this does not gate a previously-off feature, it gives an
+  // explicit off-switch for one that was always on whenever Blend height>0.
+  // Off forces a hard seam regardless of the stored Blend height (see
+  // buildGenerateBody's mesh_base_blend_height line and preview_math.js's
+  // meshBlend block) without touching/clearing the stored number, so toggling
+  // back on restores exactly the height the user had typed.
+  (function(){
+    var el = document.getElementById('d-meshbase-seam-blend-enable');
+    if(!el) return;
+    el.checked = design.mesh_base_seam_blend_enabled !== false;
+    el.addEventListener('change', function(){
+      design.mesh_base_seam_blend_enabled = el.checked;
+      persistDesign();
+      schedulePreview();
+      syncPlanarSeamBlendRows();
+    });
+  })();
+  // Blend height / Seam style / Seam intensity all do nothing while the
+  // toggle is off -- dimmed (not hidden), same convention as
+  // syncPlanarSupportRows()/syncPlanarAvoidCrossRow() above, so saved values
+  // stay visible while inert.
+  function syncPlanarSeamBlendRows(){
+    var on = design.mesh_base_seam_blend_enabled !== false;
+    ['row-meshbase-blend', 'row-meshbase-seam-style', 'row-meshbase-seam-coverage']
+      .forEach(function(id){
+        var row = document.getElementById(id);
+        if(row) row.classList.toggle('row-inert', !on);
+      });
+  }
+  syncPlanarSeamBlendRows();
   bindNumber('d-meshbase-walls', 'mesh_base_wall_count', true);
   bindNumber('d-meshbase-infill', 'mesh_base_infill_density');
   bindSelect('d-meshbase-pattern', 'mesh_base_infill_pattern');
@@ -6467,6 +6511,9 @@
     var mbAvoidCrossDetourEl = document.getElementById('d-meshbase-avoidcross-detour');
     if(mbAvoidCrossDetourEl) mbAvoidCrossDetourEl.value = design.mesh_base_avoid_crossing_detour || '';
     if(typeof syncPlanarAvoidCrossRow === 'function') syncPlanarAvoidCrossRow();
+    var mbSeamBlendEnEl = document.getElementById('d-meshbase-seam-blend-enable');
+    if(mbSeamBlendEnEl) mbSeamBlendEnEl.checked = design.mesh_base_seam_blend_enabled !== false;
+    if(typeof syncPlanarSeamBlendRows === 'function') syncPlanarSeamBlendRows();
     if(typeof syncPlanarLayerHeightRead === 'function') syncPlanarLayerHeightRead();
     var flhEl = document.getElementById('d-flh');
     if(flhEl) flhEl.value = design.first_layer_height != null ? design.first_layer_height : '';
@@ -7177,7 +7224,14 @@
         // non-planar wall above it share one layer height.
         body.mesh_base_id = meshState.mesh_id;
         body.mesh_base_scale = parseFloat(document.getElementById('mesh-scale').value) || 1.0;
-        body.mesh_base_blend_height = design.mesh_base_blend_height || 0;
+        // Enable seam blend off forces a hard seam (corner_extent=0) without
+        // touching the STORED height -- blend_stack()/build_mesh_hybrid_print
+        // already treat blend_height<=0 as an unconditional hard seam (no new
+        // server field needed), so sending 0 here reuses that exactly.
+        // Toggling the checkbox back on sends design.mesh_base_blend_height
+        // again untouched.
+        body.mesh_base_blend_height = (design.mesh_base_seam_blend_enabled === false)
+          ? 0 : (design.mesh_base_blend_height || 0);
         body.mesh_base_seam_style = design.mesh_base_seam_style || 'fillet';
         // Sent as the 0-100 UI percentage -- serve.py's _parse_mesh_hybrid_params
         // divides by 100 itself (same wire convention as fan_min/fan_max below).
