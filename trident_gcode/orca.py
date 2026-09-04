@@ -38,6 +38,10 @@ def orca_binary_path(explicit: str | None = None) -> str | None:
     program_files = os.environ.get("PROGRAMFILES")
     if program_files:
         candidates.append(os.path.join(program_files, "OrcaSlicer", "orca-slicer.exe"))
+    program_w6432 = os.environ.get("ProgramW6432")
+    if program_w6432:
+        candidates.append(os.path.join(program_w6432, "OrcaSlicer", "orca-slicer.exe"))
+    candidates.append(r"C:\Program Files\OrcaSlicer\orca-slicer.exe")
     candidates.append("/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
     home = os.path.expanduser("~")
     candidates += [
