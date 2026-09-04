@@ -1522,6 +1522,7 @@ window.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f)
 
 // ---- toggles --------------------------------------------------------------
 document.getElementById('t-colormode').addEventListener('change', () => { if (lastData) { buildGeometry(lastData); setProgress(progress); } else { updateLegend(document.getElementById('t-colormode').value, null); } });
+updateLegend(document.getElementById('t-colormode').value, null); // Sync initial state
 document.getElementById('t-xray').addEventListener('change', () => { applyXray(); render(); });
 document.getElementById('t-bands').addEventListener('change', () => { if (lastData) { buildGeometry(lastData); setProgress(progress); } });
 document.getElementById('t-risk').addEventListener('change', () => { if (lastData) { buildGeometry(lastData); setProgress(progress); } });

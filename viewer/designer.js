@@ -372,8 +372,10 @@
   // Trade-off worth knowing: a session whose ONLY change was one of these
   // won't prompt. That errs toward not nagging, and costs nothing -- the
   // design is still restored exactly as it was before this dialog existed.
-  var RESTORE_IGNORED_KEYS = { printer:1, bed_center:1, filament:1,
-                               loop_row:1, loop_up:1, point_ffd_grid:1 };
+  var RESTORE_IGNORED_KEYS = {
+    printer: 1, bed_center: 1, filament: 1,
+    loop_row: 1, loop_up: 1, point_ffd_grid: 1
+  };
   var cachedDesign = null;
   try {
     var saved = JSON.parse(localStorage.getItem('design-state') || 'null');
@@ -954,6 +956,14 @@
         if(panels[k]) panels[k].classList.toggle('active', k === name);
       }
       if(stepNavEl) stepNavEl.classList.toggle('active', name === 'design');
+      var loadDesignBtn = document.getElementById('load-design');
+      if (loadDesignBtn) {
+        if (name === 'viewer') {
+          loadDesignBtn.title = 'Import a .gcode file';
+        } else {
+          loadDesignBtn.title = 'Import a .trident or .stl file';
+        }
+      }
       // Not persisted: every load starts in Design (see activateMode's call
       // site below). Writing a key nothing reads would just resurrect the
       // stale value this change exists to get rid of.
@@ -1220,8 +1230,10 @@
     var chips = [];
     if(design.shape !== DEFAULT_DESIGN.shape || design.radius !== DEFAULT_DESIGN.radius ||
        design.height !== DEFAULT_DESIGN.height){
-      chips.push({ text: design.shape + ' ' + design.radius + '×' + design.height + 'mm',
-                   step: 'model', section: 'shape' });
+      chips.push({
+        text: design.shape + ' ' + design.radius + '×' + design.height + 'mm',
+        step: 'model', section: 'shape'
+      });
     }
     if(design.pattern){
       chips.push({ text: 'pattern: ' + design.pattern, step: 'texture', section: 'texturepattern' });
@@ -1242,13 +1254,17 @@
     if(typeof pointEditAnyEnabled === 'function' && pointEditAnyEnabled()){
       var peCount = [pointEditMaskMeaningful(), pointEditProtectionMeaningful(), pointEditFFDMeaningful(),
                      pointEditSmoothMeaningful(), pointEditRadialPushMeaningful()].filter(Boolean).length;
-      chips.push({ text: peCount + ' point-edit mod' + (peCount === 1 ? '' : 's'),
-                   step: 'texture', openPE: true });
+      chips.push({
+        text: peCount + ' point-edit mod' + (peCount === 1 ? '' : 's'),
+        step: 'texture', openPE: true
+      });
     }
     if(typeof zoneOverridesAnyEnabled === 'function' && zoneOverridesAnyEnabled()){
       var zoCount = (design.zone_overrides || []).filter(zoneOverrideMeaningful).length;
-      chips.push({ text: zoCount + ' zone override' + (zoCount === 1 ? '' : 's'),
-                   step: 'texture', openZO: true });
+      chips.push({
+        text: zoCount + ' zone override' + (zoCount === 1 ? '' : 's'),
+        step: 'texture', openZO: true
+      });
     }
     if(typeof meshState !== 'undefined' && meshState && meshState.mesh_id){
       chips.push({ text: 'STL: ' + (meshState.filename || 'imported'), step: 'model', section: 'importstl' });
@@ -1712,7 +1728,7 @@
     var src = document.getElementById('printer-meta-source');
     var warn = document.getElementById('printer-meta-warn');
     var hasSrc = !!src;
-    var hasWarn = (meta.warnings > 0);
+    var hasWarn = false; // User requested to hide the warning chip on the main page
     
     if (!hasSrc && !hasWarn) {
       host.style.display = 'none';
@@ -1720,15 +1736,10 @@
       host.style.display = '';
       if(src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
       if(warn){
-        if(hasWarn){
-          warn.style.display = '';
-          warn.textContent = meta.warnings + (meta.warnings === 1 ? ' warning' : ' warnings');
-        } else {
           warn.style.display = 'none';
         }
       }
     }
-  }
 
   // Updates the button label and each option's aria-selected/checkmark to
   // reflect `key` as the current value -- pure display, no side effects
@@ -2063,7 +2074,6 @@
     var FIELD_SKIP = { name: 1, start_gcode: 1, end_gcode: 1, pa_gcode_style: 1, z_amp_max: 1 };
     var FIELD_BOOL = { has_probe: 1 };
     var FIELD_SELECT = { firmware: ['klipper', 'marlin', 'bambu_marlin'] };
-
     var pmState = null;
     var pmSeq = 0;
     var pmParseSeq = 0;   // guards /api/printer/parse the same way pmSeq guards /validate
@@ -2071,8 +2081,10 @@
     var deleteConfirming = false;
 
     function resetState(){
-      pmState = { mode: 'add', key: null, detectedFormat: null, sourceFile: null,
-        profile: null, fields: [], issues: [], strippedGcode: [], stage: 'drop' };
+      pmState = {
+        mode: 'add', key: null, detectedFormat: null, sourceFile: null,
+        profile: null, fields: [], issues: [], strippedGcode: [], stage: 'drop'
+      };
       dropStage.style.display = '';
       reviewStage.style.display = 'none';
       clearanceStage.style.display = 'none';
@@ -2085,6 +2097,7 @@
       saveBtn.title = '';
       backBtn.style.display = 'none';
       cancelBtn.style.display = '';
+      if (deleteBtn) deleteBtn.style.display = 'none';
       resetDeleteConfirm();
     }
 
@@ -2236,12 +2249,13 @@
       dropStage.style.display = 'none';
       reviewStage.style.display = '';
       clearanceStage.style.display = 'none';
-      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : 'Review imported printer';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : (pmState.mode === 'clone' ? 'Save as custom printer' : 'Review imported printer');
       formatBadge.textContent = FORMAT_LABELS[pmState.detectedFormat] || pmState.detectedFormat || 'unknown format';
       nameInput.value = (pmState.profile && pmState.profile.name) || '';
       saveBtn.textContent = 'Next';
       backBtn.style.display = 'none';
       cancelBtn.style.display = '';
+      if (deleteBtn) deleteBtn.style.display = (pmState.mode === 'edit' && pmState.key) ? '' : 'none';
       snapshotProvenance();
       renderFields();
       refreshFromState();
@@ -2273,12 +2287,14 @@
 
     function enterClearanceStage(){
       pmState.stage = 'clearance';
+      dropStage.style.display = 'none';
       reviewStage.style.display = 'none';
       clearanceStage.style.display = '';
-      titleEl.textContent = 'Non-planar clearance';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : (pmState.mode === 'clone' ? 'Save as custom printer' : 'Review imported printer');
       saveBtn.textContent = 'Save printer';
       backBtn.style.display = '';
       cancelBtn.style.display = 'none';
+      if (deleteBtn) deleteBtn.style.display = (pmState.mode === 'edit' && pmState.key) ? '' : 'none';
       syncClearanceField(findField('z_amp_max'));
       if(clearanceInput) clearanceInput.focus();
     }
@@ -2287,7 +2303,7 @@
       pmState.stage = 'review';
       clearanceStage.style.display = 'none';
       reviewStage.style.display = '';
-      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : 'Review imported printer';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : (pmState.mode === 'clone' ? 'Save as custom printer' : 'Review imported printer');
       saveBtn.textContent = 'Next';
       backBtn.style.display = 'none';
       cancelBtn.style.display = '';
@@ -2405,6 +2421,7 @@
     function renderReport(){
       reportEl.innerHTML = '';
       var issues = pmState.issues || [];
+      
       if(!issues.length){
         var ok = document.createElement('div');
         ok.className = 'pm-report-ok';
@@ -2414,12 +2431,13 @@
       }
       var errors = issues.filter(function(i){ return i.severity === 'error'; });
       var warns = issues.filter(function(i){ return i.severity !== 'error'; });
+      
       if(errors.length){
         reportEl.appendChild(reportHead(errors.length + ' error(s)', 'pm-report-head-error'));
         errors.forEach(function(i){ reportEl.appendChild(reportRow(i)); });
       }
       if(warns.length){
-        reportEl.appendChild(reportHead(warns.length + ' warning(s)', 'pm-report-head-warn'));
+        reportEl.appendChild(reportHead('Warnings', 'pm-report-head-warn'));
         warns.forEach(function(i){ reportEl.appendChild(reportRow(i)); });
       }
       reportEl.appendChild(reportCopyButton(errors, warns));
@@ -2731,9 +2749,10 @@
       closeBtn.focus();
       apiFetch('/api/printer?key=' + encodeURIComponent(key)).then(function(r){ return r.json(); }).then(function(j){
         if(!j.ok){ alert('Could not load printer: ' + (j.error || 'unknown error')); closeModal(); return; }
-        pmState.mode = 'edit';
-        pmState.key = key;
-        pmState.detectedFormat = j.meta && j.meta.source_format;
+        pmState.mode = j.custom ? 'edit' : 'clone';
+        pmState.key = j.custom ? key : null;
+        if (!j.custom && j.profile && j.profile.name) j.profile.name += '-custom';
+        pmState.detectedFormat = (j.meta && j.meta.source_format) || (j.custom ? '' : 'Preset');
         pmState.sourceFile = j.meta && j.meta.source_file;
         return apiFetch('/api/printer/validate', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2789,6 +2808,7 @@
           // Drop the durable copy too, or the next page load would replay it
           // straight back in.
           removeStoredPrinter(key);
+          closeModal();
           // Falls back to the server default automatically -- loadPrinterOptions
           // drops any key that no longer exists in the refetched list.
           loadPrinterOptions(null);
@@ -2797,19 +2817,58 @@
     }
   })();
 
+  // ---- Filament defaults --------------------------------------------------
+  // Default nozzle temp, bed temp, fan min/max for each built-in material key.
+  var FILAMENT_DEFAULTS = {
+    pla: { label: 'PLA', nozzle: 205, bed: 60, fanMin: 100, fanMax: 100 },
+    petg: { label: 'PETG', nozzle: 240, bed: 70, fanMin: 50, fanMax: 80 },
+    abs: { label: 'ABS', nozzle: 245, bed: 100, fanMin: 20, fanMax: 40 },
+    tpu: { label: 'TPU', nozzle: 220, bed: 45, fanMin: 30, fanMax: 60 },
+  };
+  var CUSTOM_FILAMENTS_KEY = 'trident_custom_filaments';
+
+  function loadCustomFilaments() {
+    try { return JSON.parse(localStorage.getItem(CUSTOM_FILAMENTS_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function saveCustomFilaments(arr) {
+    try { localStorage.setItem(CUSTOM_FILAMENTS_KEY, JSON.stringify(arr)); } catch (e) { }
+  }
+
   // ---- filament dropdown -------------------------------------------------
   var famSel = document.getElementById('d-filament');
-  apiFetch('/api/filaments').then(function(r){ return r.json(); }).then(function(j){
+
+  // Returns the defaults (nozzle/bed/fan) for whatever key is currently selected.
+  function getFilamentDefaults(key) {
+    if (FILAMENT_DEFAULTS[key]) return FILAMENT_DEFAULTS[key];
+    // Custom profiles stored in localStorage may carry their own temps.
+    var customs = loadCustomFilaments();
+    for (var i = 0; i < customs.length; i++) if (customs[i].key === key) return customs[i];
+    // Orca profiles: fall back to generic PLA defaults as a safe base.
+    return FILAMENT_DEFAULTS['pla'];
+  }
+
+  function populateFilamentSelect(preferKey) {
     famSel.innerHTML = '';
-    var opt = document.createElement('option'); opt.value=''; opt.textContent='(generic PLA)';
-    famSel.appendChild(opt);
-    (j.filaments||[]).forEach(function(n){
-      var o=document.createElement('option'); o.value=n; o.textContent=n; famSel.appendChild(o);
+    // 1. Built-ins
+    ['pla', 'petg', 'abs', 'tpu'].forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k; o.textContent = FILAMENT_DEFAULTS[k].label;
+      famSel.appendChild(o);
     });
-    if(design.filament){ famSel.value = design.filament; }
-    else if(j.default){ famSel.value = j.default; design.filament = j.default; }
-    syncFilamentTitle();
-  }).catch(function(){ /* no orca: keep generic PLA */ });
+    // 2. Orca server profiles (appended if available, will be loaded async)
+    // 3. Custom saved profiles
+    loadCustomFilaments().forEach(function (c) {
+      var o = document.createElement('option');
+      o.value = c.key; o.textContent = c.label;
+      famSel.appendChild(o);
+    });
+    // Restore selection
+    var key = preferKey || design.filament || 'pla';
+    if (famSel.querySelector('option[value="' + key + '"]')) famSel.value = key;
+    else famSel.value = 'pla';
+  }
+
+  populateFilamentSelect();
 
   // Orca filament names run past 400px, wider than the whole panel, and a
   // <select> cannot ellipsize its own closed state -- so mirror the selection
@@ -2818,7 +2877,6 @@
     var o = famSel.options[famSel.selectedIndex];
     famSel.title = o ? o.textContent : '';
   }
-
   // ---- hybrid planar base capability probe --------------------------------
   // Read-only, no request body: lets the panel show the hybrid controls as
   // disabled up front (with an explanation) rather than letting a user
@@ -2880,135 +2938,409 @@
       // fail open, same reasoning as the hybrid probe above
     });
   })();
-  famSel.addEventListener('change', syncFilamentTitle);
 
-  // ---- filament combo: a button+list mirror of the real <select> above,
-  // same pattern as #printer-combo but flat (no groups) -- this never holds
-  // its own state, only reads/writes famSel, so the two can never disagree.
-  (function(){
-    var btn = document.getElementById('filament-combo-btn');
-    var label = document.getElementById('filament-combo-label');
-    var list = document.getElementById('filament-combo-list');
-    var combo = document.getElementById('filament-combo');
-    if(!btn || !label || !list || !combo) return;
+  var filComboBtn = document.getElementById('filament-combo-btn');
+  var filComboLabel = document.getElementById('filament-combo-label');
+  var filComboList = document.getElementById('filament-combo-list');
+  var filComboOpenState = false;
+  var filComboOptions = [];
+  var filComboActiveIdx = -1;
 
-    function syncLabel(){
+  function setFilComboActive(idx) {
+    if (idx < 0) idx = 0;
+    if (idx >= filComboOptions.length) idx = filComboOptions.length - 1;
+    filComboActiveIdx = idx;
+    for (var i = 0; i < filComboOptions.length; i++) {
+      var opt = filComboOptions[i].el;
+      if (i === idx) {
+        opt.setAttribute('aria-selected', 'true');
+        opt.classList.add('active');
+        opt.scrollIntoView({ block: 'nearest' });
+      } else {
+        opt.setAttribute('aria-selected', 'false');
+        opt.classList.remove('active');
+      }
+    }
+  }
+
+  function positionFilCombo() {
+    if (!filComboOpenState) return;
+    var btnRect = filComboBtn.getBoundingClientRect();
+    var spaceBelow = window.innerHeight - btnRect.bottom - 8;
+    var spaceAbove = btnRect.top - 8;
+    var openUp = spaceAbove > spaceBelow;
+    var avail = Math.max(60, openUp ? spaceAbove : spaceBelow);
+    filComboList.style.maxHeight = Math.min(320, avail) + 'px';
+    if (openUp) {
+      filComboList.style.bottom = 'calc(100% + 4px)';
+      filComboList.style.top = 'auto';
+    } else {
+      filComboList.style.top = 'calc(100% + 4px)';
+      filComboList.style.bottom = 'auto';
+    }
+  }
+
+  function openFilCombo() {
+    if (filComboOpenState || !filComboOptions.length) return;
+    filComboOpenState = true;
+    filComboList.classList.add('open');
+    filComboBtn.setAttribute('aria-expanded', 'true');
+    positionFilCombo();
+    var idx = -1;
+    for (var i = 0; i < filComboOptions.length; i++) {
+      if (filComboOptions[i].key === famSel.value) { idx = i; break; }
+    }
+    setFilComboActive(idx);
+    document.addEventListener('mousedown', onFilComboDocMouseDown, true);
+    window.addEventListener('resize', positionFilCombo);
+  }
+
+  function closeFilCombo() {
+    if (!filComboOpenState) return;
+    filComboOpenState = false;
+    filComboList.classList.remove('open');
+    filComboBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', onFilComboDocMouseDown, true);
+    window.removeEventListener('resize', positionFilCombo);
+  }
+
+  function onFilComboDocMouseDown(e) {
+    if (!filComboList.contains(e.target) && !filComboBtn.contains(e.target)) {
+      closeFilCombo();
+    }
+  }
+
+  function selectFilament(key) {
+    famSel.value = key;
+    var ev = document.createEvent('HTMLEvents');
+    ev.initEvent('change', false, true);
+    famSel.dispatchEvent(ev);
+  }
+
+  if (filComboBtn) {
+    filComboBtn.addEventListener('click', function () {
+      if (filComboOpenState) closeFilCombo(); else openFilCombo();
+    });
+    filComboBtn.addEventListener('keydown', function (e) {
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          if (!filComboOpenState) openFilCombo();
+          else setFilComboActive(filComboActiveIdx + 1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if (!filComboOpenState) openFilCombo();
+          else setFilComboActive(filComboActiveIdx - 1);
+          break;
+        case 'Enter':
+        case ' ':
+          e.preventDefault();
+          if (filComboOpenState && filComboActiveIdx >= 0) {
+            selectFilament(filComboOptions[filComboActiveIdx].key);
+            closeFilCombo();
+            filComboBtn.focus();
+          } else {
+            openFilCombo();
+          }
+          break;
+        case 'Escape':
+          e.preventDefault();
+          closeFilCombo();
+          filComboBtn.focus();
+          break;
+      }
+    });
+  }
+
+  function syncFilamentBarLabel() {
+    if (!filComboLabel || !filComboList) return;
       var o = famSel.options[famSel.selectedIndex];
-      label.textContent = o ? o.textContent : '(generic PLA)';
-    }
-    function closeList(){
-      list.classList.remove('open');
-      btn.setAttribute('aria-expanded', 'false');
-    }
-    function openList(){
-      list.innerHTML = '';
-      Array.prototype.forEach.call(famSel.options, function(o, i){
-        var item = document.createElement('div');
-        item.className = 'mb-combo-option';
-        item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', i === famSel.selectedIndex ? 'true' : 'false');
-        item.textContent = o.textContent;
-        item.addEventListener('click', function(){
-          famSel.selectedIndex = i;
-          famSel.dispatchEvent(new Event('change'));
-          syncLabel();
-          closeList();
-          btn.focus();
+    filComboLabel.textContent = o ? (o.textContent.replace(' â˜…', '') || 'PLA') : 'PLA';
+    filComboLabel.title = filComboLabel.textContent;
+
+    filComboList.innerHTML = '';
+    filComboOptions = [];
+    for (var i = 0; i < famSel.options.length; i++) {
+      var optDom = famSel.options[i];
+      var opt = document.createElement('div');
+      opt.className = 'mb-combo-option';
+      opt.textContent = optDom.textContent;
+      opt.setAttribute('role', 'option');
+      opt.dataset.key = optDom.value;
+      (function (k) {
+        opt.addEventListener('click', function (e) {
+          e.stopPropagation();
+          selectFilament(k);
+          closeFilCombo();
+          filComboBtn.focus();
         });
-        list.appendChild(item);
-      });
-      list.classList.add('open');
-      btn.setAttribute('aria-expanded', 'true');
+      })(optDom.value);
+      filComboList.appendChild(opt);
+      filComboOptions.push({ key: optDom.value, el: opt });
     }
-    btn.addEventListener('click', function(){
-      if(list.classList.contains('open')) closeList(); else openList();
-    });
-    document.addEventListener('pointerdown', function(e){
-      if(list.classList.contains('open') && !combo.contains(e.target)) closeList();
-    });
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && list.classList.contains('open')) closeList();
-    });
-    famSel.addEventListener('change', syncLabel);
-    syncLabel();
-  })();
+  }
+  famSel.addEventListener('change', syncFilamentTitle);
+  famSel.addEventListener('change', syncFilamentBarLabel);
 
-  // ---- filament settings modal: temperature/cooling overrides for the
-  // currently selected filament (#d-filament above, plus the overhang/fan
-  // fields bound further down). No server-side custom-filament storage
-  // exists yet (unlike printers' /api/printer/*) so "Save as custom" has
-  // nothing to save into -- hidden rather than left clickable-but-inert.
+  // ---- Filament Edit modal ------------------------------------------------
   (function(){
-    var modal = document.getElementById('filament-modal');
-    var editBtn = document.getElementById('filament-edit-btn');
-    var addBtn = document.getElementById('filament-add-btn');
-    var closeBtn = document.getElementById('fm-modal-close');
-    var doneBtn = document.getElementById('fm-modal-done');
-    var backdrop = modal ? modal.querySelector('.pm-modal-backdrop') : null;
+    var fModal = document.getElementById('filament-modal');
+    var fOpenBtn = document.getElementById('filament-edit-btn');
+    var fAddBtn = document.getElementById('filament-add-btn');
+    var fBarRow = document.getElementById('filament-bar-row');
+    var fCloseBtn = document.getElementById('fm-modal-close');
+    var fDoneBtn = document.getElementById('fm-modal-done');
+    var fBackdrop = fModal ? fModal.querySelector('.pm-modal-backdrop') : null;
+    var nozzleEl = document.getElementById('d-nozzletemp');
+    var bedEl = document.getElementById('d-bedtemp');
+    var resetNozzle = document.getElementById('fm-reset-nozzle');
+    var resetBed = document.getElementById('fm-reset-bed');
     var customRow = document.getElementById('fm-custom-row');
-    if(!modal) return;
-    if(customRow) customRow.style.display = 'none';
+    var customName = document.getElementById('fm-custom-name');
+    var saveBtn = document.getElementById('fm-save-custom-btn');
+    var saveStatus = document.getElementById('fm-save-status');
+    var delBtn = document.getElementById('fm-delete-custom-btn');
+    var tooltip = document.getElementById('fm-tooltip');
+    if (!fModal || !fOpenBtn) return;
 
-    function openModal(){ modal.style.display = 'flex'; }
-    function closeModal(){ modal.style.display = 'none'; }
-    if(editBtn) editBtn.addEventListener('click', openModal);
-    if(addBtn) addBtn.addEventListener('click', openModal);
-    if(closeBtn) closeBtn.addEventListener('click', closeModal);
-    if(doneBtn) doneBtn.addEventListener('click', closeModal);
-    if(backdrop) backdrop.addEventListener('click', closeModal);
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
-    });
+    // Track whether the user has overridden temps from the filament's defaults.
+    var nozzleOverridden = (design.nozzle_temp !== null);
+    var bedOverridden = (design.bed_temp !== null);
 
-    function bindReset(btnId, fieldId){
-      var rbtn = document.getElementById(btnId);
-      var field = document.getElementById(fieldId);
-      if(!rbtn || !field) return;
-      rbtn.addEventListener('click', function(){
-        field.value = '';
-        field.dispatchEvent(new Event('input'));
-        field.dispatchEvent(new Event('change'));
+    // Fill temp inputs with the current filament's defaults (not as placeholder).
+    function applyFilamentDefaults(key, keepOverrides) {
+      var defs = getFilamentDefaults(key);
+      if (!keepOverrides || !nozzleOverridden) {
+        nozzleEl.value = defs.nozzle;
+        if (!keepOverrides) { design.nozzle_temp = null; nozzleOverridden = false; }
+      }
+      if (!keepOverrides || !bedOverridden) {
+        bedEl.value = defs.bed;
+        if (!keepOverrides) { design.bed_temp = null; bedOverridden = false; }
+      }
+      updateOverrideUI();
+    }
+
+    function updateOverrideUI() {
+      if (resetNozzle) resetNozzle.style.display = nozzleOverridden ? '' : 'none';
+      if (resetBed) resetBed.style.display = bedOverridden ? '' : 'none';
+      if (nozzleEl) nozzleEl.classList.toggle('fm-overridden', nozzleOverridden);
+      if (bedEl) bedEl.classList.toggle('fm-overridden', bedOverridden);
+      if (delBtn) delBtn.style.display = (famSel.value || '').indexOf('custom_') === 0 ? '' : 'none';
+    }
+
+    // When user types in a temp field, mark it overridden and persist.
+    function watchTempOverride(el, field, isNozzle) {
+      if (!el) return;
+      // Seed value on modal open (handled in openFModal).
+      el.addEventListener('input', function () {
+        var raw = parseFloat(el.value);
+        var isOverride = !isNaN(raw);
+        if (isNozzle) { nozzleOverridden = isOverride; }
+        else { bedOverridden = isOverride; }
+        if (isOverride) {
+          // Clamp to [min, max].
+          var lo = parseFloat(el.min), hi = parseFloat(el.max);
+          var v = raw;
+          if (isFinite(lo)) v = Math.max(lo, v);
+          if (isFinite(hi)) v = Math.min(hi, v);
+          design[field] = v;
+        } else {
+          design[field] = null;
+        }
+        persistDesign('num:' + el.id);
+        updateOverrideUI();
+        if (saveStatus) { saveStatus.style.display = 'none'; saveStatus.textContent = ''; }
+      });
+      el.addEventListener('change', function () { if (typeof endHistRun === 'function') endHistRun(); });
+    }
+    watchTempOverride(nozzleEl, 'nozzle_temp', true);
+    watchTempOverride(bedEl, 'bed_temp', false);
+
+    // Reset buttons restore the filament default.
+    function makeReset(btn, el, field, isNozzle) {
+      if (!btn || !el) return;
+      btn.addEventListener('click', function () {
+        var defs = getFilamentDefaults(famSel.value);
+        el.value = isNozzle ? defs.nozzle : defs.bed;
+        design[field] = null;
+        if (isNozzle) nozzleOverridden = false; else bedOverridden = false;
+        persistDesign();
+        updateOverrideUI();
       });
     }
-    bindReset('fm-reset-nozzle', 'd-nozzletemp');
-    bindReset('fm-reset-bed', 'd-bedtemp');
-  })();
+    makeReset(resetNozzle, nozzleEl, 'nozzle_temp', true);
+    makeReset(resetBed, bedEl, 'bed_temp', false);
 
-  // ---- shared hover tooltip for .fm-hover-target / .fm-info-btn, both
-  // marked up with data-tip (plain text) or data-tip-html (the info-button
-  // form, which needs the <br>/<code>/<span> already baked into the string).
-  // Positioning mirrors the parameter tooltip's own position() -- flip off
-  // the viewport edge rather than overflow it.
-  (function(){
-    var tip = document.getElementById('fm-tooltip');
-    if(!tip) return;
-    var targets = document.querySelectorAll('.fm-hover-target, .fm-info-btn');
-    function show(el){
-      var html = el.getAttribute('data-tip-html');
-      var text = el.getAttribute('data-tip');
-      if(html){ tip.innerHTML = html; }
-      else if(text){ tip.textContent = text; }
-      else { return; }
-      tip.style.display = 'block';
-      var ar = el.getBoundingClientRect();
-      var margin = 8, gap = 6;
-      tip.style.left = '0px'; tip.style.top = '0px';
-      var tw = tip.offsetWidth, th = tip.offsetHeight;
-      var x = ar.left;
-      if(x + tw + margin > window.innerWidth) x = window.innerWidth - tw - margin;
-      x = Math.max(margin, x);
-      var y = ar.bottom + gap;
-      if(y + th + margin > window.innerHeight) y = ar.top - gap - th;
-      tip.style.left = Math.round(x) + 'px';
-      tip.style.top = Math.round(Math.max(margin, y)) + 'px';
-    }
-    function hide(){ tip.style.display = 'none'; }
-    targets.forEach(function(el){
-      el.addEventListener('mouseenter', function(){ show(el); });
-      el.addEventListener('mouseleave', hide);
-      el.addEventListener('focus', function(){ show(el); });
-      el.addEventListener('blur', hide);
+    // Filament selector change: load defaults (keep user overrides if any).
+    famSel.addEventListener('change', function () {
+      design.filament = famSel.value;
+      persistDesign();
+      applyFilamentDefaults(famSel.value, true);
+      if (customName) {
+        var defs = getFilamentDefaults(famSel.value);
+        if (String(famSel.value).indexOf('custom_') === 0) {
+          customName.value = defs.label;
+        } else {
+          customName.value = defs.label + '-custom';
+        }
+      }
+      syncFilamentTitle();
+      syncFilamentBarLabel();
     });
+
+    // Custom filament save.
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        var name = (customName ? customName.value.trim() : '') || 'My filament';
+        var key = 'custom_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        var defs = getFilamentDefaults(famSel.value);
+        var profile = {
+          key: key, label: name,
+          nozzle: parseFloat(nozzleEl.value) || defs.nozzle,
+          bed: parseFloat(bedEl.value) || defs.bed,
+          fanMin: defs.fanMin, fanMax: defs.fanMax
+        };
+        var customs = loadCustomFilaments().filter(function (c) { return c.key !== key; });
+        customs.push(profile);
+        saveCustomFilaments(customs);
+        // Rebuild select and choose the newly saved profile.
+        var prevKey = famSel.value;
+        populateFilamentSelect(key);
+        design.filament = key;
+        design.nozzle_temp = null;
+        design.bed_temp = null;
+        syncFilamentTitle();
+        syncFilamentBarLabel();
+        persistDesign();
+        nozzleOverridden = false; bedOverridden = false;
+        updateOverrideUI();
+        if (saveStatus) {
+          saveStatus.textContent = 'Saved as "' + name + '"';
+          saveStatus.style.display = '';
+          setTimeout(function () { if (saveStatus) saveStatus.style.display = 'none'; }, 3000);
+        }
+      });
+    }
+
+    var delConfirming = false;
+    function resetDelConfirm() {
+      if (!delBtn) return;
+      delConfirming = false;
+      delBtn.textContent = 'Delete';
+      delBtn.classList.remove('pm-link-confirm');
+    }
+
+    if (delBtn) {
+      delBtn.addEventListener('click', function () {
+        if (!delConfirming) {
+          delConfirming = true;
+          delBtn.textContent = 'Confirm?';
+          delBtn.classList.add('pm-link-confirm');
+          setTimeout(function () { if (delConfirming) resetDelConfirm(); }, 3000);
+          return;
+        }
+        var customs = loadCustomFilaments().filter(function (c) { return c.key !== famSel.value; });
+        saveCustomFilaments(customs);
+        populateFilamentSelect('pla');
+        design.filament = 'pla';
+        syncFilamentTitle();
+        syncFilamentBarLabel();
+        persistDesign();
+        nozzleOverridden = false; bedOverridden = false;
+        applyFilamentDefaults('pla', false);
+        resetDelConfirm();
+      });
+    }
+
+    // â„¹ï¸ tooltip logic (shared popup positioned near each button).
+    if (tooltip) {
+      var activeInfoBtn = null;
+      function showTooltip(btn) {
+        activeInfoBtn = btn;
+        if (btn.hasAttribute('data-tip-html')) {
+          tooltip.innerHTML = btn.getAttribute('data-tip-html');
+        } else {
+          tooltip.textContent = btn.getAttribute('data-tip') || '';
+        }
+        tooltip.style.display = '';
+        tooltip.style.position = 'fixed';
+        var btnRect = btn.getBoundingClientRect();
+        var left = btnRect.left;
+        var top = btnRect.bottom + 6;
+        var tipW = 240;
+        if (left + tipW > window.innerWidth - 12) left = window.innerWidth - tipW - 12;
+        if (top + 60 > window.innerHeight) top = btnRect.top - tooltip.offsetHeight - 6;
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+      }
+      function hideTooltip() { tooltip.style.display = 'none'; activeInfoBtn = null; }
+      document.body.addEventListener('mouseenter', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) showTooltip(e.target);
+      }, true);
+      document.body.addEventListener('mouseleave', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) hideTooltip();
+      }, true);
+      document.body.addEventListener('focus', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) showTooltip(e.target);
+      }, true);
+      document.body.addEventListener('blur', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) hideTooltip();
+      }, true);
+    }
+
+    function openFModal() {
+      if (typeof resetDelConfirm === 'function') resetDelConfirm();
+      // Sync temp inputs to current design state or filament defaults.
+      nozzleOverridden = (design.nozzle_temp !== null);
+      bedOverridden = (design.bed_temp !== null);
+      var defs = getFilamentDefaults(famSel.value);
+      nozzleEl.value = nozzleOverridden ? design.nozzle_temp : defs.nozzle;
+      bedEl.value = bedOverridden ? design.bed_temp : defs.bed;
+      if (customName) {
+        if (String(famSel.value).indexOf('custom_') === 0) {
+          customName.value = defs.label;
+        } else {
+          customName.value = defs.label + '-custom';
+        }
+      }
+      updateOverrideUI();
+      if (saveStatus) { saveStatus.style.display = 'none'; }
+      fModal.style.display = 'flex';
+      if (fCloseBtn) fCloseBtn.focus();
+    }
+    function closeFModal() {
+      fModal.style.display = 'none';
+      fOpenBtn.focus();
+    }
+
+    fOpenBtn.addEventListener('click', openFModal);
+    if (fAddBtn) fAddBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openFModal();
+      if (customName) customName.focus();
+    });
+    if (fBarRow) fBarRow.addEventListener('click', function (e) {
+      var combo = document.getElementById('filament-combo');
+      if (e.target === fOpenBtn || fOpenBtn.contains(e.target) ||
+        (fAddBtn && (e.target === fAddBtn || fAddBtn.contains(e.target))) ||
+        (combo && (e.target === combo || combo.contains(e.target)))) return;
+      openFModal();
+    });
+    if (fCloseBtn) fCloseBtn.addEventListener('click', closeFModal);
+    if (fDoneBtn) fDoneBtn.addEventListener('click', closeFModal);
+    if (fBackdrop) fBackdrop.addEventListener('click', closeFModal);
+    document.addEventListener('keydown', function(e){
+      if (fModal.style.display === 'none') return;
+      if (e.key === 'Escape') closeFModal();
+    });
+
+    // Seed sidebar label and title on load.
+    syncFilamentBarLabel();
+    syncFilamentTitle();
+    // Seed temp inputs on load (without marking as overridden).
+    applyFilamentDefaults(famSel.value, true);
   })();
 
   // ---- curve editor ------------------------------------------------------
@@ -3471,10 +3803,12 @@
           hi: hi,
           wall: { val: hi, label: wallLabel, rect: lastWallRect },
           soft: (softVal !== null && isFinite(softVal) && softVal < hi)
-            ? { val: softVal, label: softLabel,
+            ? {
+              val: softVal, label: softLabel,
                 lineY: py(Math.min(hi, Math.max(lo, softVal))),
                 bandTop: py(hi), bandBottom: py(Math.min(hi, Math.max(lo, softVal))),
-                rect: lastSoftRect }
+              rect: lastSoftRect
+            }
             : null
         };
       }
@@ -4339,7 +4673,8 @@
   // Loop texture controls.
 
   var LOOP_STYLES = {
-    tiedspikes:{ loop_spacing_mm:4.0, loop_per_turn:0, loop_align:'stagger',
+    tiedspikes: {
+      loop_spacing_mm: 4.0, loop_per_turn: 0, loop_align: 'stagger',
                  loop_row:2.5, loop_up:3.2, loop_out:0,
                  loop_flow:1.2, loop_speed:10, loop_cuff:3,
                  loop_wave_amp:0, loop_waves:12,
@@ -4350,37 +4685,50 @@
                  // Pairing the pause with a retract/unretract keeps pressure
                  // controlled through the hold instead.
                  loop_mode:'spike', loop_dwell:400, loop_lean:20, loop_coast:0.8,
-                 loop_retract:0.3 },
-    chainmail: { loop_spacing_mm:4.0, loop_per_turn:0, loop_align:'stagger',
+      loop_retract: 0.3
+    },
+    chainmail: {
+      loop_spacing_mm: 4.0, loop_per_turn: 0, loop_align: 'stagger',
                  loop_row:2.5, loop_up:3.5, loop_out:0.5,
                  loop_flow:1.2, loop_speed:10, loop_cuff:3,
                  loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    fineknit:  { loop_spacing_mm:2.2, loop_per_turn:0, loop_align:'stagger',
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    fineknit: {
+      loop_spacing_mm: 2.2, loop_per_turn: 0, loop_align: 'stagger',
                  loop_row:1.8, loop_up:2.4, loop_out:0.3,
                  loop_flow:1.1, loop_speed:10, loop_cuff:3,
                  loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    opennet:   { loop_spacing_mm:10.0, loop_per_turn:0, loop_align:'stagger',
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    opennet: {
+      loop_spacing_mm: 10.0, loop_per_turn: 0, loop_align: 'stagger',
                  loop_row:3.2, loop_up:3.6, loop_out:0.8,
                  loop_flow:1.3, loop_speed:9, loop_cuff:3,
                  loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    ribs:      { loop_spacing_mm:5.0, loop_per_turn:0, loop_align:'column',
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    ribs: {
+      loop_spacing_mm: 5.0, loop_per_turn: 0, loop_align: 'column',
                  loop_row:2.2, loop_up:3.0, loop_out:0.5,
                  loop_flow:1.2, loop_speed:10, loop_cuff:3,
                  loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    zigzag:    { loop_spacing_mm:5.0, loop_per_turn:0, loop_align:'stagger',
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    zigzag: {
+      loop_spacing_mm: 5.0, loop_per_turn: 0, loop_align: 'stagger',
                  loop_row:3.0, loop_up:3.4, loop_out:0.6,
                  loop_flow:1.25, loop_speed:9, loop_cuff:3,
                  loop_wave_amp:1.2, loop_waves:10,
-                 loop_mode:'dip', loop_dwell:0 },
-    scallops:  { loop_spacing_mm:8.0, loop_per_turn:0, loop_align:'stagger',
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    scallops: {
+      loop_spacing_mm: 8.0, loop_per_turn: 0, loop_align: 'stagger',
                  loop_row:4.0, loop_up:5.0, loop_out:1.0,
                  loop_flow:1.3, loop_speed:9, loop_cuff:3,
                  loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 }
+      loop_mode: 'dip', loop_dwell: 0
+    }
   };
 
   function refreshLoopJitterRow(){
@@ -6001,8 +6349,10 @@
     var planarScroll = document.querySelector('#planar-panel .panel-scroll');
 
     // conditional block -> the <select> id that controls its visibility
-    var BLOCK_CTRL = { 'star-rows':'d-shape', 'pattern-rows':'d-pattern',
-                       'loop-rows':'d-pattern' };
+    var BLOCK_CTRL = {
+      'star-rows': 'd-shape', 'pattern-rows': 'd-pattern',
+      'loop-rows': 'd-pattern'
+    };
     var STEP_LABEL = { model:'Model', texture:'Texture', print:'Print', generate:'Generate' };
 
     // An element's OWN text, ignoring nested elements. Both the things this
@@ -6049,13 +6399,15 @@
         var sp = row.closest('.step-panel');
         var step = sp ? sp.id.replace('step-','') : null;
         var ctrl = null;
-        for(var b in BLOCK_CTRL){ var el = document.getElementById(b);
-          if(el && el.contains(row)){ ctrl = document.getElementById(BLOCK_CTRL[b]); break; } }
+        for (var b in BLOCK_CTRL) {
+          var el = document.getElementById(b);
+          if (el && el.contains(row)) { ctrl = document.getElementById(BLOCK_CTRL[b]); break; }
+        }
         // Section resolved for the planar bar only: the left sidebar's rows
         // keep the crumb they have always had (see crumbFor).
-        index.push({ row:row, lc:label.toLowerCase(), label:label, mode:mode, step:step,
-                     section:panelLabel ? sectionOf(row) : null,
-                     panel:panelLabel, ctrl:ctrl, scrollEl:scrollEl });
+        index.push({ row: row, lc: label.toLowerCase(), label: label, mode: mode, step: step,
+                     section: panelLabel ? sectionOf(row) : null,
+                     panel: panelLabel, ctrl: ctrl, scrollEl: scrollEl });
       });
     }
     indexScroll(scroll, null);
@@ -6084,8 +6436,11 @@
     }
 
     var matches = [], activeIdx = -1;
-    function esc(s){ return s.replace(/[&<>"]/g,function(c){
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+    function esc(s) {
+      return s.replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
 
     function search(q){
       q = q.trim().toLowerCase();
@@ -6111,12 +6466,18 @@
       input.setAttribute('aria-expanded', out.length>0 ? 'true' : 'false');
       input.setAttribute('aria-activedescendant', out.length>0 ? 'psi-0' : '');
     }
-    function setActive(i){ var ch = resultsEl.children;
-      if(ch[activeIdx]){ ch[activeIdx].classList.remove('active');
-        ch[activeIdx].setAttribute('aria-selected','false'); }
+    function setActive(i) {
+      var ch = resultsEl.children;
+      if (ch[activeIdx]) {
+        ch[activeIdx].classList.remove('active');
+        ch[activeIdx].setAttribute('aria-selected', 'false');
+      }
       activeIdx = i;
-      if(ch[i]){ ch[i].classList.add('active'); ch[i].setAttribute('aria-selected','true');
-        input.setAttribute('aria-activedescendant', ch[i].id); } }
+      if (ch[i]) {
+        ch[i].classList.add('active'); ch[i].setAttribute('aria-selected', 'true');
+        input.setAttribute('aria-activedescendant', ch[i].id);
+      }
+    }
 
     // Shared by the outside-click handler and Escape: empties the query and
     // drops the stale match list, not just the dropdown's open state. Does
@@ -6164,7 +6525,8 @@
       else if(e.key==='Enter'){ e.preventDefault(); if(matches[activeIdx]) choose(matches[activeIdx]); }
     });
     document.addEventListener('click', function(e){
-      if(!e.target.closest('#param-search')) clearSearch(); });
+      if (!e.target.closest('#param-search')) clearSearch();
+    });
   })();
 
   // ---- parameter help tooltips (Orca-style hover panel) --------------------
@@ -6334,48 +6696,63 @@
 
   // ---- preset gallery + save/load -----------------------------------------
   var PRESETS = [
-    { name: 'Gentle Wave Vase', shape:'circle', radius:32, height:45, layer_height:0.30,
+    {
+      name: 'Gentle Wave Vase', shape: 'circle', radius: 32, height: 45, layer_height: 0.30,
       xy_twist:0, z_waves:5, z_twist:0, bottom:'solid', base_layers:2, brim:0,
       squish:0.75, spacing_factor:1.25, print_speed:40, pattern:'',
       amp_profile:[[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Twisted Star', shape:'star', radius:30, height:50, layer_height:0.30,
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Twisted Star', shape: 'star', radius: 30, height: 50, layer_height: 0.30,
       xy_twist:1.5, z_waves:5, z_twist:0, star_points:5, star_depth:0.35,
       bottom:'solid', base_layers:2, brim:0, squish:0.75, spacing_factor:1.25,
       print_speed:45, pattern:'',
       amp_profile:[[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Twisted Squircle', shape:'square', radius:30, height:55, layer_height:0.32,
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Twisted Squircle', shape: 'square', radius: 30, height: 55, layer_height: 0.32,
       xy_twist:1.0, z_waves:4, z_twist:0, bottom:'solid', base_layers:2, brim:0,
       squish:0.75, spacing_factor:1.25, print_speed:45, pattern:'',
       amp_profile:[[0,0],[0.2,0.3],[0.4,0.65],[0.6,0.9],[0.8,0.9],[1.0,0.5]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Ripple Vase', shape:'circle', radius:34, height:60, layer_height:0.30,
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Ripple Vase', shape: 'circle', radius: 34, height: 60, layer_height: 0.30,
       xy_twist:0, z_waves:6, z_twist:0, bottom:'solid', base_layers:2, brim:0,
       squish:0.75, spacing_factor:1.25, print_speed:40, pattern:'ripple',
       pattern_amp:1.2, pattern_waves:10, pattern_bands:8, pattern_twist:0.5,
       pattern_fade_in:0.10, pattern_fade_out:0,
       amp_profile:[[0,0],[0.15,0.25],[0.4,0.6],[0.7,0.7],[1.0,0.4]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Flared Vase', shape:'circle', radius:28, height:65, layer_height:0.30,
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Flared Vase', shape: 'circle', radius: 28, height: 65, layer_height: 0.30,
       xy_twist:0, z_waves:5, z_twist:0, bottom:'solid', base_layers:2, brim:0,
       squish:0.75, spacing_factor:1.25, print_speed:40, pattern:'',
       amp_profile:[[0,0],[0.2,0.3],[0.5,0.7],[0.8,0.8],[1.0,0.5]],
-      radius_profile:[[0,0.7],[0.15,0.6],[0.4,0.8],[0.7,1.1],[1.0,1.25]] },
-    { name: 'Aggressive Twist Star', shape:'star', radius:28, height:55, layer_height:0.30,
+      radius_profile: [[0, 0.7], [0.15, 0.6], [0.4, 0.8], [0.7, 1.1], [1.0, 1.25]]
+    },
+    {
+      name: 'Aggressive Twist Star', shape: 'star', radius: 28, height: 55, layer_height: 0.30,
       xy_twist:3.0, z_waves:8, z_twist:1.0, star_points:6, star_depth:0.40,
       bottom:'solid', base_layers:2, brim:0, squish:0.75, spacing_factor:1.25,
       print_speed:90, pattern:'',
       amp_profile:[[0,0],[0.2,0.2],[0.5,0.5],[0.8,0.7],[1.0,0.4]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Diamond Mesh Basket', shape:'circle', radius:32, height:50, layer_height:0.3,
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Diamond Mesh Basket', shape: 'circle', radius: 32, height: 50, layer_height: 0.3,
       xy_twist:0, z_waves:0, z_twist:0, bottom:'solid', base_layers:2, brim:0,
       squish:0.75, spacing_factor:1.25, print_speed:25, pattern:'vwave',
       pattern_amp:2.5, pattern_waves:24, pattern_bands:6, pattern_twist:0,
       pattern_phase:0, pattern_fade_in:0.08, pattern_fade_out:0, pattern_alternate:true,
       amp_profile:[[0,0],[1,0]],
-      radius_profile:[[0,1],[1,1]] },
-    { name: 'Loop Fabric Vase', shape:'circle', radius:32, height:45, layer_height:0.3,
+      radius_profile: [[0, 1], [1, 1]]
+    },
+    {
+      name: 'Loop Fabric Vase', shape: 'circle', radius: 32, height: 45, layer_height: 0.3,
       xy_twist:0, z_waves:0, z_twist:0, bottom:'solid', base_layers:2, brim:0,
       squish:0.75, spacing_factor:1.25, print_speed:25, pattern:'loops',
       loop_style:'chainmail', loop_spacing_mm:4, loop_per_turn:0, loop_turn_stride:1,
@@ -6383,7 +6760,8 @@
       loop_cuff:3, loop_rejoin:2.0, loop_dwell:0, loop_flow:1.2, loop_speed:10,
       loop_fade_in:0.1, loop_fade_out:0,
       amp_profile:[[0,0],[1,0]],
-      radius_profile:[[0,1],[1,1]] },
+      radius_profile: [[0, 1], [1, 1]]
+    },
   ];
 
   (function(){
@@ -6622,7 +7000,12 @@
 
   // Load design from a .trident (or an older plain-design .json) file.
   document.getElementById('load-design').addEventListener('click', function(){
+    previewArmed = true;
+    if (document.getElementById('mode-viewer').classList.contains('active')) {
+      document.getElementById('file').click();
+    } else {
     document.getElementById('load-design-file').click();
+    }
   });
   // JSON.parse rejects the bare tokens NaN/Infinity, but NOT a numeral that
   // overflows to one at parse time -- {"height": 1e999} is syntactically
@@ -6658,6 +7041,7 @@
   }
 
   document.getElementById('load-design-file').addEventListener('change', function(e){
+    previewArmed = true;
     if(!e.target.files.length) return;
     
     var fname = e.target.files[0].name;
@@ -6861,13 +7245,16 @@
         meshState.info = data;
         meshState.arrayBuffer = arrayBuffer;
         showMeshInfo(data, file.name);
-        // Mesh-mode loops print a base again once a mesh is loaded (loops
-        // become hanging loop sites on a normal wall, not fabric) - bring
         // the base/brim/skirt rows back.
         refreshShapeRows();
         // Draw the actual uploaded triangles on the bed (viewer.js) -- see
         // refreshMeshBasePreview()'s own comment for the placement contract.
-        refreshMeshBasePreview();
+        if (typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
+
+        design.shape = 'mesh';
+        var dShape = document.getElementById('d-shape');
+        if (dShape) dShape.value = 'mesh';
+        if (typeof applyDesignToUI === 'function') applyDesignToUI();
       })
       .catch(function(err){
         if(mySeq !== stlUploadSeq) return;
@@ -7648,3 +8035,5 @@
     if(primary) primary.focus();
   })();
 })();
+
+
