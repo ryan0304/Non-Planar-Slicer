@@ -1,4 +1,4 @@
-(function(){
+(function () {
   'use strict';
 
   // ---- browser-owned custom printers -------------------------------------
@@ -19,66 +19,66 @@
   var MAX_STORED_PRINTERS = 32;
 
   var sessionId = null;
-  try { sessionId = localStorage.getItem(SESSION_KEY); } catch(e){}
-  if(!/^[a-z0-9]{8,64}$/.test(sessionId || '')){
+  try { sessionId = localStorage.getItem(SESSION_KEY); } catch (e) { }
+  if (!/^[a-z0-9]{8,64}$/.test(sessionId || '')) {
     sessionId = '';
     // Math.random is fine: this is a namespace, not a secret.
-    while(sessionId.length < 24) sessionId += Math.random().toString(36).slice(2);
+    while (sessionId.length < 24) sessionId += Math.random().toString(36).slice(2);
     sessionId = sessionId.slice(0, 24);
-    try { localStorage.setItem(SESSION_KEY, sessionId); } catch(e){}
+    try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) { }
   }
 
   // Every /api/ call goes through this so no call site can forget the header
   // and silently fall back to "no custom printers".
-  function apiFetch(url, opts){
+  function apiFetch(url, opts) {
     opts = opts || {};
     var headers = {};
-    if(opts.headers){ for(var k in opts.headers){ if(Object.prototype.hasOwnProperty.call(opts.headers, k)) headers[k] = opts.headers[k]; } }
+    if (opts.headers) { for (var k in opts.headers) { if (Object.prototype.hasOwnProperty.call(opts.headers, k)) headers[k] = opts.headers[k]; } }
     headers['X-Trident-Session'] = sessionId;
     opts.headers = headers;
     return fetch(url, opts);
   }
 
-  function loadStoredPrinters(){
+  function loadStoredPrinters() {
     var arr;
-    try { arr = JSON.parse(localStorage.getItem(PRINTERS_KEY) || '[]'); } catch(e){ arr = []; }
+    try { arr = JSON.parse(localStorage.getItem(PRINTERS_KEY) || '[]'); } catch (e) { arr = []; }
     return Array.isArray(arr) ? arr : [];
   }
-  function writeStoredPrinters(arr){
-    try { localStorage.setItem(PRINTERS_KEY, JSON.stringify(arr.slice(0, MAX_STORED_PRINTERS))); } catch(e){}
+  function writeStoredPrinters(arr) {
+    try { localStorage.setItem(PRINTERS_KEY, JSON.stringify(arr.slice(0, MAX_STORED_PRINTERS))); } catch (e) { }
   }
-  function upsertStoredPrinter(key, profile, meta){
-    if(!key || !profile) return;
-    var arr = loadStoredPrinters().filter(function(p){ return p && p.key !== key; });
+  function upsertStoredPrinter(key, profile, meta) {
+    if (!key || !profile) return;
+    var arr = loadStoredPrinters().filter(function (p) { return p && p.key !== key; });
     arr.push({ key: key, profile: profile, meta: meta || {} });
     writeStoredPrinters(arr);
   }
-  function removeStoredPrinter(key){
-    writeStoredPrinters(loadStoredPrinters().filter(function(p){ return p && p.key !== key; }));
+  function removeStoredPrinter(key) {
+    writeStoredPrinters(loadStoredPrinters().filter(function (p) { return p && p.key !== key; }));
   }
 
   // Push this browser's saved printers back into the server session. Resolves
   // even on failure -- a replay that cannot reach the server must not stop
   // the app from loading with its built-in printers.
-  function replayStoredPrinters(){
+  function replayStoredPrinters() {
     var stored = loadStoredPrinters();
-    if(!stored.length) return Promise.resolve(null);
+    if (!stored.length) return Promise.resolve(null);
     return apiFetch('/api/printer/session', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ printers: stored })
-    }).then(function(r){ return r.json(); }).then(function(j){
+    }).then(function (r) { return r.json(); }).then(function (j) {
       // A printer the server refuses is gone for good -- keeping it in
       // localStorage would retry the same rejection on every single load.
       // Drop it here and tell the user why once, rather than silently.
-      if(j && j.rejected && j.rejected.length){
-        j.rejected.forEach(function(x){ removeStoredPrinter(x.key); });
-        var lines = j.rejected.map(function(x){ return '  - ' + (x.key || '(unnamed)') + ': ' + x.reason; });
+      if (j && j.rejected && j.rejected.length) {
+        j.rejected.forEach(function (x) { removeStoredPrinter(x.key); });
+        var lines = j.rejected.map(function (x) { return '  - ' + (x.key || '(unnamed)') + ': ' + x.reason; });
         alert('These saved custom printers could no longer be validated and have been '
-              + 'removed. Re-import the printer config to use them again:\n\n'
-              + lines.join('\n'));
+          + 'removed. Re-import the printer config to use them again:\n\n'
+          + lines.join('\n'));
       }
       return j;
-    }).catch(function(){ return null; });
+    }).catch(function () { return null; });
   }
 
   // Bootstrap-only ceiling used for the very first synchronous render of the
@@ -106,9 +106,9 @@
   // Formats a millimeter ceiling the way the machine bar / notices / hints
   // want it: "0.95", "4.0", "0.40" -- two decimals, trimmed to one only when
   // the second is a redundant zero (x.y0 stays, x.00 becomes x.0).
-  function fmtMm(v){
+  function fmtMm(v) {
     var s = (Math.round(v * 100) / 100).toFixed(2);
-    if(s.slice(-2) === '00') s = s.slice(0, -1);
+    if (s.slice(-2) === '00') s = s.slice(0, -1);
     return s;
   }
 
@@ -123,17 +123,17 @@
   //   is-busy-determinate: driven from showGenProgress/hideGenProgress
   //     (search "gen-progress-fill"), in step with the real progress bar.
   var headerMarkEl = document.getElementById('brand-mark-topbar');
-  var MARK_BUSY_STATUS_IDS = { 'stl-status':1, 'pm-drop-status':1, 'printer-meta-status':1 };
+  var MARK_BUSY_STATUS_IDS = { 'stl-status': 1, 'pm-drop-status': 1, 'printer-meta-status': 1 };
   var markBusyCount = 0;
-  function markBusyBegin(){
+  function markBusyBegin() {
     markBusyCount++;
-    if(headerMarkEl && markBusyCount === 1 && !headerMarkEl.classList.contains('is-busy-determinate')){
+    if (headerMarkEl && markBusyCount === 1 && !headerMarkEl.classList.contains('is-busy-determinate')) {
       headerMarkEl.classList.add('is-busy-indeterminate');
     }
   }
-  function markBusyEnd(){
-    if(markBusyCount > 0) markBusyCount--;
-    if(headerMarkEl && markBusyCount === 0) headerMarkEl.classList.remove('is-busy-indeterminate');
+  function markBusyEnd() {
+    if (markBusyCount > 0) markBusyCount--;
+    if (headerMarkEl && markBusyCount === 0) headerMarkEl.classList.remove('is-busy-indeterminate');
   }
 
   // ---- shared busy-state helper -------------------------------------------
@@ -155,11 +155,11 @@
   // operation settles. finalText may be omitted/null to just clear the busy
   // state silently (e.g. when the caller is about to render its own richer
   // UI, or the operation's result speaks for itself).
-  function beginBusy(btn, statusEl, label){
-    if(btn) btn.disabled = true;
+  function beginBusy(btn, statusEl, label) {
+    if (btn) btn.disabled = true;
     var marksBrand = !!(statusEl && MARK_BUSY_STATUS_IDS[statusEl.id]);
-    if(marksBrand) markBusyBegin();
-    if(statusEl){
+    if (marksBrand) markBusyBegin();
+    if (statusEl) {
       statusEl.textContent = '';
       statusEl.className = 'busy-line';
       statusEl.style.display = '';
@@ -170,13 +170,13 @@
       statusEl.appendChild(document.createTextNode(label || 'Working...'));
     }
     var settled = false;
-    return function endBusy(finalText, isError){
-      if(settled) return;
+    return function endBusy(finalText, isError) {
+      if (settled) return;
       settled = true;
-      if(btn) btn.disabled = false;
-      if(marksBrand) markBusyEnd();
-      if(!statusEl) return;
-      if(finalText == null){
+      if (btn) btn.disabled = false;
+      if (marksBrand) markBusyEnd();
+      if (!statusEl) return;
+      if (finalText == null) {
         statusEl.style.display = 'none';
         statusEl.textContent = '';
         return;
@@ -275,10 +275,10 @@
     pattern: "", pattern_amp: 1.0, pattern_waves: 12,
     pattern_bands: 6, pattern_twist: 0, pattern_phase: 0,
     pattern_fade_in: 0.10, pattern_fade_out: 0, pattern_alternate: false,
-    amp_profile: [[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]],
-    radius_profile: [[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]],
+    amp_profile: [[0, 0], [0.2, 0.3], [0.4, 0.6], [0.6, 0.8], [0.8, 0.8], [1.0, 0.5]],
+    radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]],
     radius_profile_smooth: false,
-    width_profile: [[0,1],[1,1]],
+    width_profile: [[0, 1], [1, 1]],
     sil3d: false,
     sil_mode: "sym",
     cage: null,
@@ -372,26 +372,28 @@
   // Trade-off worth knowing: a session whose ONLY change was one of these
   // won't prompt. That errs toward not nagging, and costs nothing -- the
   // design is still restored exactly as it was before this dialog existed.
-  var RESTORE_IGNORED_KEYS = { printer:1, bed_center:1, filament:1,
-                               loop_row:1, loop_up:1, point_ffd_grid:1 };
+  var RESTORE_IGNORED_KEYS = {
+    printer: 1, bed_center: 1, filament: 1,
+    loop_row: 1, loop_up: 1, point_ffd_grid: 1
+  };
   var cachedDesign = null;
   try {
     var saved = JSON.parse(localStorage.getItem('design-state') || 'null');
-    if(saved && typeof saved === 'object'){
-      for(var k in saved){ if(saved.hasOwnProperty(k)) design[k] = saved[k]; }
+    if (saved && typeof saved === 'object') {
+      for (var k in saved) { if (saved.hasOwnProperty(k)) design[k] = saved[k]; }
       // Migrate legacy sil3d boolean (pre mode-bar UI) to the new sil_mode field.
       // Only fires for old saves that predate sil_mode -- once it's saved with
       // a sil_mode value, this branch never re-triggers.
-      if(saved.sil3d === true && !saved.sil_mode) design.sil_mode = 'asym';
-      for(var ck in saved){
-        if(!saved.hasOwnProperty(ck) || RESTORE_IGNORED_KEYS[ck]) continue;
-        if(JSON.stringify(saved[ck]) !== JSON.stringify(DEFAULT_DESIGN[ck])){
+      if (saved.sil3d === true && !saved.sil_mode) design.sil_mode = 'asym';
+      for (var ck in saved) {
+        if (!saved.hasOwnProperty(ck) || RESTORE_IGNORED_KEYS[ck]) continue;
+        if (JSON.stringify(saved[ck]) !== JSON.stringify(DEFAULT_DESIGN[ck])) {
           cachedDesign = saved;
           break;
         }
       }
     }
-  } catch(e){ /* ignore corrupt state */ }
+  } catch (e) { /* ignore corrupt state */ }
 
   // ---- undo / redo history --------------------------------------------------
   // Every persistDesign() call that actually changed the design pushes the
@@ -420,7 +422,7 @@
   var HIST_IDLE_MS = 700;
   var histRunKey = null, histRunTimer = null;
 
-  function endHistRun(){
+  function endHistRun() {
     // Ignores any event arg (this is passed directly as a pointerup/
     // pointercancel/change listener in several places) -- flushes whatever
     // logical edit was open using the CURRENT lastSnap, which histFinish's
@@ -431,11 +433,11 @@
     // one" sequencing.
     histFinish(lastSnap);
     histRunKey = null;
-    if(histRunTimer){ clearTimeout(histRunTimer); histRunTimer = null; }
+    if (histRunTimer) { clearTimeout(histRunTimer); histRunTimer = null; }
   }
-  function armHistRun(key){
+  function armHistRun(key) {
     histRunKey = key;
-    if(histRunTimer) clearTimeout(histRunTimer);
+    if (histRunTimer) clearTimeout(histRunTimer);
     histRunTimer = setTimeout(endHistRun, HIST_IDLE_MS);
   }
   // Letting go of the pointer ends a manipulation, whatever was being
@@ -458,32 +460,32 @@
   // generatedRev records the revision the loaded G-code was generated from.
   var designRev = 0, generatedRev = -1;
 
-  function updateStaleBadge(){
+  function updateStaleBadge() {
     var stale = generatedRev >= 0 && designRev !== generatedRev;
     var badge = document.getElementById('stale-badge');
-    if(badge) badge.style.display = stale ? 'block' : 'none';
+    if (badge) badge.style.display = stale ? 'block' : 'none';
     var btn = document.getElementById('gen-btn');
-    if(btn) btn.classList.toggle('stale', stale);
+    if (btn) btn.classList.toggle('stale', stale);
   }
 
   // `coalesceKey` (optional): a stable id for the control being edited. Passing
   // one folds a stream of edits from that control into a single undo entry --
   // see the coalescing note above. Omit it for discrete, one-shot changes
   // (a select, a checkbox, a preset apply); each of those gets its own entry.
-  function persistDesign(coalesceKey){
+  function persistDesign(coalesceKey) {
     var key = coalesceKey || null;
     // A different control (or any un-keyed discrete change) taking over closes
     // the previous run, so the next push starts a fresh entry.
-    if(key === null || key !== histRunKey) endHistRun();
+    if (key === null || key !== histRunKey) endHistRun();
     var snap = JSON.stringify(design);
-    if(snap !== lastSnap){
+    if (snap !== lastSnap) {
       designRev++;
-      if(!histSuppress){
+      if (!histSuppress) {
         // histRunKey is non-null only mid-run, and mid-run the entry already on
         // top of the stack IS the pre-edit state -- keep it, don't stack another.
-        if(histRunKey === null){
+        if (histRunKey === null) {
           undoStack.push(lastSnap);
-          if(undoStack.length > HIST_MAX) undoStack.shift();
+          if (undoStack.length > HIST_MAX) undoStack.shift();
           redoStack.length = 0;
           // Same guard as the undo push right above (histRunKey === null,
           // !histSuppress, snap actually changed) -- captured here, not
@@ -493,7 +495,7 @@
           // ever being mistaken for "the pre-state of the run now closing".
           histPre = histLogArmed ? lastSnap : null;
         }
-        if(key !== null) armHistRun(key);
+        if (key !== null) armHistRun(key);
       }
     }
     lastSnap = snap;
@@ -502,7 +504,7 @@
     // must finalize their own history entry right here, on arrival. Keyed
     // edits (histRunKey !== null) are still mid-run and skip this; their
     // entry lands when the run ends (endHistRun, above).
-    if(histRunKey === null){
+    if (histRunKey === null) {
       // An explicit label (import/preset/reset) names an EVENT, not a value
       // change -- it must still record even when the loaded/applied design
       // happens to be byte-identical to what was already live (e.g.
@@ -513,7 +515,7 @@
       // been armed by the undo-push above if snap DID change, but has
       // nothing left to auto-diff once the explicit label has spoken for
       // this edit.
-      if(histLogArmed && histLabelOnce !== null){
+      if (histLogArmed && histLabelOnce !== null) {
         histPre = null;
         histAppend(histLabelOnce);
       } else {
@@ -521,36 +523,36 @@
       }
     }
     histLabelOnce = null;   // consume-or-discard: never leaks onto the
-                             // user's NEXT, unrelated edit.
+    // user's NEXT, unrelated edit.
     updateHistButtons();
     updateStaleBadge();
     updateActiveSummary();
-    try { localStorage.setItem('design-state', snap); } catch(e){}
+    try { localStorage.setItem('design-state', snap); } catch (e) { }
   }
 
-  function restoreSnapshot(snap){
+  function restoreSnapshot(snap) {
     try {
       var s = JSON.parse(snap);
-      for(var k in s){ if(s.hasOwnProperty(k)) design[k] = s[k]; }
+      for (var k in s) { if (s.hasOwnProperty(k)) design[k] = s[k]; }
       histSuppress = true;
       previewArmed = true;             // undo/redo is a real user interaction
       applyDesignToUI();               // refreshes controls + persists + preview
       histSuppress = false;
       lastSnap = snap;
       updateHistButtons();
-    } catch(e){
+    } catch (e) {
       histSuppress = false;
       console.error('undo/redo restore failed:', e);
     }
   }
 
-  function doUndo(){
+  function doUndo() {
     // Close any run first: the entry we are about to pop must be complete, and
     // the next edit must not fold itself into a pre-undo run. This also
     // flushes any pending edit-history entry (chronologically before the
     // undo's own entry below).
     endHistRun();
-    if(!undoStack.length) return;
+    if (!undoStack.length) return;
     var cur = JSON.stringify(design);
     // Logged here, not through persistDesign/histPre: restoreSnapshot below
     // sets histSuppress = true, which is exactly the flag that stops
@@ -560,28 +562,28 @@
     redoStack.push(cur);
     restoreSnapshot(undoStack.pop());
   }
-  function doRedo(){
+  function doRedo() {
     endHistRun();
-    if(!redoStack.length) return;
+    if (!redoStack.length) return;
     var cur = JSON.stringify(design);
     histAppend('redo -- ' + (describeDesignDiff(cur, redoStack[redoStack.length - 1]) || 'reapplied next state'));
     undoStack.push(cur);
     restoreSnapshot(redoStack.pop());
   }
-  function updateHistButtons(){
+  function updateHistButtons() {
     var u = document.getElementById('undo-btn'), r = document.getElementById('redo-btn');
-    if(u) u.disabled = undoStack.length === 0;
-    if(r) r.disabled = redoStack.length === 0;
+    if (u) u.disabled = undoStack.length === 0;
+    if (r) r.disabled = redoStack.length === 0;
   }
 
-  (function(){
+  (function () {
     var u = document.getElementById('undo-btn'), r = document.getElementById('redo-btn');
-    if(u) u.addEventListener('click', doUndo);
-    if(r) r.addEventListener('click', doRedo);
+    if (u) u.addEventListener('click', doUndo);
+    if (r) r.addEventListener('click', doRedo);
   })();
   // Debug hook (harmless in production). `run` is the open coalescing key, if
   // any -- dev_smoke.html asserts a drag stays in one run and one entry.
-  window.__hist = function(){
+  window.__hist = function () {
     return { undo: undoStack.length, redo: redoStack.length, run: histRunKey };
   };
   // Test-only: force a coalescing run closed without waiting out HIST_IDLE_MS.
@@ -602,37 +604,37 @@
   // in endHistRun() and persistDesign() below for how that is guaranteed.
   var HIST_LOG_KEY = 'design-edit-log';   // own localStorage key -- never overloads 'design-state'
   var HIST_LOG_MAX = 200;                 // ~110 bytes/entry * 200 =~ 22KB, well under quota;
-                                           // roughly 4x a dense session's completed-edit count, so
-                                           // several export/import/edit rounds accumulate without
-                                           // the oldest context falling off, and the modal stays a
-                                           // list, not a wall.
+  // roughly 4x a dense session's completed-edit count, so
+  // several export/import/edit rounds accumulate without
+  // the oldest context falling off, and the modal stays a
+  // list, not a wall.
   var TRIDENT_FORMAT = 'trident-design';
   var TRIDENT_FORMAT_VERSION = 1;
 
   var histLog = [];        // [{at: ISO8601 string, summary: string}, ...], oldest first
   var histPre = null;      // pre-edit snapshot STRING of the logical edit currently in flight
   var histLabelOnce = null; // explicit summary for the next logged entry (load/preset/reset/undo/redo);
-                             // consumed-or-discarded by persistDesign so it can never leak onto an
-                             // unrelated later edit.
+  // consumed-or-discarded by persistDesign so it can never leak onto an
+  // unrelated later edit.
   var histLogArmed = false; // true once the user has actually touched the page. NOT previewArmed --
-                             // the printer combobox (a custom listbox, see selectPrinter) fires no
-                             // change/input on #design-group, so previewArmed would miss a real
-                             // printer change; and loadPrinterOptions() persists on every page load
-                             // (RESTORE_IGNORED_KEYS above documents exactly which fields that
-                             // touches), which would otherwise log bogus entries on every reload.
-  document.addEventListener('pointerdown', function(){ histLogArmed = true; }, true);
-  document.addEventListener('keydown', function(){ histLogArmed = true; }, true);
+  // the printer combobox (a custom listbox, see selectPrinter) fires no
+  // change/input on #design-group, so previewArmed would miss a real
+  // printer change; and loadPrinterOptions() persists on every page load
+  // (RESTORE_IGNORED_KEYS above documents exactly which fields that
+  // touches), which would otherwise log bogus entries on every reload.
+  document.addEventListener('pointerdown', function () { histLogArmed = true; }, true);
+  document.addEventListener('keydown', function () { histLogArmed = true; }, true);
 
   try {
     var savedHist = JSON.parse(localStorage.getItem(HIST_LOG_KEY) || '[]');
-    if(Array.isArray(savedHist)) histLog = savedHist.slice(-HIST_LOG_MAX);
-  } catch(e){ /* ignore corrupt log */ }
+    if (Array.isArray(savedHist)) histLog = savedHist.slice(-HIST_LOG_MAX);
+  } catch (e) { /* ignore corrupt log */ }
 
-  function saveHistLog(){
-    try { localStorage.setItem(HIST_LOG_KEY, JSON.stringify(histLog)); } catch(e){}
+  function saveHistLog() {
+    try { localStorage.setItem(HIST_LOG_KEY, JSON.stringify(histLog)); } catch (e) { }
   }
 
-  function historyModalOpen(){
+  function historyModalOpen() {
     var m = document.getElementById('history-modal');
     return !!(m && m.style.display !== 'none');
   }
@@ -643,12 +645,12 @@
   // reads only these two keys and ignores anything else, which is what
   // keeps a future field (e.g. print/test notes) addable later without a
   // format break.
-  function histAppend(summary){
-    if(!summary) return;
+  function histAppend(summary) {
+    if (!summary) return;
     histLog.push({ at: new Date().toISOString(), summary: String(summary) });
-    if(histLog.length > HIST_LOG_MAX) histLog.shift();
+    if (histLog.length > HIST_LOG_MAX) histLog.shift();
     saveHistLog();
-    if(historyModalOpen() && typeof renderHistList === 'function') renderHistList();
+    if (historyModalOpen() && typeof renderHistList === 'function') renderHistList();
   }
 
   // The single finalization point for a logical edit. Reads and clears ONLY
@@ -656,8 +658,8 @@
   // histSuppress/designRev -- which is the entire safety argument for why
   // this cannot affect undo/redo: it observes the same state those already
   // maintain, but never writes to any of it.
-  function histFinish(postSnap){
-    if(histPre === null) return;
+  function histFinish(postSnap) {
+    if (histPre === null) return;
     var pre = histPre;
     histPre = null;   // clear first: re-entrancy safe, a stray second call is a no-op
     var s = histLabelOnce || describeDesignDiff(pre, postSnap);
@@ -672,25 +674,25 @@
   // holds the OLD run's final state, so only the two snapshot strings are
   // trustworthy here.
   var HIST_FIELD_LABELS = {
-    xy_twist:'XY twist', z_twist:'Z twist', layer_height:'layer height',
-    line_width:'line width', z_waves:'Z waves', pattern_amp:'texture depth',
-    pattern_twist:'pattern twist', spine_mm:'spine offset', spine_deg:'spine angle',
-    ovality:'ovality', first_layer_height:'first layer height', squish:'first layer squish',
-    overhang_flow_k:'overhang flow', nozzle_temp:'nozzle temp', bed_temp:'bed temp',
-    base_layers:'base layers', brim:'brim', skirt:'skirt', print_speed:'print speed',
-    spacing_factor:'first layer spacing', fan_overhang_min:'min overhang fan',
-    fan_overhang_max:'max overhang fan', fan_off_layers:'fan-off layers',
-    loop_row:'loop row height', loop_up:'loop height', loop_style:'loop style',
-    loop_align:'loop alignment', loop_mode:'loop mode', star_points:'star points',
-    lean_mm:'lean', lean_deg:'lean direction', base_style:'base style',
-    bottom:'bottom style', sil_mode:'silhouette mode'
+    xy_twist: 'XY twist', z_twist: 'Z twist', layer_height: 'layer height',
+    line_width: 'line width', z_waves: 'Z waves', pattern_amp: 'texture depth',
+    pattern_twist: 'pattern twist', spine_mm: 'spine offset', spine_deg: 'spine angle',
+    ovality: 'ovality', first_layer_height: 'first layer height', squish: 'first layer squish',
+    overhang_flow_k: 'overhang flow', nozzle_temp: 'nozzle temp', bed_temp: 'bed temp',
+    base_layers: 'base layers', brim: 'brim', skirt: 'skirt', print_speed: 'print speed',
+    spacing_factor: 'first layer spacing', fan_overhang_min: 'min overhang fan',
+    fan_overhang_max: 'max overhang fan', fan_off_layers: 'fan-off layers',
+    loop_row: 'loop row height', loop_up: 'loop height', loop_style: 'loop style',
+    loop_align: 'loop alignment', loop_mode: 'loop mode', star_points: 'star points',
+    lean_mm: 'lean', lean_deg: 'lean direction', base_style: 'base style',
+    bottom: 'bottom style', sil_mode: 'silhouette mode'
   };
   var HIST_FIELD_UNITS = {
-    xy_twist:'', z_twist:'', layer_height:'mm', line_width:'mm', radius:'mm',
-    height:'mm', pattern_amp:'mm', pattern_twist:'', spine_mm:'mm', spine_deg:'deg',
-    first_layer_height:'mm', squish:'%', overhang_flow_k:'', nozzle_temp:'C',
-    bed_temp:'C', base_layers:'', brim:'mm', skirt:'mm', print_speed:'mm/s',
-    spacing_factor:'', loop_row:'mm', loop_up:'mm', lean_mm:'mm', lean_deg:'deg'
+    xy_twist: '', z_twist: '', layer_height: 'mm', line_width: 'mm', radius: 'mm',
+    height: 'mm', pattern_amp: 'mm', pattern_twist: '', spine_mm: 'mm', spine_deg: 'deg',
+    first_layer_height: 'mm', squish: '%', overhang_flow_k: '', nozzle_temp: 'C',
+    bed_temp: 'C', base_layers: '', brim: 'mm', skirt: 'mm', print_speed: 'mm/s',
+    spacing_factor: '', loop_row: 'mm', loop_up: 'mm', lean_mm: 'mm', lean_deg: 'deg'
   };
   // Fields whose CONTENTS must never appear in a summary -- named only, and
   // only when the change is a genuine edit (both sides non-null). One side
@@ -698,44 +700,44 @@
   // applyDesignToUI's own re-derivation), not something the user typed, so
   // it is skipped entirely rather than reported as "adjusted".
   var HIST_OPAQUE_FIELDS = {
-    cage:'shape cage adjusted', point_ffd_grid:'point-edit cage adjusted',
-    amp_profile:'wave amplitude curve edited', radius_profile:'silhouette curve edited',
-    width_profile:'line width curve edited'
+    cage: 'shape cage adjusted', point_ffd_grid: 'point-edit cage adjusted',
+    amp_profile: 'wave amplitude curve edited', radius_profile: 'silhouette curve edited',
+    width_profile: 'line width curve edited'
   };
   // Derived, never user intent -- always skipped.
-  var HIST_SKIP_FIELDS = { bed_center:1, sil3d:1 };
+  var HIST_SKIP_FIELDS = { bed_center: 1, sil3d: 1 };
 
-  function histFmtNum(n){
-    if(typeof n !== 'number' || !isFinite(n)) return String(n);
+  function histFmtNum(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return String(n);
     var s = n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
     return s === '' || s === '-0' ? '0' : s;
   }
-  function histFieldPart(key, a, b){
-    if(HIST_SKIP_FIELDS[key]) return null;
-    if(HIST_OPAQUE_FIELDS.hasOwnProperty(key)){
-      if(a == null || b == null) return null;   // derived null<->grid transition, not an edit
+  function histFieldPart(key, a, b) {
+    if (HIST_SKIP_FIELDS[key]) return null;
+    if (HIST_OPAQUE_FIELDS.hasOwnProperty(key)) {
+      if (a == null || b == null) return null;   // derived null<->grid transition, not an edit
       return HIST_OPAQUE_FIELDS[key];
     }
     var label = HIST_FIELD_LABELS[key] || key.replace(/_/g, ' ');
-    if(typeof a === 'boolean' || typeof b === 'boolean'){
+    if (typeof a === 'boolean' || typeof b === 'boolean') {
       return label + ' ' + (b ? 'on' : 'off');
     }
-    if(a === null || b === null){
+    if (a === null || b === null) {
       // null is this app's own "auto"/"inherit" convention (first_layer_height,
       // line_width, nozzle_temp, bed_temp, pattern fields, ...).
       var known = a === null ? 'auto' : histFmtNum(a) + (HIST_FIELD_UNITS[key] || '');
       var next = b === null ? 'auto' : histFmtNum(b) + (HIST_FIELD_UNITS[key] || '');
       return label + ' ' + known + '->' + next;
     }
-    if(typeof a === 'number' && typeof b === 'number'){
+    if (typeof a === 'number' && typeof b === 'number') {
       var unit = HIST_FIELD_UNITS[key] || '';
       return label + ' ' + histFmtNum(a) + unit + '->' + histFmtNum(b) + unit;
     }
-    if(typeof a === 'string' && typeof b === 'string'){
+    if (typeof a === 'string' && typeof b === 'string') {
       var av = a === '' ? '(none)' : a, bv = b === '' ? '(none)' : b;
       return label + ' changed to ' + bv;
     }
-    if(Array.isArray(a) || Array.isArray(b) || typeof a === 'object' || typeof b === 'object'){
+    if (Array.isArray(a) || Array.isArray(b) || typeof a === 'object' || typeof b === 'object') {
       // Standing safety net: any array/object field not named in
       // HIST_OPAQUE_FIELDS above still never has its contents emitted.
       return label + ' changed';
@@ -743,89 +745,89 @@
     return label + ' changed to ' + b;
   }
 
-  function histZoneMm(t, height){ return (height > 0) ? t * height : 0; }
+  function histZoneMm(t, height) { return (height > 0) ? t * height : 0; }
   // color_idx is deliberately never compared -- assigned once at creation
   // (nextZoneColorIdx), it never changes as a user edit.
-  function histPluralZones(n){ return n + (n === 1 ? ' zone' : ' zones'); }
-  function describeZoneOverridesDiff(preZones, postZones, postHeight){
+  function histPluralZones(n) { return n + (n === 1 ? ' zone' : ' zones'); }
+  function describeZoneOverridesDiff(preZones, postZones, postHeight) {
     preZones = preZones || []; postZones = postZones || [];
-    if(postZones.length > preZones.length) return 'zone added (' + histPluralZones(postZones.length) + ')';
-    if(postZones.length < preZones.length){
+    if (postZones.length > preZones.length) return 'zone added (' + histPluralZones(postZones.length) + ')';
+    if (postZones.length < preZones.length) {
       return postZones.length === 0 ? 'all zones cleared' : 'zone removed (' + histPluralZones(postZones.length) + ')';
     }
     var changedIdx = [];
-    for(var i = 0; i < postZones.length; i++){
-      if(JSON.stringify(preZones[i]) !== JSON.stringify(postZones[i])) changedIdx.push(i);
+    for (var i = 0; i < postZones.length; i++) {
+      if (JSON.stringify(preZones[i]) !== JSON.stringify(postZones[i])) changedIdx.push(i);
     }
-    if(changedIdx.length === 0) return null;
-    if(changedIdx.length > 2) return changedIdx.length + ' zones changed';
+    if (changedIdx.length === 0) return null;
+    if (changedIdx.length > 2) return changedIdx.length + ' zones changed';
     var parts = [];
-    changedIdx.forEach(function(i){
+    changedIdx.forEach(function (i) {
       var a = preZones[i] || {}, b = postZones[i] || {};
       var n = i + 1;
-      if(a.t_lo !== b.t_lo || a.t_hi !== b.t_hi){
+      if (a.t_lo !== b.t_lo || a.t_hi !== b.t_hi) {
         parts.push('zone ' + n + ' band moved to ' +
           histFmtNum(histZoneMm(b.t_lo, postHeight)) + '-' + histFmtNum(histZoneMm(b.t_hi, postHeight)) + 'mm');
       }
-      if(a.blend !== b.blend){
+      if (a.blend !== b.blend) {
         parts.push('zone ' + n + ' blend ' + histFmtNum(a.blend) + '->' + histFmtNum(b.blend));
       }
-      if(a.pattern !== b.pattern){
+      if (a.pattern !== b.pattern) {
         parts.push('zone ' + n + ' texture changed to ' + (b.pattern || '(global)'));
       }
-      if(a.pattern_amp !== b.pattern_amp){
+      if (a.pattern_amp !== b.pattern_amp) {
         parts.push('zone ' + n + ' depth ' + (b.pattern_amp == null ? 'set to inherit' : histFmtNum(a.pattern_amp) + '->' + histFmtNum(b.pattern_amp)));
       }
-      if(a.pattern_twist !== b.pattern_twist){
+      if (a.pattern_twist !== b.pattern_twist) {
         parts.push('zone ' + n + ' pattern twist ' + (b.pattern_twist == null ? 'set to inherit' : histFmtNum(a.pattern_twist) + '->' + histFmtNum(b.pattern_twist)));
       }
-      if(a.xy_twist !== b.xy_twist){
+      if (a.xy_twist !== b.xy_twist) {
         parts.push('zone ' + n + ' XY twist ' + (b.xy_twist == null ? 'set to inherit' : histFmtNum(a.xy_twist) + '->' + histFmtNum(b.xy_twist)));
       }
-      if(a.enabled !== b.enabled){
+      if (a.enabled !== b.enabled) {
         parts.push('zone ' + n + ' ' + (b.enabled ? 'enabled' : 'disabled'));
       }
     });
     return parts.join('; ');
   }
 
-  function describeDesignDiff(preStr, postStr){
+  function describeDesignDiff(preStr, postStr) {
     var a, b;
-    try { a = JSON.parse(preStr); b = JSON.parse(postStr); } catch(e){ return ''; }
-    if(!a || !b || typeof a !== 'object' || typeof b !== 'object') return '';
+    try { a = JSON.parse(preStr); b = JSON.parse(postStr); } catch (e) { return ''; }
+    if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return '';
     var keys = {}, k;
-    for(k in a){ if(a.hasOwnProperty(k)) keys[k] = 1; }
-    for(k in b){ if(b.hasOwnProperty(k)) keys[k] = 1; }
+    for (k in a) { if (a.hasOwnProperty(k)) keys[k] = 1; }
+    for (k in b) { if (b.hasOwnProperty(k)) keys[k] = 1; }
     var parts = [];
-    for(k in keys){
-      if(!keys.hasOwnProperty(k)) continue;
-      if(k === 'zone_overrides'){
+    for (k in keys) {
+      if (!keys.hasOwnProperty(k)) continue;
+      if (k === 'zone_overrides') {
         var zp = describeZoneOverridesDiff(a[k], b[k], b.height);
-        if(zp) parts.push(zp);
+        if (zp) parts.push(zp);
         continue;
       }
-      if(JSON.stringify(a[k]) === JSON.stringify(b[k])) continue;
+      if (JSON.stringify(a[k]) === JSON.stringify(b[k])) continue;
       var part = histFieldPart(k, a[k], b[k]);
-      if(part) parts.push(part);
+      if (part) parts.push(part);
     }
-    if(parts.length === 0) return '';
+    if (parts.length === 0) return '';
     var out;
-    if(parts.length > 8) out = parts.length + ' settings changed';
-    else if(parts.length > 3) out = parts.slice(0, 3).join('; ') + ' (+' + (parts.length - 3) + ' more)';
+    if (parts.length > 8) out = parts.length + ' settings changed';
+    else if (parts.length > 3) out = parts.slice(0, 3).join('; ') + ' (+' + (parts.length - 3) + ' more)';
     else out = parts.join('; ');
     return out.length > 140 ? out.slice(0, 137) + '...' : out;
   }
 
-  document.addEventListener('keydown', function(e){
+  document.addEventListener('keydown', function (e) {
     // Leave native text-field undo alone while typing in an input.
     var tag = e.target && e.target.tagName;
-    if(tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     var mod = e.ctrlKey || e.metaKey;
-    if(!mod) return;
-    if(e.key === 'z' || e.key === 'Z'){
+    if (!mod) return;
+    if (e.key === 'z' || e.key === 'Z') {
       e.preventDefault();
-      if(e.shiftKey) doRedo(); else doUndo();
-    } else if(e.key === 'y' || e.key === 'Y'){
+      if (e.shiftKey) doRedo(); else doUndo();
+    } else if (e.key === 'y' || e.key === 'Y') {
       e.preventDefault();
       doRedo();
     }
@@ -836,21 +838,21 @@
   // control — a fresh page load shows the empty bed + drop-gcode card.
   var previewArmed = false;
   var previewTimer = null;
-  function schedulePreview(){
-    if(!previewArmed) return;
-    if(previewTimer) clearTimeout(previewTimer);
-    previewTimer = setTimeout(function(){
-      if(typeof generatePreview === 'function' && typeof window.showPreview === 'function'){
+  function schedulePreview() {
+    if (!previewArmed) return;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(function () {
+      if (typeof generatePreview === 'function' && typeof window.showPreview === 'function') {
         var pts = generatePreview(design, effectiveBaseSpec());
-        if(pts && pts.length > 0){
+        if (pts && pts.length > 0) {
           window.showPreview(pts);
           var ov = document.getElementById('overlay');
-          if(ov) ov.style.display = 'none';
-          if(design.sil3d) refreshShapeCage();
+          if (ov) ov.style.display = 'none';
+          if (design.sil3d) refreshShapeCage();
           // Don't rebuild zone rings while a drag is live -- it causes
           // flickering. The drag-end path (zoneEndDrag / flushZoneEdgePersist)
           // already calls refreshZoneRings() once the gesture is over.
-          if(typeof refreshZoneRings === 'function' && !window.__zoneRingDragActive) refreshZoneRings();
+          if (typeof refreshZoneRings === 'function' && !window.__zoneRingDragActive) refreshZoneRings();
         }
         // The fabric draft resolves build_loop_fabric's own clamps; report
         // anything it had to cut. No-op for every non-fabric design.
@@ -863,22 +865,22 @@
   // or printer control (init-time fetch callbacks never arm it).
   // The machine bar lives inside #design-group now (above the step wizard,
   // not its own #printer-group), so a single listener already covers it.
-  ['design-group'].forEach(function(id){
+  ['design-group'].forEach(function (id) {
     var g = document.getElementById(id);
-    if(!g) return;
+    if (!g) return;
     // Capture phase: arm BEFORE the control's own change handler runs its
     // schedulePreview(), or the very first interaction would be swallowed.
-    ['change', 'input', 'dblclick'].forEach(function(ev){
-      g.addEventListener(ev, function(){ previewArmed = true; }, true);
+    ['change', 'input', 'dblclick'].forEach(function (ev) {
+      g.addEventListener(ev, function () { previewArmed = true; }, true);
     });
     // Curve editors drag with the mouse without firing change/input.
-    g.addEventListener('mousedown', function(e){
-      if(e.target && e.target.tagName === 'CANVAS') previewArmed = true;
+    g.addEventListener('mousedown', function (e) {
+      if (e.target && e.target.tagName === 'CANVAS') previewArmed = true;
     }, true);
   });
 
   // ---- resizable splitter -------------------------------------------------
-  (function(){
+  (function () {
     var splitter = document.getElementById('splitter');
     var panel = document.getElementById('panel');
     var MIN_W = 280, MAX_W = 500, DEFAULT_W = 340;
@@ -886,8 +888,8 @@
     // full-width; an inline width would override that media query, so only
     // apply (and keep) the persisted width on wide viewports.
     var narrowMq = window.matchMedia('(max-width: 900px)');
-    function applyPanelWidth(w){
-      if(narrowMq.matches){
+    function applyPanelWidth(w) {
+      if (narrowMq.matches) {
         panel.style.width = '';
         panel.style.flexBasis = '';
         return;
@@ -898,28 +900,28 @@
     var saved = parseFloat(localStorage.getItem('panel-width'));
     var startW = (saved && saved >= MIN_W && saved <= MAX_W) ? saved : DEFAULT_W;
     applyPanelWidth(startW);
-    narrowMq.addEventListener('change', function(){
+    narrowMq.addEventListener('change', function () {
       var s = parseFloat(localStorage.getItem('panel-width'));
       applyPanelWidth((s && s >= MIN_W && s <= MAX_W) ? s : DEFAULT_W);
-      if(window.__viewerResize) window.__viewerResize();
+      if (window.__viewerResize) window.__viewerResize();
     });
 
     var dragging = false, startX = 0, startPanelW = 0;
-    function onMove(e){
-      if(!dragging) return;
+    function onMove(e) {
+      if (!dragging) return;
       var dx = e.clientX - startX;   // dragging right grows the panel (left sidebar)
       var w = Math.min(MAX_W, Math.max(MIN_W, startPanelW + dx));
       panel.style.width = w + 'px';
       panel.style.flexBasis = w + 'px';
-      if(window.__viewerResize) window.__viewerResize();
+      if (window.__viewerResize) window.__viewerResize();
     }
-    function onUp(){
-      if(!dragging) return;
+    function onUp() {
+      if (!dragging) return;
       dragging = false;
       splitter.classList.remove('dragging');
-      try { localStorage.setItem('panel-width', parseFloat(panel.style.width)); } catch(e){}
+      try { localStorage.setItem('panel-width', parseFloat(panel.style.width)); } catch (e) { }
     }
-    splitter.addEventListener('mousedown', function(e){
+    splitter.addEventListener('mousedown', function (e) {
       dragging = true; startX = e.clientX; startPanelW = panel.getBoundingClientRect().width;
       splitter.classList.add('dragging');
       e.preventDefault();
@@ -928,11 +930,11 @@
     window.addEventListener('mouseup', onUp);
 
     // Trigger an initial resize once layout has settled.
-    requestAnimationFrame(function(){ if(window.__viewerResize) window.__viewerResize(); });
+    requestAnimationFrame(function () { if (window.__viewerResize) window.__viewerResize(); });
   })();
 
   // ---- top-level mode bar (Design vs G-code Viewer) ------------------------
-  (function(){
+  (function () {
     var btns = Array.prototype.slice.call(document.querySelectorAll('.mode-btn'));
     var panels = {
       design: document.getElementById('mode-design'),
@@ -943,17 +945,25 @@
     // that display:none/.active toggling covers automatically -- drive it
     // from the same activateMode() switch so it still only shows in Design.
     var stepNavEl = document.getElementById('step-nav');
-    function activateMode(name){
-      if(!panels[name]) name = 'design';
-      btns.forEach(function(btn){
+    function activateMode(name) {
+      if (!panels[name]) name = 'design';
+      btns.forEach(function (btn) {
         var active = btn.dataset.mode === name;
         btn.classList.toggle('active', active);
         btn.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
-      for(var k in panels){
-        if(panels[k]) panels[k].classList.toggle('active', k === name);
+      for (var k in panels) {
+        if (panels[k]) panels[k].classList.toggle('active', k === name);
       }
-      if(stepNavEl) stepNavEl.classList.toggle('active', name === 'design');
+      if (stepNavEl) stepNavEl.classList.toggle('active', name === 'design');
+      var loadDesignBtn = document.getElementById('load-design');
+      if (loadDesignBtn) {
+        if (name === 'viewer') {
+          loadDesignBtn.title = 'Import a .gcode file';
+        } else {
+          loadDesignBtn.title = 'Import a .trident or .stl file';
+        }
+      }
       // Not persisted: every load starts in Design (see activateMode's call
       // site below). Writing a key nothing reads would just resurrect the
       // stale value this change exists to get rid of.
@@ -986,17 +996,17 @@
         // revision of the design) as a ghost detached from the real toolpath
         // now on screen. Clearing it here is safe unconditionally: going
         // back to Design re-arms via schedulePreview() in the else branch.
-        if(previewTimer){ clearTimeout(previewTimer); previewTimer = null; }
-        if(window.clearPreview) window.clearPreview();
-        if(window.__viewerResize) window.__viewerResize();
+        if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+        if (window.clearPreview) window.clearPreview();
+        if (window.__viewerResize) window.__viewerResize();
       } else {
         // Back to designing: re-show the live blue draft of the current shape
         // (schedulePreview no-ops until the user has interacted at least once).
         schedulePreview();
       }
     }
-    btns.forEach(function(btn){
-      btn.addEventListener('click', function(){ activateMode(btn.dataset.mode); });
+    btns.forEach(function (btn) {
+      btn.addEventListener('click', function () { activateMode(btn.dataset.mode); });
     });
     window.setAppMode = activateMode;
     // A load always starts in Design, never in the G-code Viewer.
@@ -1012,54 +1022,54 @@
     // design. The stale 'app-mode' key is cleared rather than left behind,
     // so an older browser profile does not keep a value nothing reads.
     activateMode('design');
-    try { localStorage.removeItem('app-mode'); } catch(e){}
+    try { localStorage.removeItem('app-mode'); } catch (e) { }
   })();
 
   // ---- design wizard step bar (Model / Texture / Print / Generate) --------
-  var activateStep = (function(){
+  var activateStep = (function () {
     var STEPS = ['model', 'texture', 'print', 'generate'];
     var items = Array.prototype.slice.call(document.querySelectorAll('.step-item'));
     var panels = {};
-    STEPS.forEach(function(name){ panels[name] = document.getElementById('step-' + name); });
+    STEPS.forEach(function (name) { panels[name] = document.getElementById('step-' + name); });
     var backBtn = document.getElementById('step-back');
     var nextBtn = document.getElementById('step-next');
     var current = 'model';
 
-    function activate(name){
-      if(STEPS.indexOf(name) < 0) name = 'model';
+    function activate(name) {
+      if (STEPS.indexOf(name) < 0) name = 'model';
       current = name;
       var idx = STEPS.indexOf(name);
-      items.forEach(function(btn){
+      items.forEach(function (btn) {
         var i = STEPS.indexOf(btn.dataset.step);
         btn.classList.toggle('active', btn.dataset.step === name);
         btn.classList.toggle('done', i < idx);
-        if(btn.dataset.step === name) btn.setAttribute('aria-current', 'step');
+        if (btn.dataset.step === name) btn.setAttribute('aria-current', 'step');
         else btn.removeAttribute('aria-current');
       });
-      STEPS.forEach(function(s){
+      STEPS.forEach(function (s) {
         var p = panels[s];
-        if(p) p.classList.toggle('active', s === name);
+        if (p) p.classList.toggle('active', s === name);
       });
-      if(backBtn) backBtn.disabled = idx <= 0;
-      if(nextBtn) nextBtn.disabled = idx >= STEPS.length - 1;
-      try { localStorage.setItem('designer-step', name); } catch(e){}
+      if (backBtn) backBtn.disabled = idx <= 0;
+      if (nextBtn) nextBtn.disabled = idx >= STEPS.length - 1;
+      try { localStorage.setItem('designer-step', name); } catch (e) { }
       // Curve editor canvases live inside hidden panels; redraw once visible
       // so they pick up correct layout/CSS colors.
-      if(name === 'texture'){
-        if(typeof ampEditor !== 'undefined' && ampEditor) ampEditor.draw();
-        if(typeof silEditor !== 'undefined' && silEditor) silEditor.draw();
+      if (name === 'texture') {
+        if (typeof ampEditor !== 'undefined' && ampEditor) ampEditor.draw();
+        if (typeof silEditor !== 'undefined' && silEditor) silEditor.draw();
       }
     }
-    items.forEach(function(btn){
-      btn.addEventListener('click', function(){ activate(btn.dataset.step); });
+    items.forEach(function (btn) {
+      btn.addEventListener('click', function () { activate(btn.dataset.step); });
     });
-    if(backBtn) backBtn.addEventListener('click', function(){
+    if (backBtn) backBtn.addEventListener('click', function () {
       var idx = STEPS.indexOf(current);
-      if(idx > 0) activate(STEPS[idx - 1]);
+      if (idx > 0) activate(STEPS[idx - 1]);
     });
-    if(nextBtn) nextBtn.addEventListener('click', function(){
+    if (nextBtn) nextBtn.addEventListener('click', function () {
       var idx = STEPS.indexOf(current);
-      if(idx < STEPS.length - 1) activate(STEPS[idx + 1]);
+      if (idx < STEPS.length - 1) activate(STEPS[idx + 1]);
     });
     // Same reasoning as the mode above: a load starts the wizard at step 1
     // (Model), not wherever the last session happened to stop. Landing on
@@ -1068,7 +1078,7 @@
     // worth persisting across a reload -- the design itself is, and that is
     // restored separately (see the session-restore prompt).
     activate('model');
-    try { localStorage.removeItem('designer-step'); } catch(e){}
+    try { localStorage.removeItem('designer-step'); } catch (e) { }
     return activate;
   })();
 
@@ -1084,30 +1094,30 @@
   // changes.
   var SECTIONS_KEY = 'trident_sections';
   var sectionState = {};
-  try { sectionState = JSON.parse(localStorage.getItem(SECTIONS_KEY) || '{}') || {}; } catch(e){ sectionState = {}; }
+  try { sectionState = JSON.parse(localStorage.getItem(SECTIONS_KEY) || '{}') || {}; } catch (e) { sectionState = {}; }
   var sectionsByKey = {};
   var sectionList = [];
 
-  function persistSectionState(){
-    try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(sectionState)); } catch(e){}
+  function persistSectionState() {
+    try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(sectionState)); } catch (e) { }
   }
 
-  function setSectionOpen(sec, open, skipPersist){
+  function setSectionOpen(sec, open, skipPersist) {
     sec.headingEl.setAttribute('aria-expanded', open ? 'true' : 'false');
     sec.headingEl.classList.toggle('sec-closed', !open);
     sec.bodyEl.style.display = open ? '' : 'none';
-    if(!skipPersist){
+    if (!skipPersist) {
       sectionState[sec.key] = open;
       persistSectionState();
     }
   }
 
-  function registerSection(key, headingEl, bodyEl, defaultOpen){
-    if(!headingEl || !bodyEl) return null;
+  function registerSection(key, headingEl, bodyEl, defaultOpen) {
+    if (!headingEl || !bodyEl) return null;
     headingEl.classList.add('sec-toggle');
     headingEl.setAttribute('role', 'button');
-    if(!headingEl.hasAttribute('tabindex')) headingEl.setAttribute('tabindex', '0');
-    if(bodyEl.id) headingEl.setAttribute('aria-controls', bodyEl.id);
+    if (!headingEl.hasAttribute('tabindex')) headingEl.setAttribute('tabindex', '0');
+    if (bodyEl.id) headingEl.setAttribute('aria-controls', bodyEl.id);
     var chevron = document.createElement('span');
     chevron.className = 'sec-chevron';
     chevron.setAttribute('aria-hidden', 'true');
@@ -1118,10 +1128,10 @@
     var open = sectionState.hasOwnProperty(key) ? !!sectionState[key] : !!defaultOpen;
     setSectionOpen(sec, open, true);
 
-    function toggle(){ setSectionOpen(sec, sec.bodyEl.style.display === 'none'); }
+    function toggle() { setSectionOpen(sec, sec.bodyEl.style.display === 'none'); }
     headingEl.addEventListener('click', toggle);
-    headingEl.addEventListener('keydown', function(e){
-      if(e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){
+    headingEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
         e.preventDefault();
         toggle();
       }
@@ -1134,18 +1144,18 @@
 
   // Force a section open by its registration key (used by the active-summary
   // chip row -- clicking a chip must reveal the control it summarizes).
-  function expandSectionByKey(key){
+  function expandSectionByKey(key) {
     var sec = sectionsByKey[key];
-    if(sec) setSectionOpen(sec, true);
+    if (sec) setSectionOpen(sec, true);
   }
 
   // Force open whichever registered section(s) contain the given element (used
   // by the parameter search -- jumping to a control inside a collapsed
   // section must expand that section first).
-  function expandSectionsContaining(el){
-    if(!el) return;
-    for(var i = 0; i < sectionList.length; i++){
-      if(sectionList[i].bodyEl.contains(el)) setSectionOpen(sectionList[i], true);
+  function expandSectionsContaining(el) {
+    if (!el) return;
+    for (var i = 0; i < sectionList.length; i++) {
+      if (sectionList[i].bodyEl.contains(el)) setSectionOpen(sectionList[i], true);
     }
   }
 
@@ -1188,24 +1198,24 @@
   // ---- hint-density toggle --------------------------------------------------
   // Every .hint block defaults visible -- hiding them is opt-in and
   // persisted, so nothing changes for existing users unless they click it.
-  (function(){
+  (function () {
     var HINTS_KEY = 'trident_hints_visible';
     var btn = document.getElementById('toggle-hints');
-    if(!btn) return;
+    if (!btn) return;
     var visible = true;
     try {
       var saved = localStorage.getItem(HINTS_KEY);
-      if(saved !== null) visible = saved === '1';
-    } catch(e){}
-    function apply(){
+      if (saved !== null) visible = saved === '1';
+    } catch (e) { }
+    function apply() {
       document.body.classList.toggle('hints-hidden', !visible);
       btn.setAttribute('aria-pressed', visible ? 'true' : 'false');
     }
     apply();
-    btn.addEventListener('click', function(){
+    btn.addEventListener('click', function () {
       visible = !visible;
       apply();
-      try { localStorage.setItem(HINTS_KEY, visible ? '1' : '0'); } catch(e){}
+      try { localStorage.setItem(HINTS_KEY, visible ? '1' : '0'); } catch (e) { }
     });
   })();
 
@@ -1216,62 +1226,68 @@
   // updateActiveSummary() below, called at the end of persistDesign() --
   // the single choke point every real design mutation already funnels
   // through -- rather than inventing a second update path.
-  function computeActiveChips(){
+  function computeActiveChips() {
     var chips = [];
-    if(design.shape !== DEFAULT_DESIGN.shape || design.radius !== DEFAULT_DESIGN.radius ||
-       design.height !== DEFAULT_DESIGN.height){
-      chips.push({ text: design.shape + ' ' + design.radius + '×' + design.height + 'mm',
-                   step: 'model', section: 'shape' });
+    if (design.shape !== DEFAULT_DESIGN.shape || design.radius !== DEFAULT_DESIGN.radius ||
+      design.height !== DEFAULT_DESIGN.height) {
+      chips.push({
+        text: design.shape + ' ' + design.radius + '×' + design.height + 'mm',
+        step: 'model', section: 'shape'
+      });
     }
-    if(design.pattern){
+    if (design.pattern) {
       chips.push({ text: 'pattern: ' + design.pattern, step: 'texture', section: 'texturepattern' });
     }
-    if(Math.round(design.z_waves || 0) !== Math.round(DEFAULT_DESIGN.z_waves || 0)){
+    if (Math.round(design.z_waves || 0) !== Math.round(DEFAULT_DESIGN.z_waves || 0)) {
       var zw = Math.round(design.z_waves || 0);
       chips.push({ text: zw + ' Z-wave' + (zw === 1 ? '' : 's'), step: 'texture', section: 'zwaves' });
     }
-    if(design.sil_mode === 'asym'){
+    if (design.sil_mode === 'asym') {
       chips.push({ text: 'asymmetric cage', step: 'texture', section: null });
     }
-    if(design.spine_mm){
+    if (design.spine_mm) {
       chips.push({ text: 'lean ' + design.spine_mm + 'mm', step: 'model', section: 'asymmetry' });
     }
-    if(design.ovality){
+    if (design.ovality) {
       chips.push({ text: 'oval ' + design.ovality, step: 'model', section: 'asymmetry' });
     }
-    if(typeof pointEditAnyEnabled === 'function' && pointEditAnyEnabled()){
+    if (typeof pointEditAnyEnabled === 'function' && pointEditAnyEnabled()) {
       var peCount = [pointEditMaskMeaningful(), pointEditProtectionMeaningful(), pointEditFFDMeaningful(),
-                     pointEditSmoothMeaningful(), pointEditRadialPushMeaningful()].filter(Boolean).length;
-      chips.push({ text: peCount + ' point-edit mod' + (peCount === 1 ? '' : 's'),
-                   step: 'texture', openPE: true });
+      pointEditSmoothMeaningful(), pointEditRadialPushMeaningful()].filter(Boolean).length;
+      chips.push({
+        text: peCount + ' point-edit mod' + (peCount === 1 ? '' : 's'),
+        step: 'texture', openPE: true
+      });
     }
-    if(typeof zoneOverridesAnyEnabled === 'function' && zoneOverridesAnyEnabled()){
+    if (typeof zoneOverridesAnyEnabled === 'function' && zoneOverridesAnyEnabled()) {
       var zoCount = (design.zone_overrides || []).filter(zoneOverrideMeaningful).length;
-      chips.push({ text: zoCount + ' zone override' + (zoCount === 1 ? '' : 's'),
-                   step: 'texture', openZO: true });
+      chips.push({
+        text: zoCount + ' zone override' + (zoCount === 1 ? '' : 's'),
+        step: 'texture', openZO: true
+      });
     }
-    if(typeof meshState !== 'undefined' && meshState && meshState.mesh_id){
+    if (typeof meshState !== 'undefined' && meshState && meshState.mesh_id) {
       chips.push({ text: 'STL: ' + (meshState.filename || 'imported'), step: 'model', section: 'importstl' });
     }
     return chips.slice(0, 8);
   }
 
-  function updateActiveSummary(){
+  function updateActiveSummary() {
     var host = document.getElementById('active-summary');
-    if(!host) return;
+    if (!host) return;
     var chips = computeActiveChips();
     host.innerHTML = '';
-    chips.forEach(function(c){
+    chips.forEach(function (c) {
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'chip';
       btn.textContent = c.text;
-      btn.addEventListener('click', function(){
-        if(window.setAppMode) window.setAppMode('design');
-        if(c.step) activateStep(c.step);
-        if(c.section) expandSectionByKey(c.section);
-        if(c.openPE && window.__openPointEditModal) window.__openPointEditModal();
-        if(c.openZO && window.__openZoneModal) window.__openZoneModal();
+      btn.addEventListener('click', function () {
+        if (window.setAppMode) window.setAppMode('design');
+        if (c.step) activateStep(c.step);
+        if (c.section) expandSectionByKey(c.section);
+        if (c.openPE && window.__openPointEditModal) window.__openPointEditModal();
+        if (c.openZO && window.__openZoneModal) window.__openZoneModal();
       });
       host.appendChild(btn);
     });
@@ -1311,7 +1327,7 @@
   // _Z_AMP_MAX_UNKNOWN_DEFAULT in trident_gcode/printer_validate.py. Keep the
   // two in step; never reintroduce a fallback that names another printer's
   // number. Pinned by window.__zAmpCapFor below.
-  function zAmpCapFor(v){
+  function zAmpCapFor(v) {
     return (typeof v === 'number' && isFinite(v)) ? v : 0.4;
   }
   // Exposed so the invariant is testable without standing up the whole
@@ -1328,7 +1344,7 @@
   // SLOPE_LIMIT_FALLBACK rather than inventing a third constant. If a
   // printer ever needs a slope ceiling other than 0.25, the fix is for its
   // profile to send one, not for this fallback to guess.
-  function slopeCapFor(v){
+  function slopeCapFor(v) {
     return (typeof v === 'number' && isFinite(v)) ? v : SLOPE_LIMIT_FALLBACK;
   }
   // The active printer's slope ceiling. Reads PRINTER_SLOPE[design.printer]
@@ -1338,7 +1354,7 @@
   // back to SLOPE_LIMIT_FALLBACK only when the printer list has not loaded
   // yet (no entry at all for design.printer), never as a stand-in for a
   // printer's real, declared value.
-  function activeSlopeLimit(){
+  function activeSlopeLimit() {
     var v = PRINTER_SLOPE[design.printer];
     return (typeof v === 'number' && isFinite(v)) ? v : SLOPE_LIMIT_FALLBACK;
   }
@@ -1352,8 +1368,8 @@
   // selected, and never derives a fallback bed/cap from "whatever happens to
   // be selected right now" the way that would silently corrupt a REAL
   // entry's data if this were reused to restore the original selection.
-  window.__testInjectPrinter = function(entry){
-    if(!entry || !entry.key) return;
+  window.__testInjectPrinter = function (entry) {
+    if (!entry || !entry.key) return;
     PRINTER_BEDS[entry.key] = entry.bed || [235, 235];
     PRINTER_ZCAP[entry.key] = zAmpCapFor(entry.z_amp_max);
     PRINTER_SLOPE[entry.key] = slopeCapFor(entry.quality_slope_max);
@@ -1366,8 +1382,8 @@
   // chrome the assertions don't need. Works on any key already known to
   // PRINTER_BEDS, real or injected via __testInjectPrinter above, so it also
   // doubles as the restore path back to whatever was selected before a test.
-  window.__testSelectPrinter = function(key){
-    if(!PRINTER_BEDS.hasOwnProperty(key)) return;
+  window.__testSelectPrinter = function (key) {
+    if (!PRINTER_BEDS.hasOwnProperty(key)) return;
     design.printer = key;
     applyPrinterCaps();
   };
@@ -1378,9 +1394,9 @@
   // session in this same browser profile, so an assertion that needs a KNOWN
   // shape cannot just assume the shipped default is still in place. Pass
   // null for either profile to leave that curve untouched.
-  window.__testSetCurves = function(ampProfile, silProfile){
-    if(ampProfile){ ampEditor.setProfile(ampProfile); design.amp_profile = ampEditor.profile(); }
-    if(silProfile){ silEditor.setProfile(silProfile); design.radius_profile = silEditor.profile(); }
+  window.__testSetCurves = function (ampProfile, silProfile) {
+    if (ampProfile) { ampEditor.setProfile(ampProfile); design.amp_profile = ampEditor.profile(); }
+    if (silProfile) { silEditor.setProfile(silProfile); design.radius_profile = silEditor.profile(); }
     updateSlope();
   };
 
@@ -1388,7 +1404,7 @@
   // so the client never re-derives the formula and the two can never drift.
   // Falls back to deriving from z_amp_max with the same formula the server
   // uses, in case an older /api/printers response doesn't carry them yet.
-  function loopCapsFor(meta, cap){
+  function loopCapsFor(meta, cap) {
     var up = (meta && typeof meta.loop_up_max === 'number') ? meta.loop_up_max : cap;
     var row = (meta && typeof meta.loop_row_max === 'number') ? meta.loop_row_max : Math.max(0.4, cap - 0.3);
     // Server-published floor (see _printer_entry_json's loop_min_mm). The
@@ -1411,11 +1427,11 @@
   // the caps and profile meta) and re-called whenever a clamp flag changes, so
   // the two facts can never overwrite each other.
   var _loopNoteCaps = null, _loopNoteMeta = null;
-  function refreshLoopZcapNote(caps, meta){
-    if(caps){ _loopNoteCaps = caps; _loopNoteMeta = meta; }
+  function refreshLoopZcapNote(caps, meta) {
+    if (caps) { _loopNoteCaps = caps; _loopNoteMeta = meta; }
     caps = _loopNoteCaps; meta = _loopNoteMeta;
     var note = document.getElementById('loop-zcap');
-    if(!note || !caps) return;
+    if (!note || !caps) return;
     var mname = (meta && meta.name) || 'This printer';
     // caps.up < 1.5 is real signal that something is tightly limiting loop
     // height, but it is only a PROBE if this printer actually declares
@@ -1426,12 +1442,12 @@
       : ((meta && meta.has_probe) ? ' (probe keep-out limit)' : ' (z-amp ceiling)');
     var text = mname + ' allows loops up to ' + fmtMm(caps.up) +
       'mm tall' + loopLimitNote + '.';
-    if(loopStyleTrimmed){
+    if (loopStyleTrimmed) {
       text += ' The "' + loopStyleTrimmed + '" preset asks for more, so its'
         + ' whole stitch was scaled down to fit (its row-to-loop proportion is'
         + ' kept).';
     }
-    if(loopWaveTrimmed){
+    if (loopWaveTrimmed) {
       text += ' The stitch wave does not fit under that ceiling on top of the'
         + ' loop height, so it was flattened out.';
     }
@@ -1441,14 +1457,14 @@
   // Reads the resolved-fabric report the draft leaves behind (see
   // preview_math.js's __loopFabricPreview) and reflects build_loop_fabric's
   // own clamps into the note. Called after each fabric draft.
-  function refreshLoopFabricNote(){
+  function refreshLoopFabricNote() {
     var info = window.__loopFabricPreview;
     // `clamped` covers loop height AND wave amplitude; the height half is
     // already carried by loopStyleTrimmed, so only report a wave that the
     // design asked for and the machine removed.
     var wanted = Math.max(0, parseFloat(design.loop_wave_amp) || 0);
     var trimmed = !!(info && info.clamped && wanted > 0 && info.wave_amp < wanted);
-    if(trimmed !== loopWaveTrimmed){
+    if (trimmed !== loopWaveTrimmed) {
       loopWaveTrimmed = trimmed;
       refreshLoopZcapNote();
     }
@@ -1461,14 +1477,14 @@
   // clamp anything already sitting out of range (switching TO a stricter
   // printer must not leave stale over-limit values in the inputs). Returns
   // the number of values actually changed, so the caller can tell the user.
-  function applyPrinterCaps(){
+  function applyPrinterCaps() {
     var cap = PRINTER_ZCAP[design.printer];
     // cap can legitimately BE 0 (a printer with zero non-planar tolerance);
     // `if(!cap)` would skip applying it and leave the previous printer's
     // stale, looser amp/loop limits in the UI. Only bail when there is
     // genuinely no entry yet (printer list not loaded) or the value is
     // non-finite.
-    if(cap == null || typeof cap !== 'number' || !isFinite(cap)) return 0;
+    if (cap == null || typeof cap !== 'number' || !isFinite(cap)) return 0;
     var meta = PRINTER_META[design.printer];
     var caps = loopCapsFor(meta, cap);
     var changed = 0;
@@ -1482,16 +1498,16 @@
     // one function every printer switch and the initial /api/printers load
     // both funnel through, the same reasoning as the max_z_velocity contract
     // below.
-    if(typeof window.setPreviewAmpMax === 'function') window.setPreviewAmpMax(cap);
+    if (typeof window.setPreviewAmpMax === 'function') window.setPreviewAmpMax(cap);
     // Same contract for the loop-fabric draft: it re-runs _parse_loop_spec's
     // and build_loop_fabric's clamps client-side, so it needs this machine's
     // row/loop ceilings and whether it has a trailing probe (spike mode's wave
     // clamp is gated on that). Pushed from here for the same reason as the
     // amplitude ceiling above -- this is the one funnel every printer switch
     // and the initial /api/printers load both pass through.
-    if(typeof window.setPreviewLoopCaps === 'function'){
+    if (typeof window.setPreviewLoopCaps === 'function') {
       window.setPreviewLoopCaps(caps.up, caps.row, !!(meta && meta.has_probe),
-                                caps.min);
+        caps.min);
     }
 
     var up = document.getElementById('d-loop-up');
@@ -1505,22 +1521,22 @@
     // account; the CEILINGS below are unchanged.
     var floorUp = Math.min(caps.min, caps.up);
     var floorRow = Math.min(caps.min, caps.row);
-    if(up){
+    if (up) {
       up.min = floorUp;
       up.max = Math.round(caps.up * 100) / 100;
       var uv = parseFloat(up.value);
-      if(!isNaN(uv)){
+      if (!isNaN(uv)) {
         var cu = Math.min(caps.up, Math.max(floorUp, uv));
-        if(cu !== uv){ up.value = cu; design.loop_up = cu; changed++; }
+        if (cu !== uv) { up.value = cu; design.loop_up = cu; changed++; }
       }
     }
-    if(row){
+    if (row) {
       row.min = floorRow;
       row.max = Math.round(caps.row * 100) / 100;
       var rv = parseFloat(row.value);
-      if(!isNaN(rv)){
+      if (!isNaN(rv)) {
         var cr = Math.min(caps.row, Math.max(floorRow, rv));
-        if(cr !== rv){ row.value = cr; design.loop_row = cr; changed++; }
+        if (cr !== rv) { row.value = cr; design.loop_row = cr; changed++; }
       }
     }
     refreshLoopZcapNote(caps, meta);
@@ -1530,20 +1546,20 @@
     // and the two can never drift apart -- same shape as loop_up/loop_row
     // above. Clamp a now-out-of-range current value back down, same as those.
     var nozzleT = document.getElementById('d-nozzletemp');
-    if(nozzleT && meta && typeof meta.max_nozzle_temp === 'number'){
+    if (nozzleT && meta && typeof meta.max_nozzle_temp === 'number') {
       nozzleT.max = meta.max_nozzle_temp;
       var ntv = parseFloat(nozzleT.value);
-      if(!isNaN(ntv) && ntv > meta.max_nozzle_temp){
+      if (!isNaN(ntv) && ntv > meta.max_nozzle_temp) {
         nozzleT.value = meta.max_nozzle_temp;
         design.nozzle_temp = meta.max_nozzle_temp;
         changed++;
       }
     }
     var bedT = document.getElementById('d-bedtemp');
-    if(bedT && meta && typeof meta.max_bed_temp === 'number'){
+    if (bedT && meta && typeof meta.max_bed_temp === 'number') {
       bedT.max = meta.max_bed_temp;
       var btv = parseFloat(bedT.value);
-      if(!isNaN(btv) && btv > meta.max_bed_temp){
+      if (!isNaN(btv) && btv > meta.max_bed_temp) {
         bedT.value = meta.max_bed_temp;
         design.bed_temp = meta.max_bed_temp;
         changed++;
@@ -1559,13 +1575,13 @@
     // ceiling labels from the same slope math as the readout (via
     // ampEditor.setHardWallLabel()/setSoftLimit()) and always wins, so the
     // panel can never show different numbers than the editor.
-    if(typeof ampEditor !== 'undefined' && ampEditor){
+    if (typeof ampEditor !== 'undefined' && ampEditor) {
       changed += ampEditor.setRange(cap);
       design.amp_profile = ampEditor.profile();
       updateSlope();
     }
     var ampHint = document.getElementById('amp-limit-hint');
-    if(ampHint){
+    if (ampHint) {
       // Same false-attribution fix as loop-zcap above: this is a probe
       // figure only when the selected printer actually has a probe.
       var ampIsProbeLimit = !!(meta && meta.has_probe);
@@ -1619,13 +1635,13 @@
   // Line 2 of the machine bar: bed WxD, Z<z_max>, amp <= <z_amp_max>mm --
   // every value comes straight from the /api/printers entry for the
   // selected key, never a hardcoded constant.
-  function updateMachineSummary(){
+  function updateMachineSummary() {
     var el = document.getElementById('mb-summary');
-    if(!el) return;
+    if (!el) return;
     var meta = PRINTER_META[design.printer];
     var bed = (meta && meta.bed) || PRINTER_BEDS[design.printer];
     var cap = PRINTER_ZCAP[design.printer];
-    if(!bed && typeof cap !== 'number'){ el.textContent = '–'; return; }
+    if (!bed && typeof cap !== 'number') { el.textContent = '–'; return; }
     var bedTxt = bed ? (bed[0] + 'x' + bed[1]) : '?';
     var zTxt = (meta && typeof meta.z_max === 'number') ? meta.z_max : '?';
     var ampTxt = (typeof cap === 'number') ? fmtMm(cap) : '?';
@@ -1642,27 +1658,27 @@
   // whenever a printer switch either clamped values to fit or opened up new
   // headroom. Never a window.alert.
   var machineNoticeTimer = null;
-  function hideMachineNotice(){
+  function hideMachineNotice() {
     var el = document.getElementById('mb-notice');
-    if(!el) return;
-    if(machineNoticeTimer){ clearTimeout(machineNoticeTimer); machineNoticeTimer = null; }
+    if (!el) return;
+    if (machineNoticeTimer) { clearTimeout(machineNoticeTimer); machineNoticeTimer = null; }
     el.style.display = 'none';
     el.textContent = '';
   }
-  function showMachineNotice(prevName, newName, prevCap, newCap, changedCount){
+  function showMachineNotice(prevName, newName, prevCap, newCap, changedCount) {
     var el = document.getElementById('mb-notice');
-    if(!el) return;
+    if (!el) return;
     var msg, warn;
-    if(newCap < prevCap && changedCount > 0){
+    if (newCap < prevCap && changedCount > 0) {
       warn = true;
       msg = 'Switched to ' + newName + ' — amplitude ceiling ' + fmtMm(prevCap) + ' -> ' +
         fmtMm(newCap) + ' mm. ' + changedCount + (changedCount === 1 ? ' value was' : ' values were') +
         ' clamped to fit.';
-    } else if(newCap > prevCap){
+    } else if (newCap > prevCap) {
       warn = false;
       msg = 'Switched to ' + newName + ' — amplitude ceiling ' + fmtMm(prevCap) + ' -> ' +
         fmtMm(newCap) + ' mm. More headroom is available in the Texture step.';
-    } else if(changedCount > 0){
+    } else if (changedCount > 0) {
       warn = true;
       msg = 'Switched to ' + newName + ' — ' + changedCount +
         (changedCount === 1 ? ' value was' : ' values were') + ' clamped to fit.';
@@ -1685,12 +1701,12 @@
     closeBtn.className = 'mb-notice-close';
     closeBtn.setAttribute('aria-label', 'Dismiss');
     closeBtn.textContent = '×';
-    closeBtn.addEventListener('click', function(){ el.style.display = 'none'; });
+    closeBtn.addEventListener('click', function () { el.style.display = 'none'; });
     el.appendChild(span);
     el.appendChild(closeBtn);
     el.style.display = '';
-    if(machineNoticeTimer) clearTimeout(machineNoticeTimer);
-    machineNoticeTimer = setTimeout(function(){ el.style.display = 'none'; }, 8000);
+    if (machineNoticeTimer) clearTimeout(machineNoticeTimer);
+    machineNoticeTimer = setTimeout(function () { el.style.display = 'none'; }, 8000);
   }
 
   var FORMAT_LABELS = {
@@ -1700,32 +1716,27 @@
 
   // Shown only when the selected printer is custom: source format, a
   // warnings chip, and the Edit/Export/Delete row.
-  function updatePrinterMeta(){
+  function updatePrinterMeta() {
     var host = document.getElementById('printer-meta');
-    if(!host) return;
+    if (!host) return;
     var meta = PRINTER_META[design.printer];
-    if(!meta || !meta.custom){
+    if (!meta || !meta.custom) {
       host.style.display = 'none';
       return;
     }
-    
+
     var src = document.getElementById('printer-meta-source');
     var warn = document.getElementById('printer-meta-warn');
     var hasSrc = !!src;
-    var hasWarn = (meta.warnings > 0);
-    
+    var hasWarn = false; // User requested to hide the warning chip on the main page
+
     if (!hasSrc && !hasWarn) {
       host.style.display = 'none';
     } else {
       host.style.display = '';
-      if(src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
-      if(warn){
-        if(hasWarn){
-          warn.style.display = '';
-          warn.textContent = meta.warnings + (meta.warnings === 1 ? ' warning' : ' warnings');
-        } else {
-          warn.style.display = 'none';
-        }
+      if (src) src.textContent = 'from ' + (FORMAT_LABELS[meta.source_format] || meta.source_format || 'unknown source');
+      if (warn) {
+        warn.style.display = 'none';
       }
     }
   }
@@ -1735,20 +1746,20 @@
   // (bed size, caps, persistence, notices). Used wherever the old code did
   // `printerSel.value = key` without going through the change handler:
   // populating/repopulating the list and restoring a saved design.
-  function setPrinterComboValue(key){
+  function setPrinterComboValue(key) {
     var found = null;
-    printerComboOptions.forEach(function(o){
+    printerComboOptions.forEach(function (o) {
       var selected = o.key === key;
       o.el.setAttribute('aria-selected', selected ? 'true' : 'false');
-      if(selected) found = o;
+      if (selected) found = o;
     });
     printerComboLabel.textContent = found ? found.name :
       ((PRINTER_META[key] && PRINTER_META[key].name) || key || '–');
   }
 
-  function printerComboIndexOf(key){
-    for(var i = 0; i < printerComboOptions.length; i++){
-      if(printerComboOptions[i].key === key) return i;
+  function printerComboIndexOf(key) {
+    for (var i = 0; i < printerComboOptions.length; i++) {
+      if (printerComboOptions[i].key === key) return i;
     }
     return -1;
   }
@@ -1760,15 +1771,15 @@
   // lesser of 320px and whatever room is actually available, so the list
   // itself never runs off-screen even in the direction it opens toward.
   // Recomputed on resize while open.
-  function positionPrinterCombo(){
-    if(!printerComboOpenState) return;
+  function positionPrinterCombo() {
+    if (!printerComboOpenState) return;
     var btnRect = printerComboBtn.getBoundingClientRect();
     var spaceBelow = window.innerHeight - btnRect.bottom - 8;
     var spaceAbove = btnRect.top - 8;
     var openUp = spaceAbove > spaceBelow;
     var avail = Math.max(60, openUp ? spaceAbove : spaceBelow);
     printerComboList.style.maxHeight = Math.min(320, avail) + 'px';
-    if(openUp){
+    if (openUp) {
       printerComboList.style.bottom = 'calc(100% + 4px)';
       printerComboList.style.top = 'auto';
     } else {
@@ -1780,20 +1791,20 @@
   // Keyboard/hover "virtual focus" row -- distinct from the persistent
   // aria-selected value (see setPrinterComboValue). Skips group headers
   // automatically since only real options are ever indexed here.
-  function setPrinterComboActive(idx){
-    if(!printerComboOptions.length) return;
-    if(idx < 0) idx = 0;
-    if(idx > printerComboOptions.length - 1) idx = printerComboOptions.length - 1;
-    printerComboOptions.forEach(function(o){ o.el.classList.remove('active'); });
+  function setPrinterComboActive(idx) {
+    if (!printerComboOptions.length) return;
+    if (idx < 0) idx = 0;
+    if (idx > printerComboOptions.length - 1) idx = printerComboOptions.length - 1;
+    printerComboOptions.forEach(function (o) { o.el.classList.remove('active'); });
     printerComboActiveIdx = idx;
     var o = printerComboOptions[idx];
     o.el.classList.add('active');
     printerComboBtn.setAttribute('aria-activedescendant', o.el.id);
-    if(o.el.scrollIntoView) o.el.scrollIntoView({ block: 'nearest' });
+    if (o.el.scrollIntoView) o.el.scrollIntoView({ block: 'nearest' });
   }
 
-  function closePrinterCombo(){
-    if(!printerComboOpenState) return;
+  function closePrinterCombo() {
+    if (!printerComboOpenState) return;
     printerComboOpenState = false;
     printerComboList.classList.remove('open');
     printerComboBtn.setAttribute('aria-expanded', 'false');
@@ -1802,13 +1813,13 @@
     window.removeEventListener('resize', positionPrinterCombo);
   }
 
-  function onPrinterComboDocMouseDown(e){
-    if(printerCombo.contains(e.target)) return;
+  function onPrinterComboDocMouseDown(e) {
+    if (printerCombo.contains(e.target)) return;
     closePrinterCombo();
   }
 
-  function openPrinterCombo(){
-    if(printerComboOpenState || !printerComboOptions.length) return;
+  function openPrinterCombo() {
+    if (printerComboOpenState || !printerComboOptions.length) return;
     printerComboOpenState = true;
     printerComboList.classList.add('open');
     printerComboBtn.setAttribute('aria-expanded', 'true');
@@ -1818,12 +1829,12 @@
     window.addEventListener('resize', positionPrinterCombo);
   }
 
-  function printerComboTypeAhead(letter){
+  function printerComboTypeAhead(letter) {
     var lower = letter.toLowerCase();
     var n = printerComboOptions.length;
-    for(var step = 1; step <= n; step++){
+    for (var step = 1; step <= n; step++) {
       var idx = (printerComboActiveIdx + step) % n;
-      if(printerComboOptions[idx].name.toLowerCase().indexOf(lower) === 0){
+      if (printerComboOptions[idx].name.toLowerCase().indexOf(lower) === 0) {
         setPrinterComboActive(idx);
         return;
       }
@@ -1836,8 +1847,8 @@
   // chosen: clicking it, and Enter/Space on the keyboard-active row. Mirrors
   // a native <select> in not doing anything when the value doesn't actually
   // change (reselecting the current printer fires no 'change' event either).
-  function selectPrinter(key){
-    if(!PRINTER_BEDS.hasOwnProperty(key) || key === design.printer) return;
+  function selectPrinter(key) {
+    if (!PRINTER_BEDS.hasOwnProperty(key) || key === design.printer) return;
     // Snapshot the outgoing printer's name/ceiling before switching -- the
     // post-switch notice needs both the old and new numbers to say what
     // changed (B.3: clamped-down vs. more-headroom read very differently).
@@ -1847,11 +1858,11 @@
 
     design.printer = key;
     setPrinterComboValue(key);
-    if(PRINTER_BEDS[design.printer] && typeof window.setPreviewBedSize === 'function'){
+    if (PRINTER_BEDS[design.printer] && typeof window.setPreviewBedSize === 'function') {
       window.setPreviewBedSize(PRINTER_BEDS[design.printer][0], PRINTER_BEDS[design.printer][1]);
     }
-    if(PRINTER_BEDS[design.printer]){
-      design.bed_center = [PRINTER_BEDS[design.printer][0]/2, PRINTER_BEDS[design.printer][1]/2];
+    if (PRINTER_BEDS[design.printer]) {
+      design.bed_center = [PRINTER_BEDS[design.printer][0] / 2, PRINTER_BEDS[design.printer][1] / 2];
     }
     // The uploaded mesh (if any) is drawn centred on THIS bed -- a printer
     // switch moves the bed centre, so redraw it at the new position. No-op
@@ -1865,7 +1876,7 @@
 
     var newCap = PRINTER_ZCAP[design.printer];
     var newName = (PRINTER_META[design.printer] && PRINTER_META[design.printer].name) || design.printer;
-    if(typeof prevCap === 'number' && typeof newCap === 'number' && prevKey !== design.printer){
+    if (typeof prevCap === 'number' && typeof newCap === 'number' && prevKey !== design.printer) {
       showMachineNotice(prevName, newName, prevCap, newCap, changed || 0);
     }
   }
@@ -1877,39 +1888,39 @@
   // and still valid after the refetch, becomes the new selection (used right
   // after a save); otherwise the previous design.printer is kept if it still
   // exists, falling back to the server default (used after a delete).
-  function loadPrinterOptions(preferKey){
-    return apiFetch('/api/printers').then(function(r){ return r.json(); }).then(function(j){
+  function loadPrinterOptions(preferKey) {
+    return apiFetch('/api/printers').then(function (r) { return r.json(); }).then(function (j) {
       printerComboList.innerHTML = '';
       printerComboOptions = [];
       // Group like Bambu Studio / OGcode: brand-prefixed printers get their
       // own group, everything else falls into "Other"; custom printers
       // always get their own group, placed last.
       var byGroup = {}, groupOrder = [];
-      function groupFor(p){
-        if(p.custom) return 'Custom';
-        if((p.name || '').indexOf('Bambu Lab') === 0) return 'Bambu Lab';
-        if((p.name || '').indexOf('Creality') === 0) return 'Creality';
-        if((p.name || '').indexOf('Voron') === 0) return 'Voron';
+      function groupFor(p) {
+        if (p.custom) return 'Custom';
+        if ((p.name || '').indexOf('Bambu Lab') === 0) return 'Bambu Lab';
+        if ((p.name || '').indexOf('Creality') === 0) return 'Creality';
+        if ((p.name || '').indexOf('Voron') === 0) return 'Voron';
         return 'Other';
       }
       PRINTER_BEDS = {}; PRINTER_ZCAP = {}; PRINTER_SLOPE = {}; PRINTER_META = {};
-      (j.printers||[]).forEach(function(p){
+      (j.printers || []).forEach(function (p) {
         PRINTER_BEDS[p.key] = p.bed;
         PRINTER_ZCAP[p.key] = zAmpCapFor(p.z_amp_max);
         PRINTER_SLOPE[p.key] = slopeCapFor(p.quality_slope_max);
         PRINTER_META[p.key] = p;
         var gname = groupFor(p);
-        if(!byGroup[gname]){ byGroup[gname] = []; groupOrder.push(gname); }
+        if (!byGroup[gname]) { byGroup[gname] = []; groupOrder.push(gname); }
         byGroup[gname].push(p);
       });
       var customIdx = groupOrder.indexOf('Custom');
-      if(customIdx !== -1){ groupOrder.splice(customIdx, 1); groupOrder.push('Custom'); }
-      groupOrder.forEach(function(gname){
+      if (customIdx !== -1) { groupOrder.splice(customIdx, 1); groupOrder.push('Custom'); }
+      groupOrder.forEach(function (gname) {
         var head = document.createElement('div');
         head.className = 'mb-combo-group';
         head.textContent = gname;
         printerComboList.appendChild(head);
-        byGroup[gname].forEach(function(p){
+        byGroup[gname].forEach(function (p) {
           var opt = document.createElement('div');
           opt.className = 'mb-combo-option';
           opt.id = 'printer-combo-opt-' + p.key;
@@ -1917,7 +1928,7 @@
           opt.setAttribute('role', 'option');
           opt.setAttribute('aria-selected', 'false');
           opt.dataset.key = p.key;
-          opt.addEventListener('click', function(){
+          opt.addEventListener('click', function () {
             selectPrinter(p.key);
             closePrinterCombo();
             printerComboBtn.focus();
@@ -1930,7 +1941,7 @@
       var key = wanted && PRINTER_BEDS[wanted] ? wanted : (j.default || 'trident');
       design.printer = key;
       setPrinterComboValue(key);
-      if(PRINTER_BEDS[key] && typeof window.setPreviewBedSize === 'function'){
+      if (PRINTER_BEDS[key] && typeof window.setPreviewBedSize === 'function') {
         window.setPreviewBedSize(PRINTER_BEDS[key][0], PRINTER_BEDS[key][1]);
       }
       if(PRINTER_BEDS[key]) design.bed_center = [PRINTER_BEDS[key][0]/2, PRINTER_BEDS[key][1]/2];
@@ -1944,56 +1955,56 @@
     });
   }
 
-  if(printerComboBtn && printerComboList){
+  if (printerComboBtn && printerComboList) {
     // Replay first: /api/printers only reports what this session holds, so
     // asking before the replay lands would show the built-ins alone and
     // reset design.printer away from the user's custom machine.
     replayStoredPrinters()
-      .then(function(){ return loadPrinterOptions(); })
-      .catch(function(){ /* keep static option, if any */ });
+      .then(function () { return loadPrinterOptions(); })
+      .catch(function () { /* keep static option, if any */ });
 
-    printerComboBtn.addEventListener('click', function(){
-      if(printerComboOpenState) closePrinterCombo(); else openPrinterCombo();
+    printerComboBtn.addEventListener('click', function () {
+      if (printerComboOpenState) closePrinterCombo(); else openPrinterCombo();
     });
 
-    printerComboBtn.addEventListener('keydown', function(e){
-      switch(e.key){
+    printerComboBtn.addEventListener('keydown', function (e) {
+      switch (e.key) {
         case 'ArrowDown':
           e.preventDefault();
-          if(!printerComboOpenState) openPrinterCombo();
+          if (!printerComboOpenState) openPrinterCombo();
           else setPrinterComboActive(printerComboActiveIdx + 1);
           break;
         case 'ArrowUp':
           e.preventDefault();
-          if(!printerComboOpenState) openPrinterCombo();
+          if (!printerComboOpenState) openPrinterCombo();
           else setPrinterComboActive(printerComboActiveIdx - 1);
           break;
         case 'Home':
-          if(printerComboOpenState){ e.preventDefault(); setPrinterComboActive(0); }
+          if (printerComboOpenState) { e.preventDefault(); setPrinterComboActive(0); }
           break;
         case 'End':
-          if(printerComboOpenState){ e.preventDefault(); setPrinterComboActive(printerComboOptions.length - 1); }
+          if (printerComboOpenState) { e.preventDefault(); setPrinterComboActive(printerComboOptions.length - 1); }
           break;
         case 'Enter':
         case ' ':
         case 'Spacebar':
           e.preventDefault();
-          if(printerComboOpenState){
+          if (printerComboOpenState) {
             var active = printerComboOptions[printerComboActiveIdx];
-            if(active) selectPrinter(active.key);
+            if (active) selectPrinter(active.key);
             closePrinterCombo();
           } else {
             openPrinterCombo();
           }
           break;
         case 'Escape':
-          if(printerComboOpenState){ e.preventDefault(); closePrinterCombo(); }
+          if (printerComboOpenState) { e.preventDefault(); closePrinterCombo(); }
           break;
         case 'Tab':
           closePrinterCombo();
           break;
         default:
-          if(printerComboOpenState && e.key && e.key.length === 1 && /[a-z0-9]/i.test(e.key)){
+          if (printerComboOpenState && e.key && e.key.length === 1 && /[a-z0-9]/i.test(e.key)) {
             printerComboTypeAhead(e.key);
           }
       }
@@ -2007,10 +2018,10 @@
   // they edit, and saves via /api/printer/save. Mirrors the Point Edit
   // modal's open/close plumbing but uses its own .pm-* chrome (--accent
   // blue, not --accent-purple -- that is reserved for Point Edit).
-  (function(){
+  (function () {
     var modal = document.getElementById('printer-modal');
     var addBtn = document.getElementById('printer-add-btn');
-    if(!modal || !addBtn) return;
+    if (!modal || !addBtn) return;
     var card = modal.querySelector('.pm-modal-card');
     var backdrop = modal.querySelector('.pm-modal-backdrop');
     var closeBtn = document.getElementById('pm-modal-close');
@@ -2049,7 +2060,7 @@
     var allowRawEl = document.getElementById('pm-allow-raw');
 
     var PARSE_MAX_MB = 2;
-    var GROUP_ORDER = ['identity','volume','area','motion','hardware','probe','thermal','gcode'];
+    var GROUP_ORDER = ['identity', 'volume', 'area', 'motion', 'hardware', 'probe', 'thermal', 'gcode'];
     var GROUP_LABELS = {
       identity: 'Identity', volume: 'Build volume', area: 'Safe print area',
       motion: 'Motion limits', hardware: 'Hardware', probe: 'Probe & keep-out',
@@ -2063,16 +2074,17 @@
     var FIELD_SKIP = { name: 1, start_gcode: 1, end_gcode: 1, pa_gcode_style: 1, z_amp_max: 1 };
     var FIELD_BOOL = { has_probe: 1 };
     var FIELD_SELECT = { firmware: ['klipper', 'marlin', 'bambu_marlin'] };
-
     var pmState = null;
     var pmSeq = 0;
     var pmParseSeq = 0;   // guards /api/printer/parse the same way pmSeq guards /validate
     var pmDebounceTimer = null;
     var deleteConfirming = false;
 
-    function resetState(){
-      pmState = { mode: 'add', key: null, detectedFormat: null, sourceFile: null,
-        profile: null, fields: [], issues: [], strippedGcode: [], stage: 'drop' };
+    function resetState() {
+      pmState = {
+        mode: 'add', key: null, detectedFormat: null, sourceFile: null,
+        profile: null, fields: [], issues: [], strippedGcode: [], stage: 'drop'
+      };
       dropStage.style.display = '';
       reviewStage.style.display = 'none';
       clearanceStage.style.display = 'none';
@@ -2085,67 +2097,68 @@
       saveBtn.title = '';
       backBtn.style.display = 'none';
       cancelBtn.style.display = '';
+      if (deleteBtn) deleteBtn.style.display = 'none';
       resetDeleteConfirm();
     }
 
-    function showParseError(msg){ parseErrorEl.textContent = msg; parseErrorEl.style.display = ''; }
-    function hideParseError(){ parseErrorEl.style.display = 'none'; parseErrorEl.textContent = ''; }
+    function showParseError(msg) { parseErrorEl.textContent = msg; parseErrorEl.style.display = ''; }
+    function hideParseError() { parseErrorEl.style.display = 'none'; parseErrorEl.textContent = ''; }
 
-    function openModal(){
+    function openModal() {
       resetState();
       modal.style.display = 'flex';
       closeBtn.focus();
     }
-    function closeModal(){
+    function closeModal() {
       modal.style.display = 'none';
-      if(pmDebounceTimer){ clearTimeout(pmDebounceTimer); pmDebounceTimer = null; }
+      if (pmDebounceTimer) { clearTimeout(pmDebounceTimer); pmDebounceTimer = null; }
       addBtn.focus();
     }
 
     addBtn.addEventListener('click', openModal);
-    if(closeBtn) closeBtn.addEventListener('click', closeModal);
-    if(cancelBtn) cancelBtn.addEventListener('click', closeModal);
-    if(backdrop) backdrop.addEventListener('click', closeModal);
-    document.addEventListener('keydown', function(e){
-      if(modal.style.display === 'none') return;
-      if(e.key === 'Escape'){ closeModal(); return; }
-      if(e.key === 'Tab') trapFocus(e);
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+    if (backdrop) backdrop.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function (e) {
+      if (modal.style.display === 'none') return;
+      if (e.key === 'Escape') { closeModal(); return; }
+      if (e.key === 'Tab') trapFocus(e);
     });
 
-    function trapFocus(e){
+    function trapFocus(e) {
       var all = card.querySelectorAll('button, input, select, textarea, [tabindex]');
-      var focusables = Array.prototype.filter.call(all, function(el){
+      var focusables = Array.prototype.filter.call(all, function (el) {
         return !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null;
       });
-      if(!focusables.length) return;
+      if (!focusables.length) return;
       var first = focusables[0], last = focusables[focusables.length - 1];
-      if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
-      else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
 
     // ---- Stage A: drop / choose ------------------------------------------
-    dropZone.addEventListener('click', function(){ fileInput.click(); });
-    dropZone.addEventListener('keydown', function(e){
-      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+    dropZone.addEventListener('click', function () { fileInput.click(); });
+    dropZone.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
     });
-    fileInput.addEventListener('change', function(e){
-      if(e.target.files.length) handleFile(e.target.files[0]);
+    fileInput.addEventListener('change', function (e) {
+      if (e.target.files.length) handleFile(e.target.files[0]);
       e.target.value = '';
     });
-    dropZone.addEventListener('dragover', function(e){
+    dropZone.addEventListener('dragover', function (e) {
       e.preventDefault(); e.stopPropagation(); dropZone.classList.add('hot');
     });
-    dropZone.addEventListener('dragleave', function(){ dropZone.classList.remove('hot'); });
-    dropZone.addEventListener('drop', function(e){
+    dropZone.addEventListener('dragleave', function () { dropZone.classList.remove('hot'); });
+    dropZone.addEventListener('drop', function (e) {
       e.preventDefault(); e.stopPropagation();
       dropZone.classList.remove('hot');
       var files = e.dataTransfer.files;
-      if(files.length) handleFile(files[0]);
+      if (files.length) handleFile(files[0]);
     });
 
-    function handleFile(file){
+    function handleFile(file) {
       hideParseError();
-      if(file.size > PARSE_MAX_MB * 1024 * 1024){
+      if (file.size > PARSE_MAX_MB * 1024 * 1024) {
         showParseError('File too large (max ' + PARSE_MAX_MB + ' MB).');
         return;
       }
@@ -2154,18 +2167,18 @@
       var mySeq = ++pmParseSeq;
       var end = beginBusy(null, dropStatusEl, 'Parsing ' + file.name + '...');
       var reader = new FileReader();
-      reader.onload = function(e){
-        if(mySeq !== pmParseSeq) return; // superseded before the request even went out
+      reader.onload = function (e) {
+        if (mySeq !== pmParseSeq) return; // superseded before the request even went out
         apiFetch('/api/printer/parse', {
           method: 'POST',
           headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
           body: e.target.result
-        }).then(function(r){
-          return r.json().then(function(j){ return { status: r.status, body: j }; });
-        }).then(function(res){
-          if(mySeq !== pmParseSeq) return; // a newer parse's response already won
+        }).then(function (r) {
+          return r.json().then(function (j) { return { status: r.status, body: j }; });
+        }).then(function (res) {
+          if (mySeq !== pmParseSeq) return; // a newer parse's response already won
           end(null);
-          if(res.status !== 200 || !res.body || !res.body.profile){
+          if (res.status !== 200 || !res.body || !res.body.profile) {
             showParseError((res.body && res.body.error) || 'Could not parse this file.');
             return;
           }
@@ -2175,14 +2188,14 @@
           pmState.sourceFile = file.name;
           applyServerResult(res.body);
           enterReviewStage();
-        }).catch(function(err){
-          if(mySeq !== pmParseSeq) return;
+        }).catch(function (err) {
+          if (mySeq !== pmParseSeq) return;
           end(null);
           showParseError('Upload failed: ' + err);
         });
       };
-      reader.onerror = function(){
-        if(mySeq !== pmParseSeq) return;
+      reader.onerror = function () {
+        if (mySeq !== pmParseSeq) return;
         end(null);
         showParseError('Could not read file: ' + (reader.error ? reader.error.message : 'unknown error'));
       };
@@ -2190,7 +2203,7 @@
     }
 
     // ---- Stage B: review ---------------------------------------------------
-    function applyServerResult(resp){
+    function applyServerResult(resp) {
       pmState.profile = resp.profile;
       pmState.fields = resp.fields || [];
       pmState.issues = resp.issues || [];
@@ -2204,10 +2217,10 @@
     // clamped value as though the user's own config had supplied it. That is
     // exactly the distinction this dialog exists to show, so it is pinned here
     // and re-applied on every sync.
-    function snapshotProvenance(){
+    function snapshotProvenance() {
       pmState.importedSource = {};
       pmState.importedValue = {};
-      (pmState.fields || []).forEach(function(f){
+      (pmState.fields || []).forEach(function (f) {
         pmState.importedSource[f.name] = f.source;
         pmState.importedValue[f.name] = f.value;
       });
@@ -2216,32 +2229,33 @@
       // Re-validation sees a complete, in-range profile and reports almost
       // nothing, so the import-time list is kept for the saved record.
       pmState.importWarnings = (pmState.issues || [])
-        .filter(function(i){ return i.severity === 'warn'; })
-        .map(function(i){ return i.message; });
+        .filter(function (i) { return i.severity === 'warn'; })
+        .map(function (i) { return i.message; });
     }
 
     // A live clamp is always authoritative (it just happened). Otherwise a
     // value the user changed reads "edited", and an untouched one keeps
     // whatever the import said about it.
-    function effectiveSource(f){
-      if(f.source === 'clamped') return 'clamped';
-      if(!pmState.importedSource || !(f.name in pmState.importedSource)) return f.source;
+    function effectiveSource(f) {
+      if (f.source === 'clamped') return 'clamped';
+      if (!pmState.importedSource || !(f.name in pmState.importedSource)) return f.source;
       var before = pmState.importedValue[f.name];
-      if(String(f.value) !== String(before)) return 'edited';
+      if (String(f.value) !== String(before)) return 'edited';
       return pmState.importedSource[f.name];
     }
 
-    function enterReviewStage(){
+    function enterReviewStage() {
       pmState.stage = 'review';
       dropStage.style.display = 'none';
       reviewStage.style.display = '';
       clearanceStage.style.display = 'none';
-      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : 'Review imported printer';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : (pmState.mode === 'clone' ? 'Save as custom printer' : 'Review imported printer');
       formatBadge.textContent = FORMAT_LABELS[pmState.detectedFormat] || pmState.detectedFormat || 'unknown format';
       nameInput.value = (pmState.profile && pmState.profile.name) || '';
       saveBtn.textContent = 'Next';
       backBtn.style.display = 'none';
       cancelBtn.style.display = '';
+      if (deleteBtn) deleteBtn.style.display = (pmState.mode === 'edit' && pmState.key) ? '' : 'none';
       snapshotProvenance();
       renderFields();
       refreshFromState();
@@ -2249,19 +2263,19 @@
     }
 
     // ---- Stage C: non-planar clearance -- z_amp_max's one and only field --
-    function findField(name){
+    function findField(name) {
       var list = pmState.fields || [];
-      for(var i = 0; i < list.length; i++){ if(list[i].name === name) return list[i]; }
+      for (var i = 0; i < list.length; i++) { if (list[i].name === name) return list[i]; }
       return null;
     }
 
     // Keeps the clearance input + its provenance tag in sync with the latest
     // validated field (called from the initial stage entry and from every
     // debounced revalidation afterwards, same as the review-stage rows).
-    function syncClearanceField(f){
-      if(!f || !clearanceInput) return;
-      if(document.activeElement !== clearanceInput) clearanceInput.value = (f.value == null ? '' : f.value);
-      if(clearanceTag){
+    function syncClearanceField(f) {
+      if (!f || !clearanceInput) return;
+      if (document.activeElement !== clearanceInput) clearanceInput.value = (f.value == null ? '' : f.value);
+      if (clearanceTag) {
         var src = effectiveSource(f);
         clearanceTag.className = 'pm-tag pm-tag-' + src;
         clearanceTag.textContent = src;
@@ -2271,53 +2285,55 @@
       }
     }
 
-    function enterClearanceStage(){
+    function enterClearanceStage() {
       pmState.stage = 'clearance';
+      dropStage.style.display = 'none';
       reviewStage.style.display = 'none';
       clearanceStage.style.display = '';
-      titleEl.textContent = 'Non-planar clearance';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : (pmState.mode === 'clone' ? 'Save as custom printer' : 'Review imported printer');
       saveBtn.textContent = 'Save printer';
       backBtn.style.display = '';
       cancelBtn.style.display = 'none';
+      if (deleteBtn) deleteBtn.style.display = (pmState.mode === 'edit' && pmState.key) ? '' : 'none';
       syncClearanceField(findField('z_amp_max'));
-      if(clearanceInput) clearanceInput.focus();
+      if (clearanceInput) clearanceInput.focus();
     }
 
-    function backToReviewStage(){
+    function backToReviewStage() {
       pmState.stage = 'review';
       clearanceStage.style.display = 'none';
       reviewStage.style.display = '';
-      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : 'Review imported printer';
+      titleEl.textContent = pmState.mode === 'edit' ? 'Edit printer' : (pmState.mode === 'clone' ? 'Save as custom printer' : 'Review imported printer');
       saveBtn.textContent = 'Next';
       backBtn.style.display = 'none';
       cancelBtn.style.display = '';
     }
-    if(backBtn) backBtn.addEventListener('click', backToReviewStage);
+    if (backBtn) backBtn.addEventListener('click', backToReviewStage);
 
     // Rebuilds the field rows (the field SET is static -- the server always
     // returns every PrinterProfile field, just with different sources/notes
     // -- so this only needs to run once per stage-B entry; live revalidation
     // afterwards updates values/tags in place via syncFields()).
-    function renderFields(){
+    function renderFields() {
       fieldsEl.innerHTML = '';
       var byGroup = {};
-      (pmState.fields || []).forEach(function(f){
-        if(FIELD_SKIP[f.name]) return;
-        if(!byGroup[f.group]) byGroup[f.group] = [];
+      (pmState.fields || []).forEach(function (f) {
+        if (FIELD_SKIP[f.name]) return;
+        if (!byGroup[f.group]) byGroup[f.group] = [];
         byGroup[f.group].push(f);
       });
-      GROUP_ORDER.forEach(function(g){
+      GROUP_ORDER.forEach(function (g) {
         var list = byGroup[g];
-        if(!list || !list.length) return;
+        if (!list || !list.length) return;
         var h = document.createElement('div');
         h.className = 'pm-group-head';
         h.textContent = GROUP_LABELS[g] || g;
         fieldsEl.appendChild(h);
-        list.forEach(function(f){ fieldsEl.appendChild(renderFieldRow(f)); });
+        list.forEach(function (f) { fieldsEl.appendChild(renderFieldRow(f)); });
       });
     }
 
-    function renderFieldRow(f){
+    function renderFieldRow(f) {
       var row = document.createElement('div');
       row.className = 'pm-field-row';
       row.id = 'pm-field-' + f.name;
@@ -2329,14 +2345,14 @@
       var control = document.createElement('span');
       control.className = 'pm-field-control';
       var input;
-      if(FIELD_BOOL[f.name]){
+      if (FIELD_BOOL[f.name]) {
         input = document.createElement('input');
         input.type = 'checkbox';
         input.checked = !!f.value;
         input.addEventListener('change', scheduleRevalidate);
-      } else if(FIELD_SELECT[f.name]){
+      } else if (FIELD_SELECT[f.name]) {
         input = document.createElement('select');
-        FIELD_SELECT[f.name].forEach(function(opt){
+        FIELD_SELECT[f.name].forEach(function (opt) {
           var o = document.createElement('option'); o.value = opt; o.textContent = opt;
           input.appendChild(o);
         });
@@ -2360,7 +2376,7 @@
       var src0 = effectiveSource(f);
       tag.className = 'pm-tag pm-tag-' + src0;
       tag.textContent = src0;
-      if(f.note) tag.title = f.note;
+      if (f.note) tag.title = f.note;
       control.appendChild(tag);
 
       row.appendChild(control);
@@ -2371,22 +2387,22 @@
     // debounced response never steals mid-typing focus/caret) and source
     // tags in place -- does not rebuild the DOM (the field set never
     // changes shape, only values/sources/notes).
-    function syncFields(fields){
-      (fields || []).forEach(function(f){
-        if(f.name === 'start_gcode' || f.name === 'end_gcode'){
+    function syncFields(fields) {
+      (fields || []).forEach(function (f) {
+        if (f.name === 'start_gcode' || f.name === 'end_gcode') {
           var ta = f.name === 'start_gcode' ? startGcodeEl : endGcodeEl;
-          if(ta && document.activeElement !== ta) ta.value = f.value;
+          if (ta && document.activeElement !== ta) ta.value = f.value;
           return;
         }
         // Lives in the dedicated clearance stage, not a generic field row --
         // still needs to track live revalidation the same way every other
         // field does, just into its own input/tag instead of a pm-field-row.
-        if(f.name === 'z_amp_max'){ syncClearanceField(f); return; }
-        if(FIELD_SKIP[f.name]) return;
+        if (f.name === 'z_amp_max') { syncClearanceField(f); return; }
+        if (FIELD_SKIP[f.name]) return;
         var row = document.getElementById('pm-field-' + f.name);
-        if(!row) return;
+        if (!row) return;
         var tag = row.querySelector('.pm-tag');
-        if(tag){
+        if (tag) {
           var src = effectiveSource(f);
           tag.className = 'pm-tag pm-tag-' + src;
           tag.textContent = src;
@@ -2395,32 +2411,34 @@
             : (f.note || '');
         }
         var input = row.querySelector('[data-field="' + f.name + '"]');
-        if(input && document.activeElement !== input){
-          if(input.type === 'checkbox') input.checked = !!f.value;
+        if (input && document.activeElement !== input) {
+          if (input.type === 'checkbox') input.checked = !!f.value;
           else input.value = (f.value == null ? '' : f.value);
         }
       });
     }
 
-    function renderReport(){
+    function renderReport() {
       reportEl.innerHTML = '';
       var issues = pmState.issues || [];
-      if(!issues.length){
+      
+      if (!issues.length) {
         var ok = document.createElement('div');
         ok.className = 'pm-report-ok';
         ok.textContent = 'All safety checks passed.';
         reportEl.appendChild(ok);
         return;
       }
-      var errors = issues.filter(function(i){ return i.severity === 'error'; });
-      var warns = issues.filter(function(i){ return i.severity !== 'error'; });
-      if(errors.length){
+      var errors = issues.filter(function (i) { return i.severity === 'error'; });
+      var warns = issues.filter(function (i) { return i.severity !== 'error'; });
+      
+      if (errors.length) {
         reportEl.appendChild(reportHead(errors.length + ' error(s)', 'pm-report-head-error'));
-        errors.forEach(function(i){ reportEl.appendChild(reportRow(i)); });
+        errors.forEach(function (i) { reportEl.appendChild(reportRow(i)); });
       }
-      if(warns.length){
-        reportEl.appendChild(reportHead(warns.length + ' warning(s)', 'pm-report-head-warn'));
-        warns.forEach(function(i){ reportEl.appendChild(reportRow(i)); });
+      if (warns.length) {
+        reportEl.appendChild(reportHead('Warnings', 'pm-report-head-warn'));
+        warns.forEach(function (i) { reportEl.appendChild(reportRow(i)); });
       }
       reportEl.appendChild(reportCopyButton(errors, warns));
     }
@@ -2429,49 +2447,49 @@
     // to paste into a forum post or a bug report when a config will not import,
     // and they are otherwise unselectable -- each row is a <button>, so a drag
     // selects nothing.
-    function reportText(errors, warns){
+    function reportText(errors, warns) {
       var lines = [];
       var name = (nameInput && nameInput.value) || 'custom printer';
       lines.push(name + ' -- ' + (pmState.detectedFormat || 'unknown format'));
       lines.push('');
-      if(errors.length){
+      if (errors.length) {
         lines.push(errors.length + ' error(s):');
-        errors.forEach(function(i){ lines.push('  - ' + i.message); });
+        errors.forEach(function (i) { lines.push('  - ' + i.message); });
         lines.push('');
       }
-      if(warns.length){
+      if (warns.length) {
         lines.push(warns.length + ' warning(s):');
-        warns.forEach(function(i){ lines.push('  - ' + i.message); });
+        warns.forEach(function (i) { lines.push('  - ' + i.message); });
       }
       var stripped = pmState.strippedGcode || [];
-      if(stripped.length){
+      if (stripped.length) {
         lines.push('');
         lines.push(stripped.length + ' G-code line(s) removed:');
-        stripped.forEach(function(s){
+        stripped.forEach(function (s) {
           lines.push('  - ' + (typeof s === 'string' ? s : (s.line + ' -- ' + s.reason)));
         });
       }
       return lines.join('\n');
     }
 
-    function reportCopyButton(errors, warns){
+    function reportCopyButton(errors, warns) {
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'pm-report-copy';
       btn.textContent = 'Copy report';
-      btn.addEventListener('click', function(){
+      btn.addEventListener('click', function () {
         var text = reportText(errors, warns);
-        function done(ok){
+        function done(ok) {
           btn.textContent = ok ? 'Copied' : 'Press Ctrl+C';
           btn.classList.toggle('pm-report-copy-done', ok);
-          setTimeout(function(){
+          setTimeout(function () {
             btn.textContent = 'Copy report';
             btn.classList.remove('pm-report-copy-done');
           }, 2000);
         }
-        if(navigator.clipboard && navigator.clipboard.writeText){
-          navigator.clipboard.writeText(text).then(function(){ done(true); },
-                                                    function(){ fallback(text, done); });
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () { done(true); },
+            function () { fallback(text, done); });
         } else {
           fallback(text, done);
         }
@@ -2481,7 +2499,7 @@
 
     // Clipboard API needs a secure context; if it is unavailable, drop the
     // text into a selected textarea so Ctrl+C still works.
-    function fallback(text, done){
+    function fallback(text, done) {
       var ta = document.createElement('textarea');
       ta.value = text;
       ta.setAttribute('readonly', 'readonly');
@@ -2490,17 +2508,17 @@
       document.body.appendChild(ta);
       ta.select();
       var ok = false;
-      try { ok = document.execCommand('copy'); } catch(e) { ok = false; }
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
       document.body.removeChild(ta);
       done(ok);
     }
-    function reportHead(text, cls){
+    function reportHead(text, cls) {
       var h = document.createElement('div');
       h.className = 'pm-report-head ' + cls;
       h.textContent = text;
       return h;
     }
-    function reportRow(issue){
+    function reportRow(issue) {
       // A clickable "jump to field" element and the quick-fix buttons must be
       // siblings, never a button nested inside a button (invalid HTML -- the
       // browser silently un-nests it and breaks this DOM).
@@ -2508,19 +2526,19 @@
       var el = document.createElement('div');
       el.className = 'pm-issue pm-issue-' + issue.severity;
       var text = document.createElement(clickable ? 'button' : 'span');
-      if(clickable) text.type = 'button';
+      if (clickable) text.type = 'button';
       text.className = 'pm-issue-msg';
       text.textContent = issue.message;
-      if(clickable) text.addEventListener('click', function(){ focusField(issue.field); });
+      if (clickable) text.addEventListener('click', function () { focusField(issue.field); });
       el.appendChild(text);
-      if(issue.field === 'start_gcode'){
-        if(issue.message.indexOf('Add G28') !== -1){
-          el.appendChild(makeQuickFix('Insert G28', function(){
+      if (issue.field === 'start_gcode') {
+        if (issue.message.indexOf('Add G28') !== -1) {
+          el.appendChild(makeQuickFix('Insert G28', function () {
             insertStartLine('G28                ; home all axes');
           }));
         }
-        if(issue.message.indexOf('M83') !== -1){
-          el.appendChild(makeQuickFix('Insert M83', function(){
+        if (issue.message.indexOf('M83') !== -1) {
+          el.appendChild(makeQuickFix('Insert M83', function () {
             // Appended, not prepended: M83 only has to be in effect for the
             // moves WE emit, which follow the whole start block. Putting it
             // first would also switch any purge line inside the user's own
@@ -2532,7 +2550,7 @@
       }
       return el;
     }
-    function makeQuickFix(label, onClick){
+    function makeQuickFix(label, onClick) {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'pm-quickfix';
@@ -2541,46 +2559,46 @@
       return b;
     }
     // G28 must precede all motion, so homing is prepended.
-    function insertStartLine(line){
+    function insertStartLine(line) {
       startGcodeEl.value = line + '\n' + startGcodeEl.value;
       scheduleRevalidate();
     }
-    function appendStartLine(line){
+    function appendStartLine(line) {
       var cur = startGcodeEl.value.replace(/\s+$/, '');
       startGcodeEl.value = (cur ? cur + '\n' : '') + line;
       scheduleRevalidate();
     }
-    function focusField(fieldName){
-      if(fieldName === 'start_gcode'){ startGcodeEl.scrollIntoView({block:'center'}); startGcodeEl.focus(); return; }
-      if(fieldName === 'end_gcode'){ endGcodeEl.scrollIntoView({block:'center'}); endGcodeEl.focus(); return; }
+    function focusField(fieldName) {
+      if (fieldName === 'start_gcode') { startGcodeEl.scrollIntoView({ block: 'center' }); startGcodeEl.focus(); return; }
+      if (fieldName === 'end_gcode') { endGcodeEl.scrollIntoView({ block: 'center' }); endGcodeEl.focus(); return; }
       var row = document.getElementById('pm-field-' + fieldName);
-      if(!row) return;
-      row.scrollIntoView({block:'center'});
+      if (!row) return;
+      row.scrollIntoView({ block: 'center' });
       var input = row.querySelector('[data-field]');
-      if(input) input.focus();
+      if (input) input.focus();
     }
 
-    function renderStripped(){
+    function renderStripped() {
       var names = pmState.strippedGcode || [];
-      if(!names.length){ strippedBlock.style.display = 'none'; return; }
+      if (!names.length) { strippedBlock.style.display = 'none'; return; }
       strippedBlock.style.display = '';
       strippedCount.textContent = names.length;
       strippedList.innerHTML = '';
       strippedList.style.display = 'none';
       strippedToggle.setAttribute('aria-expanded', 'false');
       var reasons = {};
-      (pmState.issues || []).forEach(function(i){
+      (pmState.issues || []).forEach(function (i) {
         var m = /^removed '([^']+)': (.+)$/.exec(i.message);
-        if(m) reasons[m[1]] = m[2];
+        if (m) reasons[m[1]] = m[2];
       });
-      names.forEach(function(line){
+      names.forEach(function (line) {
         var li = document.createElement('li');
         var cmd = line.split(/\s+/)[0];
         li.textContent = line + (reasons[cmd] ? ' - ' + reasons[cmd] : '');
         strippedList.appendChild(li);
       });
     }
-    strippedToggle.addEventListener('click', function(){
+    strippedToggle.addEventListener('click', function () {
       var open = strippedList.style.display !== 'none';
       strippedList.style.display = open ? 'none' : '';
       strippedToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
@@ -2596,35 +2614,35 @@
     // that keeps coming back (re-validation never re-runs repair -- see
     // sanitize_gcode's docstring).
     var AUTO_ADDED_TAG = '[auto-added]';
-    function renderRepaired(){
-      var lines = (startGcodeEl.value || '').split('\n').filter(function(ln){
+    function renderRepaired() {
+      var lines = (startGcodeEl.value || '').split('\n').filter(function (ln) {
         return ln.indexOf(AUTO_ADDED_TAG) !== -1;
       });
-      if(!lines.length){ repairedBlock.style.display = 'none'; return; }
+      if (!lines.length) { repairedBlock.style.display = 'none'; return; }
       repairedBlock.style.display = '';
       repairedCount.textContent = lines.length;
       repairedList.innerHTML = '';
       repairedList.style.display = 'none';
       repairedToggle.setAttribute('aria-expanded', 'false');
-      lines.forEach(function(line){
+      lines.forEach(function (line) {
         var li = document.createElement('li');
         li.textContent = line.trim();
         repairedList.appendChild(li);
       });
     }
-    repairedToggle.addEventListener('click', function(){
+    repairedToggle.addEventListener('click', function () {
       var open = repairedList.style.display !== 'none';
       repairedList.style.display = open ? 'none' : '';
       repairedToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
     });
 
-    function updateSaveButtonState(){
-      var hasError = (pmState.issues || []).some(function(i){ return i.severity === 'error'; });
+    function updateSaveButtonState() {
+      var hasError = (pmState.issues || []).some(function (i) { return i.severity === 'error'; });
       saveBtn.disabled = hasError;
       saveBtn.title = hasError ? 'Fix the blocking error(s) in the safety report before saving.' : '';
     }
 
-    function refreshFromState(){
+    function refreshFromState() {
       syncFields(pmState.fields);
       renderReport();
       renderStripped();
@@ -2633,18 +2651,18 @@
     }
 
     // ---- live revalidation (debounced, out-of-order-safe) ------------------
-    function collectProfileFromForm(){
+    function collectProfileFromForm() {
       var p = {};
-      if(pmState.profile) for(var k in pmState.profile) p[k] = pmState.profile[k];
+      if (pmState.profile) for (var k in pmState.profile) p[k] = pmState.profile[k];
       p.name = nameInput.value;
       // Queried from the whole card, not just #pm-fields -- the clearance
       // stage's z_amp_max input lives outside #pm-fields (see B.5) but still
       // carries a [data-field] attribute so it is picked up the same way.
       var inputs = card.querySelectorAll('[data-field]');
-      Array.prototype.forEach.call(inputs, function(el){
+      Array.prototype.forEach.call(inputs, function (el) {
         var name = el.getAttribute('data-field');
-        if(el.type === 'checkbox') p[name] = el.checked;
-        else if(el.tagName === 'SELECT') p[name] = el.value;
+        if (el.type === 'checkbox') p[name] = el.checked;
+        else if (el.tagName === 'SELECT') p[name] = el.value;
         else p[name] = el.value === '' ? null : parseFloat(el.value);
       });
       p.start_gcode = startGcodeEl.value;
@@ -2652,34 +2670,34 @@
       return p;
     }
 
-    function scheduleRevalidate(){
-      if(pmDebounceTimer) clearTimeout(pmDebounceTimer);
+    function scheduleRevalidate() {
+      if (pmDebounceTimer) clearTimeout(pmDebounceTimer);
       pmDebounceTimer = setTimeout(runRevalidate, 350);
     }
-    function runRevalidate(){
+    function runRevalidate() {
       var mySeq = ++pmSeq;
       var body = { profile: collectProfileFromForm(), allow_raw_gcode: !!allowRawEl.checked };
       apiFetch('/api/printer/validate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-      }).then(function(r){ return r.json(); }).then(function(j){
-        if(mySeq !== pmSeq) return; // a newer request already landed -- drop this stale one
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (mySeq !== pmSeq) return; // a newer request already landed -- drop this stale one
         applyServerResult(j);
         refreshFromState();
-      }).catch(function(){ /* transient network error -- keep last known state */ });
+      }).catch(function () { /* transient network error -- keep last known state */ });
     }
-    if(nameInput) nameInput.addEventListener('input', scheduleRevalidate);
-    if(startGcodeEl) startGcodeEl.addEventListener('input', scheduleRevalidate);
-    if(endGcodeEl) endGcodeEl.addEventListener('input', scheduleRevalidate);
-    if(allowRawEl) allowRawEl.addEventListener('change', scheduleRevalidate);
-    if(clearanceInput) clearanceInput.addEventListener('input', scheduleRevalidate);
+    if (nameInput) nameInput.addEventListener('input', scheduleRevalidate);
+    if (startGcodeEl) startGcodeEl.addEventListener('input', scheduleRevalidate);
+    if (endGcodeEl) endGcodeEl.addEventListener('input', scheduleRevalidate);
+    if (allowRawEl) allowRawEl.addEventListener('change', scheduleRevalidate);
+    if (clearanceInput) clearanceInput.addEventListener('input', scheduleRevalidate);
 
     // ---- next / save ----------------------------------------------------
     // saveBtn is the one primary action button in the footer, but it means
     // two different things depending on stage: "Next" (review -> clearance)
     // or "Save printer" (clearance -> actually saves). See B.5.
-    saveBtn.addEventListener('click', function(){
-      if(saveBtn.disabled) return;
-      if(pmState.stage !== 'clearance'){
+    saveBtn.addEventListener('click', function () {
+      if (saveBtn.disabled) return;
+      if (pmState.stage !== 'clearance') {
         enterClearanceStage();
         return;
       }
@@ -2692,17 +2710,17 @@
           source_file: pmState.sourceFile || '',
           warnings: (pmState.importWarnings || []).concat(
             (pmState.issues || [])
-              .filter(function(i){ return i.severity === 'warn'; })
-              .map(function(i){ return i.message; }))
+              .filter(function (i) { return i.severity === 'warn'; })
+              .map(function (i) { return i.message; }))
         }
       };
-      if(pmState.mode === 'edit' && pmState.key) body.key = pmState.key;
+      if (pmState.mode === 'edit' && pmState.key) body.key = pmState.key;
       apiFetch('/api/printer/save', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-      }).then(function(r){
-        return r.json().then(function(j){ return { status: r.status, body: j }; });
-      }).then(function(res){
-        if(res.status !== 200 || !res.body.ok){
+      }).then(function (r) {
+        return r.json().then(function (j) { return { status: r.status, body: j }; });
+      }).then(function (res) {
+        if (res.status !== 200 || !res.body.ok) {
           // The server re-validates from scratch and is authoritative -- if
           // it disagrees with our last debounced snapshot, surface why. The
           // report that explains it lives in the review stage, so send the
@@ -2717,44 +2735,45 @@
         // validation clamps and repairs values, and storing the pre-clamp
         // version would replay something the server never accepted.
         upsertStoredPrinter(res.body.key, res.body.profile, res.body.meta);
-        return loadPrinterOptions(res.body.key).then(function(){ closeModal(); });
-      }).catch(function(err){
+        return loadPrinterOptions(res.body.key).then(function () { closeModal(); });
+      }).catch(function (err) {
         alert('Save failed: ' + err);
         updateSaveButtonState();
       });
     });
 
     // ---- edit / export / delete (sidebar meta row) --------------------
-    function openEditForKey(key){
+    function openEditForKey(key) {
       resetState();
       modal.style.display = 'flex';
       closeBtn.focus();
-      apiFetch('/api/printer?key=' + encodeURIComponent(key)).then(function(r){ return r.json(); }).then(function(j){
-        if(!j.ok){ alert('Could not load printer: ' + (j.error || 'unknown error')); closeModal(); return; }
-        pmState.mode = 'edit';
-        pmState.key = key;
-        pmState.detectedFormat = j.meta && j.meta.source_format;
+      apiFetch('/api/printer?key=' + encodeURIComponent(key)).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) { alert('Could not load printer: ' + (j.error || 'unknown error')); closeModal(); return; }
+        pmState.mode = j.custom ? 'edit' : 'clone';
+        pmState.key = j.custom ? key : null;
+        if (!j.custom && j.profile && j.profile.name) j.profile.name += '-custom';
+        pmState.detectedFormat = (j.meta && j.meta.source_format) || (j.custom ? '' : 'Preset');
         pmState.sourceFile = j.meta && j.meta.source_file;
         return apiFetch('/api/printer/validate', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ profile: j.profile, allow_raw_gcode: false })
-        }).then(function(r2){ return r2.json(); }).then(function(vr){
+        }).then(function (r2) { return r2.json(); }).then(function (vr) {
           applyServerResult(vr);
           enterReviewStage();
         });
-      }).catch(function(err){ alert('Could not load printer: ' + err); closeModal(); });
+      }).catch(function (err) { alert('Could not load printer: ' + err); closeModal(); });
     }
-    if(editBtn) editBtn.addEventListener('click', function(){ openEditForKey(design.printer); });
+    if (editBtn) editBtn.addEventListener('click', function () { openEditForKey(design.printer); });
     // Fetched rather than navigated to: a location change cannot carry the
     // session header, and the custom printer being exported only exists in
     // this session. Downloading the blob keeps the session id out of URLs
     // (and out of the browser history) as a side benefit.
-    if(exportBtn) exportBtn.addEventListener('click', function(){
+    if (exportBtn) exportBtn.addEventListener('click', function () {
       var key = design.printer;
-      apiFetch('/api/printer/export?key=' + encodeURIComponent(key)).then(function(r){
-        if(!r.ok) return r.json().then(function(j){ throw new Error(j.error || ('HTTP ' + r.status)); });
+      apiFetch('/api/printer/export?key=' + encodeURIComponent(key)).then(function (r) {
+        if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); });
         return r.blob();
-      }).then(function(blob){
+      }).then(function (blob) {
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url; a.download = key + '.json';
@@ -2762,59 +2781,99 @@
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-      }).catch(function(err){ alert('Export failed: ' + err.message); });
+      }).catch(function (err) { alert('Export failed: ' + err.message); });
     });
 
-    function resetDeleteConfirm(){
-      if(!deleteBtn) return;
+    function resetDeleteConfirm() {
+      if (!deleteBtn) return;
       deleteConfirming = false;
       deleteBtn.textContent = 'Delete';
       deleteBtn.classList.remove('pm-link-confirm');
     }
-    if(deleteBtn){
-      deleteBtn.addEventListener('click', function(){
-        if(!deleteConfirming){
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', function () {
+        if (!deleteConfirming) {
           deleteConfirming = true;
           deleteBtn.textContent = 'Confirm?';
           deleteBtn.classList.add('pm-link-confirm');
-          setTimeout(function(){ if(deleteConfirming) resetDeleteConfirm(); }, 3000);
+          setTimeout(function () { if (deleteConfirming) resetDeleteConfirm(); }, 3000);
           return;
         }
         var key = design.printer;
         resetDeleteConfirm();
         apiFetch('/api/printer/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: key })
-        }).then(function(r){ return r.json(); }).then(function(j){
-          if(!j.ok){ alert('Delete failed: ' + (j.error || 'unknown error')); return; }
+        }).then(function (r) { return r.json(); }).then(function (j) {
+          if (!j.ok) { alert('Delete failed: ' + (j.error || 'unknown error')); return; }
           // Drop the durable copy too, or the next page load would replay it
           // straight back in.
           removeStoredPrinter(key);
+          closeModal();
           // Falls back to the server default automatically -- loadPrinterOptions
           // drops any key that no longer exists in the refetched list.
           loadPrinterOptions(null);
-        }).catch(function(err){ alert('Delete failed: ' + err); });
+        }).catch(function (err) { alert('Delete failed: ' + err); });
       });
     }
   })();
 
+  // ---- Filament defaults --------------------------------------------------
+  // Default nozzle temp, bed temp, fan min/max for each built-in material key.
+  var FILAMENT_DEFAULTS = {
+    pla: { label: 'PLA', nozzle: 205, bed: 60, fanMin: 100, fanMax: 100 },
+    petg: { label: 'PETG', nozzle: 240, bed: 70, fanMin: 50, fanMax: 80 },
+    abs: { label: 'ABS', nozzle: 245, bed: 100, fanMin: 20, fanMax: 40 },
+    tpu: { label: 'TPU', nozzle: 220, bed: 45, fanMin: 30, fanMax: 60 },
+  };
+  var CUSTOM_FILAMENTS_KEY = 'trident_custom_filaments';
+
+  function loadCustomFilaments() {
+    try { return JSON.parse(localStorage.getItem(CUSTOM_FILAMENTS_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function saveCustomFilaments(arr) {
+    try { localStorage.setItem(CUSTOM_FILAMENTS_KEY, JSON.stringify(arr)); } catch (e) { }
+  }
+
   // ---- filament dropdown -------------------------------------------------
   var famSel = document.getElementById('d-filament');
-  apiFetch('/api/filaments').then(function(r){ return r.json(); }).then(function(j){
+
+  // Returns the defaults (nozzle/bed/fan) for whatever key is currently selected.
+  function getFilamentDefaults(key) {
+    if (FILAMENT_DEFAULTS[key]) return FILAMENT_DEFAULTS[key];
+    // Custom profiles stored in localStorage may carry their own temps.
+    var customs = loadCustomFilaments();
+    for (var i = 0; i < customs.length; i++) if (customs[i].key === key) return customs[i];
+    // Orca profiles: fall back to generic PLA defaults as a safe base.
+    return FILAMENT_DEFAULTS['pla'];
+  }
+
+  function populateFilamentSelect(preferKey) {
     famSel.innerHTML = '';
-    var opt = document.createElement('option'); opt.value=''; opt.textContent='(generic PLA)';
-    famSel.appendChild(opt);
-    (j.filaments||[]).forEach(function(n){
-      var o=document.createElement('option'); o.value=n; o.textContent=n; famSel.appendChild(o);
+    // 1. Built-ins
+    ['pla', 'petg', 'abs', 'tpu'].forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k; o.textContent = FILAMENT_DEFAULTS[k].label;
+      famSel.appendChild(o);
     });
-    if(design.filament){ famSel.value = design.filament; }
-    else if(j.default){ famSel.value = j.default; design.filament = j.default; }
-    syncFilamentTitle();
-  }).catch(function(){ /* no orca: keep generic PLA */ });
+    // 2. Orca server profiles (appended if available, will be loaded async)
+    // 3. Custom saved profiles
+    loadCustomFilaments().forEach(function (c) {
+      var o = document.createElement('option');
+      o.value = c.key; o.textContent = c.label;
+      famSel.appendChild(o);
+    });
+    // Restore selection
+    var key = preferKey || design.filament || 'pla';
+    if (famSel.querySelector('option[value="' + key + '"]')) famSel.value = key;
+    else famSel.value = 'pla';
+  }
+
+  populateFilamentSelect();
 
   // Orca filament names run past 400px, wider than the whole panel, and a
   // <select> cannot ellipsize its own closed state -- so mirror the selection
   // into the title attribute, making the full name reachable on hover.
-  function syncFilamentTitle(){
+  function syncFilamentTitle() {
     var o = famSel.options[famSel.selectedIndex];
     famSel.title = o ? o.textContent : '';
   }
@@ -2882,133 +2941,384 @@
   })();
   famSel.addEventListener('change', syncFilamentTitle);
 
-  // ---- filament combo: a button+list mirror of the real <select> above,
-  // same pattern as #printer-combo but flat (no groups) -- this never holds
-  // its own state, only reads/writes famSel, so the two can never disagree.
-  (function(){
-    var btn = document.getElementById('filament-combo-btn');
-    var label = document.getElementById('filament-combo-label');
-    var list = document.getElementById('filament-combo-list');
-    var combo = document.getElementById('filament-combo');
-    if(!btn || !label || !list || !combo) return;
+  function positionFilCombo() {
+    if (!filComboOpenState) return;
+    var btnRect = filComboBtn.getBoundingClientRect();
+    var spaceBelow = window.innerHeight - btnRect.bottom - 8;
+    var spaceAbove = btnRect.top - 8;
+    var openUp = spaceAbove > spaceBelow;
+    var avail = Math.max(60, openUp ? spaceAbove : spaceBelow);
+    filComboList.style.maxHeight = Math.min(320, avail) + 'px';
+    if (openUp) {
+      filComboList.style.bottom = 'calc(100% + 4px)';
+      filComboList.style.top = 'auto';
+    } else {
+      filComboList.style.top = 'calc(100% + 4px)';
+      filComboList.style.bottom = 'auto';
+    }
+  }
 
-    function syncLabel(){
-      var o = famSel.options[famSel.selectedIndex];
-      label.textContent = o ? o.textContent : '(generic PLA)';
+  function openFilCombo() {
+    if (filComboOpenState || !filComboOptions.length) return;
+    filComboOpenState = true;
+    filComboList.classList.add('open');
+    filComboBtn.setAttribute('aria-expanded', 'true');
+    positionFilCombo();
+    var idx = -1;
+    for (var i = 0; i < filComboOptions.length; i++) {
+      if (filComboOptions[i].key === famSel.value) { idx = i; break; }
     }
-    function closeList(){
-      list.classList.remove('open');
-      btn.setAttribute('aria-expanded', 'false');
+    setFilComboActive(idx);
+    document.addEventListener('mousedown', onFilComboDocMouseDown, true);
+    window.addEventListener('resize', positionFilCombo);
+  }
+
+  function closeFilCombo() {
+    if (!filComboOpenState) return;
+    filComboOpenState = false;
+    filComboList.classList.remove('open');
+    filComboBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', onFilComboDocMouseDown, true);
+    window.removeEventListener('resize', positionFilCombo);
+  }
+
+  function onFilComboDocMouseDown(e) {
+    if (!filComboList.contains(e.target) && !filComboBtn.contains(e.target)) {
+      closeFilCombo();
     }
-    function openList(){
-      list.innerHTML = '';
-      Array.prototype.forEach.call(famSel.options, function(o, i){
-        var item = document.createElement('div');
-        item.className = 'mb-combo-option';
-        item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', i === famSel.selectedIndex ? 'true' : 'false');
-        item.textContent = o.textContent;
-        item.addEventListener('click', function(){
-          famSel.selectedIndex = i;
-          famSel.dispatchEvent(new Event('change'));
-          syncLabel();
-          closeList();
-          btn.focus();
+  }
+
+  function selectFilament(key) {
+    famSel.value = key;
+    var ev = document.createEvent('HTMLEvents');
+    ev.initEvent('change', false, true);
+    famSel.dispatchEvent(ev);
+  }
+
+  if (filComboBtn) {
+    filComboBtn.addEventListener('click', function () {
+      if (filComboOpenState) closeFilCombo(); else openFilCombo();
+    });
+    filComboBtn.addEventListener('keydown', function (e) {
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          if (!filComboOpenState) openFilCombo();
+          else setFilComboActive(filComboActiveIdx + 1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if (!filComboOpenState) openFilCombo();
+          else setFilComboActive(filComboActiveIdx - 1);
+          break;
+        case 'Enter':
+        case ' ':
+          e.preventDefault();
+          if (filComboOpenState && filComboActiveIdx >= 0) {
+            selectFilament(filComboOptions[filComboActiveIdx].key);
+            closeFilCombo();
+            filComboBtn.focus();
+          } else {
+            openFilCombo();
+          }
+          break;
+        case 'Escape':
+          e.preventDefault();
+          closeFilCombo();
+          filComboBtn.focus();
+          break;
+      }
+    });
+  }
+
+  function syncFilamentBarLabel() {
+    if (!filComboLabel || !filComboList) return;
+    var o = famSel.options[famSel.selectedIndex];
+    filComboLabel.textContent = o ? (o.textContent.replace(' â˜…', '') || 'PLA') : 'PLA';
+    filComboLabel.title = filComboLabel.textContent;
+
+    filComboList.innerHTML = '';
+    filComboOptions = [];
+    for (var i = 0; i < famSel.options.length; i++) {
+      var optDom = famSel.options[i];
+      var opt = document.createElement('div');
+      opt.className = 'mb-combo-option';
+      opt.textContent = optDom.textContent;
+      opt.setAttribute('role', 'option');
+      opt.dataset.key = optDom.value;
+      (function (k) {
+        opt.addEventListener('click', function (e) {
+          e.stopPropagation();
+          selectFilament(k);
+          closeFilCombo();
+          filComboBtn.focus();
         });
-        list.appendChild(item);
-      });
-      list.classList.add('open');
-      btn.setAttribute('aria-expanded', 'true');
+      })(optDom.value);
+      filComboList.appendChild(opt);
+      filComboOptions.push({ key: optDom.value, el: opt });
     }
-    btn.addEventListener('click', function(){
-      if(list.classList.contains('open')) closeList(); else openList();
-    });
-    document.addEventListener('pointerdown', function(e){
-      if(list.classList.contains('open') && !combo.contains(e.target)) closeList();
-    });
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && list.classList.contains('open')) closeList();
-    });
-    famSel.addEventListener('change', syncLabel);
-    syncLabel();
-  })();
+  }
+  famSel.addEventListener('change', syncFilamentTitle);
+  famSel.addEventListener('change', syncFilamentBarLabel);
 
-  // ---- filament settings modal: temperature/cooling overrides for the
-  // currently selected filament (#d-filament above, plus the overhang/fan
-  // fields bound further down). No server-side custom-filament storage
-  // exists yet (unlike printers' /api/printer/*) so "Save as custom" has
-  // nothing to save into -- hidden rather than left clickable-but-inert.
-  (function(){
-    var modal = document.getElementById('filament-modal');
-    var editBtn = document.getElementById('filament-edit-btn');
-    var addBtn = document.getElementById('filament-add-btn');
-    var closeBtn = document.getElementById('fm-modal-close');
-    var doneBtn = document.getElementById('fm-modal-done');
-    var backdrop = modal ? modal.querySelector('.pm-modal-backdrop') : null;
+  // ---- Filament Edit modal ------------------------------------------------
+  (function () {
+    var fModal = document.getElementById('filament-modal');
+    var fOpenBtn = document.getElementById('filament-edit-btn');
+    var fAddBtn = document.getElementById('filament-add-btn');
+    var fBarRow = document.getElementById('filament-bar-row');
+    var fCloseBtn = document.getElementById('fm-modal-close');
+    var fDoneBtn = document.getElementById('fm-modal-done');
+    var fBackdrop = fModal ? fModal.querySelector('.pm-modal-backdrop') : null;
+    var nozzleEl = document.getElementById('d-nozzletemp');
+    var bedEl = document.getElementById('d-bedtemp');
+    var resetNozzle = document.getElementById('fm-reset-nozzle');
+    var resetBed = document.getElementById('fm-reset-bed');
     var customRow = document.getElementById('fm-custom-row');
-    if(!modal) return;
-    if(customRow) customRow.style.display = 'none';
+    var customName = document.getElementById('fm-custom-name');
+    var saveBtn = document.getElementById('fm-save-custom-btn');
+    var saveStatus = document.getElementById('fm-save-status');
+    var delBtn = document.getElementById('fm-delete-custom-btn');
+    var tooltip = document.getElementById('fm-tooltip');
+    if (!fModal || !fOpenBtn) return;
 
-    function openModal(){ modal.style.display = 'flex'; }
-    function closeModal(){ modal.style.display = 'none'; }
-    if(editBtn) editBtn.addEventListener('click', openModal);
-    if(addBtn) addBtn.addEventListener('click', openModal);
-    if(closeBtn) closeBtn.addEventListener('click', closeModal);
-    if(doneBtn) doneBtn.addEventListener('click', closeModal);
-    if(backdrop) backdrop.addEventListener('click', closeModal);
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
-    });
+    // Track whether the user has overridden temps from the filament's defaults.
+    var nozzleOverridden = (design.nozzle_temp !== null);
+    var bedOverridden = (design.bed_temp !== null);
 
-    function bindReset(btnId, fieldId){
-      var rbtn = document.getElementById(btnId);
-      var field = document.getElementById(fieldId);
-      if(!rbtn || !field) return;
-      rbtn.addEventListener('click', function(){
-        field.value = '';
-        field.dispatchEvent(new Event('input'));
-        field.dispatchEvent(new Event('change'));
+    // Fill temp inputs with the current filament's defaults (not as placeholder).
+    function applyFilamentDefaults(key, keepOverrides) {
+      var defs = getFilamentDefaults(key);
+      if (!keepOverrides || !nozzleOverridden) {
+        nozzleEl.value = defs.nozzle;
+        if (!keepOverrides) { design.nozzle_temp = null; nozzleOverridden = false; }
+      }
+      if (!keepOverrides || !bedOverridden) {
+        bedEl.value = defs.bed;
+        if (!keepOverrides) { design.bed_temp = null; bedOverridden = false; }
+      }
+      updateOverrideUI();
+    }
+
+    function updateOverrideUI() {
+      if (resetNozzle) resetNozzle.style.display = nozzleOverridden ? '' : 'none';
+      if (resetBed) resetBed.style.display = bedOverridden ? '' : 'none';
+      if (nozzleEl) nozzleEl.classList.toggle('fm-overridden', nozzleOverridden);
+      if (bedEl) bedEl.classList.toggle('fm-overridden', bedOverridden);
+      if (delBtn) delBtn.style.display = (famSel.value || '').indexOf('custom_') === 0 ? '' : 'none';
+    }
+
+    // When user types in a temp field, mark it overridden and persist.
+    function watchTempOverride(el, field, isNozzle) {
+      if (!el) return;
+      // Seed value on modal open (handled in openFModal).
+      el.addEventListener('input', function () {
+        var raw = parseFloat(el.value);
+        var isOverride = !isNaN(raw);
+        if (isNozzle) { nozzleOverridden = isOverride; }
+        else { bedOverridden = isOverride; }
+        if (isOverride) {
+          // Clamp to [min, max].
+          var lo = parseFloat(el.min), hi = parseFloat(el.max);
+          var v = raw;
+          if (isFinite(lo)) v = Math.max(lo, v);
+          if (isFinite(hi)) v = Math.min(hi, v);
+          design[field] = v;
+        } else {
+          design[field] = null;
+        }
+        persistDesign('num:' + el.id);
+        updateOverrideUI();
+        if (saveStatus) { saveStatus.style.display = 'none'; saveStatus.textContent = ''; }
+      });
+      el.addEventListener('change', function () { if (typeof endHistRun === 'function') endHistRun(); });
+    }
+    watchTempOverride(nozzleEl, 'nozzle_temp', true);
+    watchTempOverride(bedEl, 'bed_temp', false);
+
+    // Reset buttons restore the filament default.
+    function makeReset(btn, el, field, isNozzle) {
+      if (!btn || !el) return;
+      btn.addEventListener('click', function () {
+        var defs = getFilamentDefaults(famSel.value);
+        el.value = isNozzle ? defs.nozzle : defs.bed;
+        design[field] = null;
+        if (isNozzle) nozzleOverridden = false; else bedOverridden = false;
+        persistDesign();
+        updateOverrideUI();
       });
     }
-    bindReset('fm-reset-nozzle', 'd-nozzletemp');
-    bindReset('fm-reset-bed', 'd-bedtemp');
-  })();
+    makeReset(resetNozzle, nozzleEl, 'nozzle_temp', true);
+    makeReset(resetBed, bedEl, 'bed_temp', false);
 
-  // ---- shared hover tooltip for .fm-hover-target / .fm-info-btn, both
-  // marked up with data-tip (plain text) or data-tip-html (the info-button
-  // form, which needs the <br>/<code>/<span> already baked into the string).
-  // Positioning mirrors the parameter tooltip's own position() -- flip off
-  // the viewport edge rather than overflow it.
-  (function(){
-    var tip = document.getElementById('fm-tooltip');
-    if(!tip) return;
-    var targets = document.querySelectorAll('.fm-hover-target, .fm-info-btn');
-    function show(el){
-      var html = el.getAttribute('data-tip-html');
-      var text = el.getAttribute('data-tip');
-      if(html){ tip.innerHTML = html; }
-      else if(text){ tip.textContent = text; }
-      else { return; }
-      tip.style.display = 'block';
-      var ar = el.getBoundingClientRect();
-      var margin = 8, gap = 6;
-      tip.style.left = '0px'; tip.style.top = '0px';
-      var tw = tip.offsetWidth, th = tip.offsetHeight;
-      var x = ar.left;
-      if(x + tw + margin > window.innerWidth) x = window.innerWidth - tw - margin;
-      x = Math.max(margin, x);
-      var y = ar.bottom + gap;
-      if(y + th + margin > window.innerHeight) y = ar.top - gap - th;
-      tip.style.left = Math.round(x) + 'px';
-      tip.style.top = Math.round(Math.max(margin, y)) + 'px';
-    }
-    function hide(){ tip.style.display = 'none'; }
-    targets.forEach(function(el){
-      el.addEventListener('mouseenter', function(){ show(el); });
-      el.addEventListener('mouseleave', hide);
-      el.addEventListener('focus', function(){ show(el); });
-      el.addEventListener('blur', hide);
+    // Filament selector change: load defaults (keep user overrides if any).
+    famSel.addEventListener('change', function () {
+      design.filament = famSel.value;
+      persistDesign();
+      applyFilamentDefaults(famSel.value, true);
+      if (customName) {
+        var defs = getFilamentDefaults(famSel.value);
+        if (String(famSel.value).indexOf('custom_') === 0) {
+          customName.value = defs.label;
+        } else {
+          customName.value = defs.label + '-custom';
+        }
+      }
+      syncFilamentTitle();
+      syncFilamentBarLabel();
     });
+
+    // Custom filament save.
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        var name = (customName ? customName.value.trim() : '') || 'My filament';
+        var key = 'custom_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        var defs = getFilamentDefaults(famSel.value);
+        var profile = {
+          key: key, label: name,
+          nozzle: parseFloat(nozzleEl.value) || defs.nozzle,
+          bed: parseFloat(bedEl.value) || defs.bed,
+          fanMin: defs.fanMin, fanMax: defs.fanMax
+        };
+        var customs = loadCustomFilaments().filter(function (c) { return c.key !== key; });
+        customs.push(profile);
+        saveCustomFilaments(customs);
+        // Rebuild select and choose the newly saved profile.
+        var prevKey = famSel.value;
+        populateFilamentSelect(key);
+        design.filament = key;
+        design.nozzle_temp = null;
+        design.bed_temp = null;
+        syncFilamentTitle();
+        syncFilamentBarLabel();
+        persistDesign();
+        nozzleOverridden = false; bedOverridden = false;
+        updateOverrideUI();
+        if (saveStatus) {
+          saveStatus.textContent = 'Saved as "' + name + '"';
+          saveStatus.style.display = '';
+          setTimeout(function () { if (saveStatus) saveStatus.style.display = 'none'; }, 3000);
+        }
+      });
+    }
+
+    var delConfirming = false;
+    function resetDelConfirm() {
+      if (!delBtn) return;
+      delConfirming = false;
+      delBtn.textContent = 'Delete';
+      delBtn.classList.remove('pm-link-confirm');
+    }
+
+    if (delBtn) {
+      delBtn.addEventListener('click', function () {
+        if (!delConfirming) {
+          delConfirming = true;
+          delBtn.textContent = 'Confirm?';
+          delBtn.classList.add('pm-link-confirm');
+          setTimeout(function () { if (delConfirming) resetDelConfirm(); }, 3000);
+          return;
+        }
+        var customs = loadCustomFilaments().filter(function (c) { return c.key !== famSel.value; });
+        saveCustomFilaments(customs);
+        populateFilamentSelect('pla');
+        design.filament = 'pla';
+        syncFilamentTitle();
+        syncFilamentBarLabel();
+        persistDesign();
+        nozzleOverridden = false; bedOverridden = false;
+        applyFilamentDefaults('pla', false);
+        resetDelConfirm();
+      });
+    }
+
+    // â„¹ï¸ tooltip logic (shared popup positioned near each button).
+    if (tooltip) {
+      var activeInfoBtn = null;
+      function showTooltip(btn) {
+        activeInfoBtn = btn;
+        if (btn.hasAttribute('data-tip-html')) {
+          tooltip.innerHTML = btn.getAttribute('data-tip-html');
+        } else {
+          tooltip.textContent = btn.getAttribute('data-tip') || '';
+        }
+        tooltip.style.display = '';
+        tooltip.style.position = 'fixed';
+        var btnRect = btn.getBoundingClientRect();
+        var left = btnRect.left;
+        var top = btnRect.bottom + 6;
+        var tipW = 240;
+        if (left + tipW > window.innerWidth - 12) left = window.innerWidth - tipW - 12;
+        if (top + 60 > window.innerHeight) top = btnRect.top - tooltip.offsetHeight - 6;
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+      }
+      function hideTooltip() { tooltip.style.display = 'none'; activeInfoBtn = null; }
+      document.body.addEventListener('mouseenter', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) showTooltip(e.target);
+      }, true);
+      document.body.addEventListener('mouseleave', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) hideTooltip();
+      }, true);
+      document.body.addEventListener('focus', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) showTooltip(e.target);
+      }, true);
+      document.body.addEventListener('blur', function (e) {
+        if (e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) hideTooltip();
+      }, true);
+    }
+
+    function openFModal() {
+      if (typeof resetDelConfirm === 'function') resetDelConfirm();
+      // Sync temp inputs to current design state or filament defaults.
+      nozzleOverridden = (design.nozzle_temp !== null);
+      bedOverridden = (design.bed_temp !== null);
+      var defs = getFilamentDefaults(famSel.value);
+      nozzleEl.value = nozzleOverridden ? design.nozzle_temp : defs.nozzle;
+      bedEl.value = bedOverridden ? design.bed_temp : defs.bed;
+      if (customName) {
+        if (String(famSel.value).indexOf('custom_') === 0) {
+          customName.value = defs.label;
+        } else {
+          customName.value = defs.label + '-custom';
+        }
+      }
+      updateOverrideUI();
+      if (saveStatus) { saveStatus.style.display = 'none'; }
+      fModal.style.display = 'flex';
+      if (fCloseBtn) fCloseBtn.focus();
+    }
+    function closeFModal() {
+      fModal.style.display = 'none';
+      fOpenBtn.focus();
+    }
+
+    fOpenBtn.addEventListener('click', openFModal);
+    if (fAddBtn) fAddBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openFModal();
+      if (customName) customName.focus();
+    });
+    if (fBarRow) fBarRow.addEventListener('click', function (e) {
+      var combo = document.getElementById('filament-combo');
+      if (e.target === fOpenBtn || fOpenBtn.contains(e.target) ||
+        (fAddBtn && (e.target === fAddBtn || fAddBtn.contains(e.target))) ||
+        (combo && (e.target === combo || combo.contains(e.target)))) return;
+      openFModal();
+    });
+    if (fCloseBtn) fCloseBtn.addEventListener('click', closeFModal);
+    if (fDoneBtn) fDoneBtn.addEventListener('click', closeFModal);
+    if (fBackdrop) fBackdrop.addEventListener('click', closeFModal);
+    document.addEventListener('keydown', function (e) {
+      if (fModal.style.display === 'none') return;
+      if (e.key === 'Escape') closeFModal();
+    });
+
+    // Seed sidebar label and title on load.
+    syncFilamentBarLabel();
+    syncFilamentTitle();
+    // Seed temp inputs on load (without marking as overridden).
+    applyFilamentDefaults(famSel.value, true);
   })();
 
   // ---- curve editor ------------------------------------------------------
@@ -3016,8 +3326,8 @@
   // t=1.0. Points may be added (double-click), removed (right-click, min 2),
   // and dragged in both X and Y (except the pinned endpoints, which are Y-only).
   var MAX_PTS = 24;
-  function defaultsToPts(defaults, ts){
-    return defaults.map(function(v,i){ return {t: ts[i], v: v}; });
+  function defaultsToPts(defaults, ts) {
+    return defaults.map(function (v, i) { return { t: ts[i], v: v }; });
   }
   // readoutFmt (optional): function(pt) -> {mm: string, sub: string}, called
   // with the active {t,v} control point to describe it in real units. Each
@@ -3026,7 +3336,7 @@
   // rather than this shared factory guessing units. readoutElId (optional):
   // id of a persistent DOM node (with .cv-readout-mm / .cv-readout-sub
   // children) that mirrors the on-canvas label and survives mouseup.
-  function makeEditor(canvasId, lo, hi, defaults, refVal, refLabel, readoutFmt, readoutElId, hardWall){
+  function makeEditor(canvasId, lo, hi, defaults, refVal, refLabel, readoutFmt, readoutElId, hardWall) {
     var cv = document.getElementById(canvasId);
     var ctx = cv.getContext('2d');
     var W = cv.width, H = cv.height;
@@ -3071,13 +3381,13 @@
     // ceilings() near the bottom of this factory).
     var lastWallRect = null, lastSoftRect = null;
 
-    function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
-    function px(t){ return PADL + t*(W-PADL-PADR); }
-    function py(v){ return PADT + (1-(v-lo)/(hi-lo))*(H-PADT-PADB); }
-    function toVal(y){ var v = lo + (1-(y-PADT)/(H-PADT-PADB))*(hi-lo); return Math.min(hi, Math.max(lo, v)); }
-    function toT(x){ var t = (x-PADL)/(W-PADL-PADR); return Math.min(1, Math.max(0, t)); }
+    function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+    function px(t) { return PADL + t * (W - PADL - PADR); }
+    function py(v) { return PADT + (1 - (v - lo) / (hi - lo)) * (H - PADT - PADB); }
+    function toVal(y) { var v = lo + (1 - (y - PADT) / (H - PADT - PADB)) * (hi - lo); return Math.min(hi, Math.max(lo, v)); }
+    function toT(x) { var t = (x - PADL) / (W - PADL - PADR); return Math.min(1, Math.max(0, t)); }
 
-    function sortPts(){ pts.sort(function(a,b){ return a.t - b.t; }); }
+    function sortPts() { pts.sort(function (a, b) { return a.t - b.t; }); }
 
     // Fixed label-chip dimensions, shared between labelChip() itself and
     // draw()'s "is there room above the line" hint below -- kept as named
@@ -3105,14 +3415,14 @@
     // below instead. The reverse flip (prefer below, flip up if it would run
     // off the bottom) is available for symmetry even though nothing calls it
     // with preferAbove:false today, keeping the helper reusable.
-    function labelChip(text, lineY, anchorRight, preferAbove, color){
+    function labelChip(text, lineY, anchorRight, preferAbove, color) {
       ctx.font = '9px sans-serif';
       var tw = ctx.measureText(text).width;
-      var padX = 3, boxW = tw + padX*2, boxH = LABEL_BOX_H, gap = LABEL_GAP;
+      var padX = 3, boxW = tw + padX * 2, boxH = LABEL_BOX_H, gap = LABEL_GAP;
       var above = preferAbove;
       var y = above ? (lineY - gap - boxH) : (lineY + gap);
-      if(above && y < 0){ above = false; y = lineY + gap; }
-      else if(!above && y + boxH > H){ above = true; y = lineY - gap - boxH; }
+      if (above && y < 0) { above = false; y = lineY + gap; }
+      else if (!above && y + boxH > H) { above = true; y = lineY - gap - boxH; }
       // Final defensive clamp: whichever side was chosen still has to fit.
       // Reachable only in a degenerate axis (e.g. hi very close to lo) where
       // neither side has boxH of room -- better a slightly overlapping label
@@ -3124,11 +3434,11 @@
       ctx.fillRect(x, y, boxW, boxH);
       ctx.fillStyle = color;
       ctx.fillText(text, x + padX, y + boxH - 4);
-      return { x:x, y:y, w:boxW, h:boxH };
+      return { x: x, y: y, w: boxW, h: boxH };
     }
 
-    function draw(){
-      ctx.clearRect(0,0,W,H);
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
       var accent = css('--accent') || '#2997ff';
       var muted = css('--muted') || '#9aa0a6';
       var warn = css('--warn') || '#ffb454';
@@ -3143,33 +3453,33 @@
       // but a rect built from an unclamped value is exactly the kind of edge
       // case that produces an inverted rect the moment an input changes.
       var bandTop = null, bandBottom = null, clampedSoft = null;
-      if(hardWall && softVal !== null && isFinite(softVal) && softVal < hi){
+      if (hardWall && softVal !== null && isFinite(softVal) && softVal < hi) {
         clampedSoft = Math.min(hi, Math.max(lo, softVal));
         bandTop = py(hi);
         bandBottom = py(clampedSoft);
         ctx.globalAlpha = 0.16;
         ctx.fillStyle = warn;
-        ctx.fillRect(PADL, bandTop, W-PADL-PADR, Math.max(0, bandBottom - bandTop));
+        ctx.fillRect(PADL, bandTop, W - PADL - PADR, Math.max(0, bandBottom - bandTop));
         ctx.globalAlpha = 1;
       }
 
       // filled area under the polyline
       ctx.beginPath();
       ctx.moveTo(px(pts[0].t), py(pts[0].v));
-      for(var i=1;i<pts.length;i++){ ctx.lineTo(px(pts[i].t), py(pts[i].v)); }
-      ctx.lineTo(px(pts[pts.length-1].t), H-PADB);
-      ctx.lineTo(px(pts[0].t), H-PADB);
+      for (var i = 1; i < pts.length; i++) { ctx.lineTo(px(pts[i].t), py(pts[i].v)); }
+      ctx.lineTo(px(pts[pts.length - 1].t), H - PADB);
+      ctx.lineTo(px(pts[0].t), H - PADB);
       ctx.closePath();
       ctx.fillStyle = 'rgba(47,107,255,0.14)';
       ctx.fill();
       // polyline
       ctx.beginPath();
       ctx.moveTo(px(pts[0].t), py(pts[0].v));
-      for(var j=1;j<pts.length;j++){ ctx.lineTo(px(pts[j].t), py(pts[j].v)); }
+      for (var j = 1; j < pts.length; j++) { ctx.lineTo(px(pts[j].t), py(pts[j].v)); }
       ctx.strokeStyle = accent; ctx.lineWidth = 1.6; ctx.stroke();
 
       var wallRect = null, softRect = null, softLineY = null;
-      if(hardWall){
+      if (hardWall) {
         // Hard wall: always the axis top (py(hi) === PADT), on every
         // printer -- see the block comment above wallLabel's declaration.
         // Drawn muted/dashed like the old plain reference line (same visual
@@ -3177,20 +3487,20 @@
         // coordinate that can never clip: the label is placed BELOW its
         // line by labelChip()'s preferAbove:false, because "above" here
         // would be off the top of the canvas by construction.
-        ctx.setLineDash([4,3]);
+        ctx.setLineDash([4, 3]);
         ctx.beginPath();
-        ctx.moveTo(PADL, py(hi)); ctx.lineTo(W-PADR, py(hi));
+        ctx.moveTo(PADL, py(hi)); ctx.lineTo(W - PADR, py(hi));
         ctx.strokeStyle = muted; ctx.lineWidth = 1; ctx.stroke();
         ctx.setLineDash([]);
 
         // Soft limit line: a dash pattern visually distinct from the hard
         // wall's, in --warn (the reserved "risk flag" token -- a collapse
         // risk is exactly the safety state that token is for).
-        if(bandTop !== null){
+        if (bandTop !== null) {
           softLineY = bandBottom;
-          ctx.setLineDash([2,2]);
+          ctx.setLineDash([2, 2]);
           ctx.beginPath();
-          ctx.moveTo(PADL, softLineY); ctx.lineTo(W-PADR, softLineY);
+          ctx.moveTo(PADL, softLineY); ctx.lineTo(W - PADR, softLineY);
           ctx.strokeStyle = warn; ctx.lineWidth = 1; ctx.stroke();
           ctx.setLineDash([]);
         }
@@ -3201,23 +3511,23 @@
         // and is gone: no label has said "probe" in a long time (that text
         // now lives in the amp-limit hint elsewhere in the panel), so it was
         // dead code a future reader could easily mistake for live behaviour.
-        ctx.setLineDash([4,3]);
+        ctx.setLineDash([4, 3]);
         ctx.beginPath();
-        ctx.moveTo(PADL, py(refVal)); ctx.lineTo(W-PADR, py(refVal));
+        ctx.moveTo(PADL, py(refVal)); ctx.lineTo(W - PADR, py(refVal));
         ctx.strokeStyle = muted; ctx.lineWidth = 1; ctx.stroke();
         ctx.setLineDash([]);
       }
 
       // control points
-      for(var k=0;k<pts.length;k++){
-        ctx.beginPath(); ctx.arc(px(pts[k].t), py(pts[k].v), 3.2, 0, Math.PI*2);
+      for (var k = 0; k < pts.length; k++) {
+        ctx.beginPath(); ctx.arc(px(pts[k].t), py(pts[k].v), 3.2, 0, Math.PI * 2);
         ctx.fillStyle = accent; ctx.fill();
       }
 
       // labels (ASCII)
-      if(hardWall){
+      if (hardWall) {
         wallRect = labelChip(wallLabel, py(hi), true, false, muted);
-        if(softLineY !== null){
+        if (softLineY !== null) {
           // Mirrors labelChip()'s own "does above fit" test (y = lineY -
           // gap - boxH >= 0) so this hint can never disagree with what the
           // helper actually decides -- it only saves labelChip() a redundant
@@ -3228,26 +3538,26 @@
       } else {
         ctx.fillStyle = muted;
         ctx.font = '9px sans-serif';
-        ctx.fillText(refLabel, PADL+2, py(refVal)-2);
+        ctx.fillText(refLabel, PADL + 2, py(refVal) - 2);
       }
       lastWallRect = wallRect;
       lastSoftRect = softRect;
       ctx.fillStyle = muted;
       ctx.font = '9px sans-serif';
-      ctx.fillText('bottom', PADL, H-2);
-      ctx.fillText('top', W-18, H-2);
+      ctx.fillText('bottom', PADL, H - 2);
+      ctx.fillText('top', W - 18, H - 2);
       // Numeric readout for the active point (dragging, else hovered) --
       // drawn right next to the dot so the eye never has to leave the point.
       var activeIdx = dragging >= 0 ? dragging : hoverIdx;
-      if(activeIdx >= 0 && pts[activeIdx]){
+      if (activeIdx >= 0 && pts[activeIdx]) {
         var dp = pts[activeIdx];
         lastTouchedPt = dp;
         var label = readoutFmt ? readoutFmt(dp).mm
-                                : ('t=' + dp.t.toFixed(2) + ' v=' + dp.v.toFixed(2));
+          : ('t=' + dp.t.toFixed(2) + ' v=' + dp.v.toFixed(2));
         ctx.font = '10px sans-serif';
         var tw = ctx.measureText(label).width;
         var lx = px(dp.t) + 8;
-        if(lx + tw + 4 > W) lx = px(dp.t) - tw - 8;   // flip left near the right edge
+        if (lx + tw + 4 > W) lx = px(dp.t) - tw - 8;   // flip left near the right edge
         lx = Math.max(2, Math.min(lx, W - tw - 2));   // clamp inside the canvas
         var ly = py(dp.v) - 8;
         ly = Math.max(11, Math.min(ly, H - PADB - 3));
@@ -3262,8 +3572,8 @@
       // from readoutFmt on every draw(), so a redraw after design.radius /
       // design.height changes (see the d-radius/d-height hooks below) is
       // enough to bring it current -- no separate "refresh" path needed.
-      if(readoutMmEl && readoutSubEl){
-        if(lastTouchedPt && readoutFmt){
+      if (readoutMmEl && readoutSubEl) {
+        if (lastTouchedPt && readoutFmt) {
           var info = readoutFmt(lastTouchedPt);
           readoutMmEl.textContent = info.mm;
           readoutSubEl.textContent = info.sub ? ('  ' + info.sub) : '';
@@ -3274,103 +3584,103 @@
       }
     }
 
-    function nearest(mx, my){
-      var best=-1, bd=1e9;
-      for(var i=0;i<pts.length;i++){
-        var dx=px(pts[i].t)-mx, dy=py(pts[i].v)-my, d=dx*dx+dy*dy;
-        if(d<bd){ bd=d; best=i; }
+    function nearest(mx, my) {
+      var best = -1, bd = 1e9;
+      for (var i = 0; i < pts.length; i++) {
+        var dx = px(pts[i].t) - mx, dy = py(pts[i].v) - my, d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = i; }
       }
-      return bd <= 18*18 ? best : -1;
+      return bd <= 18 * 18 ? best : -1;
     }
-    function evtXY(e){
+    function evtXY(e) {
       var r = cv.getBoundingClientRect();
-      var cx = (e.touches?e.touches[0].clientX:e.clientX) - r.left;
-      var cy = (e.touches?e.touches[0].clientY:e.clientY) - r.top;
-      return [cx*(W/r.width), cy*(H/r.height)];
+      var cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+      var cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+      return [cx * (W / r.width), cy * (H / r.height)];
     }
 
-    cv.addEventListener('mousedown', function(e){
-      var p=evtXY(e); dragging = nearest(p[0], p[1]);
-      if(dragging>=0){
+    cv.addEventListener('mousedown', function (e) {
+      var p = evtXY(e); dragging = nearest(p[0], p[1]);
+      if (dragging >= 0) {
         pts[dragging].v = toVal(p[1]);
-        if(dragging !== 0 && dragging !== pts.length-1){
+        if (dragging !== 0 && dragging !== pts.length - 1) {
           pts[dragging].t = toT(p[0]);
         }
         draw(); onChange();
       }
     });
-    window.addEventListener('mousemove', function(e){
-      if(dragging<0) return;
-      var p=evtXY(e);
+    window.addEventListener('mousemove', function (e) {
+      if (dragging < 0) return;
+      var p = evtXY(e);
       // Shift = fine adjustment: ease 20% toward the cursor per event.
       var fine = e.shiftKey ? 0.2 : 1.0;
       var targetV = toVal(p[1]);
       pts[dragging].v += (targetV - pts[dragging].v) * fine;
-      if(dragging !== 0 && dragging !== pts.length-1){
+      if (dragging !== 0 && dragging !== pts.length - 1) {
         // clamp t between neighbours so ordering can't flip
-        var tMin = pts[dragging-1].t + 1e-3;
-        var tMax = pts[dragging+1].t - 1e-3;
+        var tMin = pts[dragging - 1].t + 1e-3;
+        var tMax = pts[dragging + 1].t - 1e-3;
         var t = toT(p[0]);
         var targetT = Math.min(tMax, Math.max(tMin, t));
         pts[dragging].t += (targetT - pts[dragging].t) * fine;
       }
       draw(); onChange();
     });
-    window.addEventListener('mouseup', function(){
+    window.addEventListener('mouseup', function () {
       // Stop dragging and clear the on-canvas label; the persistent readout
       // keeps showing this point (lastTouchedPt) until another is touched.
-      if(dragging >= 0){ dragging=-1; draw(); }
+      if (dragging >= 0) { dragging = -1; draw(); }
     });
 
     // Hover (no button held): cheap on a canvas this small, and it is what
     // lets the mm readout appear before the user commits to a drag.
-    cv.addEventListener('mousemove', function(e){
-      if(dragging >= 0) return;   // the window-level drag listener handles this
+    cv.addEventListener('mousemove', function (e) {
+      if (dragging >= 0) return;   // the window-level drag listener handles this
       var p = evtXY(e);
       var idx = nearest(p[0], p[1]);
-      if(idx !== hoverIdx){ hoverIdx = idx; draw(); }
+      if (idx !== hoverIdx) { hoverIdx = idx; draw(); }
     });
-    cv.addEventListener('mouseleave', function(){
-      if(hoverIdx !== -1){ hoverIdx = -1; draw(); }
+    cv.addEventListener('mouseleave', function () {
+      if (hoverIdx !== -1) { hoverIdx = -1; draw(); }
     });
 
     // Double-click: insert a new point at the clicked position.
-    cv.addEventListener('dblclick', function(e){
-      if(pts.length >= MAX_PTS) return;
+    cv.addEventListener('dblclick', function (e) {
+      if (pts.length >= MAX_PTS) return;
       var p = evtXY(e);
       var t = toT(p[0]);
       var v = toVal(p[1]);
       // Don't insert exactly on top of an existing point.
       var hit = nearest(p[0], p[1]);
-      if(hit >= 0) return;
-      pts.push({t:t, v:v});
+      if (hit >= 0) return;
+      pts.push({ t: t, v: v });
       sortPts();
       hoverIdx = -1;   // point positions shifted; stale index would mislabel
       draw(); onChange();
     });
 
     // Right-click: remove nearest point (never the endpoints, min 2 points).
-    cv.addEventListener('contextmenu', function(e){
+    cv.addEventListener('contextmenu', function (e) {
       e.preventDefault();
-      if(pts.length <= 2) return;
+      if (pts.length <= 2) return;
       var p = evtXY(e);
       var idx = nearest(p[0], p[1]);
-      if(idx <= 0 || idx >= pts.length-1) return; // can't remove endpoints
-      if(pts[idx] === lastTouchedPt) lastTouchedPt = null;
+      if (idx <= 0 || idx >= pts.length - 1) return; // can't remove endpoints
+      if (pts[idx] === lastTouchedPt) lastTouchedPt = null;
       pts.splice(idx, 1);
       hoverIdx = -1;
       draw(); onChange();
     });
 
-    var onChange = function(){};
+    var onChange = function () { };
 
     return {
       draw: draw,
-      profile: function(){
+      profile: function () {
         sortPts();
-        return pts.map(function(p){ return [p.t, p.v]; });
+        return pts.map(function (p) { return [p.t, p.v]; });
       },
-      reset: function(){
+      reset: function () {
         pts = defaultsToPts(defaults, defaultTs);
         // `defaults` is a fixed array captured at construction time, in the
         // ORIGINAL bootstrap scale (0..AMP_MAX=0.95 for the amp editor) --
@@ -3379,19 +3689,19 @@
         // z_amp_max is below the default peak (0.8mm) put points ABOVE the
         // wall: same bug setRange() already guards against for a printer
         // switch, just reachable through a different button.
-        for(var i = 0; i < pts.length; i++){
+        for (var i = 0; i < pts.length; i++) {
           pts[i].v = Math.min(hi, Math.max(lo, pts[i].v));
         }
         hoverIdx = -1; lastTouchedPt = null;
         draw(); onChange();
       },
-      setChangeHandler: function(fn){ onChange = fn; },
-      setProfile: function(prof){
-        if(!prof || prof.length < 2) return;
-        pts = prof.map(function(p){ return {t: p[0], v: p[1]}; });
+      setChangeHandler: function (fn) { onChange = fn; },
+      setProfile: function (prof) {
+        if (!prof || prof.length < 2) return;
+        pts = prof.map(function (p) { return { t: p[0], v: p[1] }; });
         sortPts();
         pts[0].t = 0;
-        pts[pts.length-1].t = 1.0;
+        pts[pts.length - 1].t = 1.0;
         // The old point objects are gone; drop any reference to them.
         hoverIdx = -1; lastTouchedPt = null;
         draw();
@@ -3406,12 +3716,12 @@
       // label -- see setHardWallLabel()/setSoftLimit() below, which is now
       // that funnel. Returns how many points actually moved, so a caller can
       // report it.
-      setRange: function(newHi){
+      setRange: function (newHi) {
         hi = newHi;
         var moved = 0;
-        for(var i = 0; i < pts.length; i++){
+        for (var i = 0; i < pts.length; i++) {
           var clamped = Math.min(hi, Math.max(lo, pts[i].v));
-          if(clamped !== pts[i].v){ pts[i].v = clamped; moved++; }
+          if (clamped !== pts[i].v) { pts[i].v = clamped; moved++; }
         }
         draw();
         return moved;
@@ -3425,9 +3735,9 @@
       // setHardWallLabel()/setSoftLimit() below for the amp editor's two-
       // ceiling model. hardWall-mode editors should use those instead --
       // this setter's plain line is never drawn while hardWall is true.
-      setRef: function(newRefVal, newRefLabel){
-        if(typeof newRefVal === 'number') refVal = newRefVal;
-        if(typeof newRefLabel === 'string') refLabel = newRefLabel;
+      setRef: function (newRefVal, newRefLabel) {
+        if (typeof newRefVal === 'number') refVal = newRefVal;
+        if (typeof newRefLabel === 'string') refLabel = newRefLabel;
         draw();
       },
       // ---- hardWall-mode ceiling setters (amp-curve only) ------------------
@@ -3438,8 +3748,8 @@
       // from the first. Called every updateSlope() run in designer.js,
       // same as setSoftLimit()/clearSoftLimit() below, so the three can
       // never disagree about which printer they are describing.
-      setHardWallLabel: function(label){
-        if(typeof label === 'string'){ wallLabel = label; draw(); }
+      setHardWallLabel: function (label) {
+        if (typeof label === 'string') { wallLabel = label; draw(); }
       },
       // Sets the advisory slope-cap line/band/label. Never touches hi/lo and
       // never re-clamps a control point -- see the CLAUDE.md-driven design
@@ -3450,14 +3760,14 @@
       // a val that has drifted above hi (e.g. the printer switched under a
       // stale slope-cap number) safely produces no band rather than a bad
       // one -- this setter does not need to duplicate that guard.
-      setSoftLimit: function(val, label){
-        if(typeof val !== 'number' || !isFinite(val)){ softVal = null; softLabel = null; draw(); return; }
+      setSoftLimit: function (val, label) {
+        if (typeof val !== 'number' || !isFinite(val)) { softVal = null; softLabel = null; draw(); return; }
         softVal = val;
         softLabel = (typeof label === 'string') ? label : '';
         draw();
       },
-      clearSoftLimit: function(){
-        if(softVal !== null){ softVal = null; softLabel = null; draw(); }
+      clearSoftLimit: function () {
+        if (softVal !== null) { softVal = null; softLabel = null; draw(); }
       },
       // Test-only introspection of the two-ceiling model's current numbers
       // AND drawn geometry -- the lines/bands/label chips are drawn to a
@@ -3466,15 +3776,17 @@
       // canvas-pixel space (the same W x H coordinate system draw() uses),
       // so a test can assert e.g. `rect.y >= 0 && rect.y + rect.h <= H` --
       // exactly the clipping regression that motivated this rework.
-      ceilings: function(){
+      ceilings: function () {
         return {
           hi: hi,
           wall: { val: hi, label: wallLabel, rect: lastWallRect },
           soft: (softVal !== null && isFinite(softVal) && softVal < hi)
-            ? { val: softVal, label: softLabel,
-                lineY: py(Math.min(hi, Math.max(lo, softVal))),
-                bandTop: py(hi), bandBottom: py(Math.min(hi, Math.max(lo, softVal))),
-                rect: lastSoftRect }
+            ? {
+              val: softVal, label: softLabel,
+              lineY: py(Math.min(hi, Math.max(lo, softVal))),
+              bandTop: py(hi), bandBottom: py(Math.min(hi, Math.max(lo, softVal))),
+              rect: lastSoftRect
+            }
             : null
         };
       }
@@ -3488,11 +3800,11 @@
   // Height mm is always t * design.height (a point's X position is the
   // height fraction); degenerate design.radius/height/nozzle (unset, zero,
   // non-finite) fall back to "--" rather than printing garbage.
-  function fmtHeightMm(t){
+  function fmtHeightMm(t) {
     var h = design.height;
     return (typeof h === 'number' && isFinite(h) && h > 0) ? (t * h) : null;
   }
-  function silReadout(pt){
+  function silReadout(pt) {
     var r = design.radius;
     var mm = (typeof r === 'number' && isFinite(r) && r > 0) ? (r * pt.v) : null;
     var h = fmtHeightMm(pt.t);
@@ -3501,7 +3813,7 @@
       sub: pt.v.toFixed(2) + 'x' + (h != null ? ('  @ H ' + h.toFixed(1) + ' mm') : '')
     };
   }
-  function ampReadout(pt){
+  function ampReadout(pt) {
     // This editor's Y axis is already millimetres of wave amplitude
     // (0..z_amp_max), not a scale factor -- no multiplication needed.
     var h = fmtHeightMm(pt.t);
@@ -3510,7 +3822,7 @@
       sub: h != null ? ('@ H ' + h.toFixed(1) + ' mm') : ''
     };
   }
-  function widthReadout(pt){
+  function widthReadout(pt) {
     // This editor's Y axis is a multiplier on the nominal bead width, which
     // is either the explicit override (design.line_width) or nozzle*1.125 --
     // the same formula the "Flow line width" hint on the Print tab uses.
@@ -3532,14 +3844,14 @@
   // wallLabel's declaration inside makeEditor(). refVal/refLabel here only
   // seed the bootstrap label shown before /api/printers resolves.
   var ampEditor = makeEditor('amp-curve', 0, AMP_MAX, [0, 0.3, 0.6, 0.8, 0.8, 0.5],
-                             PROBE_LIMIT, 'amp limit 0.95', ampReadout, 'amp-readout', true);
-  var silEditor = makeEditor('sil-curve', RAD_LO, RAD_HI, [1,1,1,1,1,1],
-                             1.0, '1.0', silReadout, 'sil-readout');
-  var widthEditor = makeEditor('width-curve', 0.6, 1.8, [1,1,1,1,1,1],
-                               1.0, '1.0', widthReadout, 'width-readout');
+    PROBE_LIMIT, 'amp limit 0.95', ampReadout, 'amp-readout', true);
+  var silEditor = makeEditor('sil-curve', RAD_LO, RAD_HI, [1, 1, 1, 1, 1, 1],
+    1.0, '1.0', silReadout, 'sil-readout');
+  var widthEditor = makeEditor('width-curve', 0.6, 1.8, [1, 1, 1, 1, 1, 1],
+    1.0, '1.0', widthReadout, 'width-readout');
   // Test-only: see makeEditor()'s ceilings() and viewer/dev_smoke.html's
   // amp-editor two-ceiling assertions.
-  window.__testAmpCeilings = function(){ return ampEditor.ceilings(); };
+  window.__testAmpCeilings = function () { return ampEditor.ceilings(); };
   // Restore persisted curve shapes.
   ampEditor.setProfile(design.amp_profile);
   silEditor.setProfile(design.radius_profile);
@@ -3548,12 +3860,12 @@
   // Curve editors report per mousemove while a point is dragged, so each gets
   // its own coalescing key: one drag of one curve = one undo entry, closed by
   // the document-level pointerup ender (these canvases have no commit event).
-  ampEditor.setChangeHandler(function(){ design.amp_profile = ampEditor.profile(); persistDesign('curve:amp'); updateSlope(); schedulePreview(); });
-  silEditor.setChangeHandler(function(){ design.radius_profile = silEditor.profile(); persistDesign('curve:sil'); updateSlope(); schedulePreview(); refreshShapeCage(); });
-  widthEditor.setChangeHandler(function(){ design.width_profile = widthEditor.profile(); persistDesign('curve:width'); schedulePreview(); });
-  document.getElementById('amp-reset').addEventListener('click', function(){ ampEditor.reset(); });
-  document.getElementById('sil-reset').addEventListener('click', function(){ silEditor.reset(); });
-  document.getElementById('width-reset').addEventListener('click', function(){ widthEditor.reset(); });
+  ampEditor.setChangeHandler(function () { design.amp_profile = ampEditor.profile(); persistDesign('curve:amp'); updateSlope(); schedulePreview(); });
+  silEditor.setChangeHandler(function () { design.radius_profile = silEditor.profile(); persistDesign('curve:sil'); updateSlope(); schedulePreview(); refreshShapeCage(); });
+  widthEditor.setChangeHandler(function () { design.width_profile = widthEditor.profile(); persistDesign('curve:width'); schedulePreview(); });
+  document.getElementById('amp-reset').addEventListener('click', function () { ampEditor.reset(); });
+  document.getElementById('sil-reset').addEventListener('click', function () { silEditor.reset(); });
+  document.getElementById('width-reset').addEventListener('click', function () { widthEditor.reset(); });
 
   // Defensive no-op in the normal case (the /api/printers fetch above always
   // resolves after this synchronous block finishes, and its own .then()
@@ -3565,11 +3877,11 @@
   updateMachineSummary();
 
   // Smooth-curve checkbox for the silhouette editor.
-  (function(){
+  (function () {
     var el = document.getElementById('sil-smooth');
-    if(!el) return;
+    if (!el) return;
     el.checked = !!design.radius_profile_smooth;
-    el.addEventListener('change', function(){
+    el.addEventListener('change', function () {
       design.radius_profile_smooth = el.checked;
       persistDesign();
       updateSlope();
@@ -3583,12 +3895,12 @@
   // Ensures design.cage is a valid rows x cols grid of scale factors (all 1.0
   // = no deformation). Called before the cage is shown or reset so old saves
   // / fresh designs always get a usable grid.
-  function ensureCage(){
-    if(Array.isArray(design.cage) && design.cage.length && Array.isArray(design.cage[0])) return;
+  function ensureCage() {
+    if (Array.isArray(design.cage) && design.cage.length && Array.isArray(design.cage[0])) return;
     var grid = [];
-    for(var i = 0; i < CAGE_ROWS; i++){
+    for (var i = 0; i < CAGE_ROWS; i++) {
       var row = [];
-      for(var j = 0; j < CAGE_COLS; j++) row.push(1.0);
+      for (var j = 0; j < CAGE_COLS; j++) row.push(1.0);
       grid.push(row);
     }
     design.cage = grid;
@@ -3597,43 +3909,43 @@
   // Linear sample of a [t,v] control-point profile (same shape as
   // silEditor.profile()) at an arbitrary t -- used to compute the per-row
   // base radius (silhouette scale) the cage handles sit on.
-  function linearSample(profile, t){
-    if(!profile || !profile.length) return 1.0;
-    if(t <= profile[0][0]) return profile[0][1];
-    for(var i = 1; i < profile.length; i++){
-      if(t <= profile[i][0]){
-        var t0 = profile[i-1][0], v0 = profile[i-1][1];
-        var t1 = profile[i][0],   v1 = profile[i][1];
+  function linearSample(profile, t) {
+    if (!profile || !profile.length) return 1.0;
+    if (t <= profile[0][0]) return profile[0][1];
+    for (var i = 1; i < profile.length; i++) {
+      if (t <= profile[i][0]) {
+        var t0 = profile[i - 1][0], v0 = profile[i - 1][1];
+        var t1 = profile[i][0], v1 = profile[i][1];
         var frac = (t1 - t0) < 1e-9 ? 1.0 : (t - t0) / (t1 - t0);
         return v0 + frac * (v1 - v0);
       }
     }
-    return profile[profile.length-1][1];
+    return profile[profile.length - 1][1];
   }
 
   // Rebuilds the on-model cage handle group from the current design.radius /
   // silhouette / design.cage state. Skipped while a drag is in progress
   // (window.__silDragActive) so a preview refresh mid-drag doesn't rebuild
   // the group out from under the active handle.
-  function refreshShapeCage(){
-    if(!design.sil3d || !window.showShapeCage) return;
-    if(window.__silDragActive) return;
+  function refreshShapeCage() {
+    if (!design.sil3d || !window.showShapeCage) return;
+    if (window.__silDragActive) return;
     ensureCage();
     var cage = design.cage;
     var rows = cage.length, cols = cage[0].length;
     var silProfile = silEditor.profile();
     var base = [];
-    for(var i = 0; i < rows; i++){
-      var t = rows > 1 ? i/(rows-1) : 0;
+    for (var i = 0; i < rows; i++) {
+      var t = rows > 1 ? i / (rows - 1) : 0;
       var silScale = linearSample(silProfile, t);
       var row = [];
-      for(var j = 0; j < cols; j++) row.push(design.radius * silScale);
+      for (var j = 0; j < cols; j++) row.push(design.radius * silScale);
       base.push(row);
     }
     window.showShapeCage({
       rows: rows, cols: cols, height: design.height,
       base: base, scales: cage
-    }, function(changes){
+    }, function (changes) {
       // A cage-handle drag happens on the 3D viewport canvas, outside the
       // side-panel arming listeners -- so arm the live preview here or the
       // blue draft would never draw for a user who only touched the model.
@@ -3641,7 +3953,7 @@
       // fires this once per move event, not once per handle) -- write every
       // entry, then persist/schedule exactly once.
       previewArmed = true;
-      for(var k = 0; k < changes.length; k++){
+      for (var k = 0; k < changes.length; k++) {
         design.cage[changes[k].i][changes[k].j] = changes[k].scale;
       }
       // One cage drag = one undo entry (fires per move event, like the curve
@@ -3656,13 +3968,13 @@
 
   // True when any cage handle is off the neutral 1.0, i.e. there is actually
   // something for "Reset all points" to undo.
-  function cageHasEdits(){
-    if(!Array.isArray(design.cage)) return false;
-    for(var i = 0; i < design.cage.length; i++){
+  function cageHasEdits() {
+    if (!Array.isArray(design.cage)) return false;
+    for (var i = 0; i < design.cage.length; i++) {
       var row = design.cage[i];
-      if(!Array.isArray(row)) continue;
-      for(var j = 0; j < row.length; j++){
-        if(Math.abs(row[j] - 1.0) > 1e-6) return true;
+      if (!Array.isArray(row)) continue;
+      for (var j = 0; j < row.length; j++) {
+        if (Math.abs(row[j] - 1.0) > 1e-6) return true;
       }
     }
     return false;
@@ -3671,40 +3983,40 @@
   // Enables "Reset all points" only when edits exist. Runs on load too, so a
   // design restored from localStorage with deformation already in it shows an
   // enabled button before the user has touched anything.
-  function updateCageResetState(){
+  function updateCageResetState() {
     var el = document.getElementById('cage-reset');
-    if(el) el.disabled = !cageHasEdits();
+    if (el) el.disabled = !cageHasEdits();
   }
 
   // Warns (in the warning color) when freeform mode is active over the
   // 'loops' pattern, since the per-point cage deformation doesn't apply to
   // loop fabric geometry.
-  function updateCageNote(){
+  function updateCageNote() {
     var noteEl = document.getElementById('cage-note');
     // Mirrors --warn in style.css (safety/constraint-state color, not decoration).
-    if(noteEl) noteEl.style.color = (design.pattern === 'loops') ? '#ffb454' : '';
+    if (noteEl) noteEl.style.color = (design.pattern === 'loops') ? '#ffb454' : '';
   }
 
   // ---- Silhouette mode: Symmetrical (curve editor) vs Freeform/3D (cage) ----
   // NOTE: the visible label is "Freeform (3D)" but the persisted mode value
   // stays "asym" -- it is written into saved designs and localStorage, so
   // renaming it would orphan every design already on disk.
-  function activateSilMode(name){
-    document.querySelectorAll('.sil-mode-btn').forEach(function(btn){
+  function activateSilMode(name) {
+    document.querySelectorAll('.sil-mode-btn').forEach(function (btn) {
       var on = btn.getAttribute('data-silmode') === name;
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
     var symPanel = document.getElementById('sil-sym-panel');
     var asymPanel = document.getElementById('sil-asym-panel');
-    if(symPanel) symPanel.style.display = name === 'asym' ? 'none' : '';
-    if(asymPanel) asymPanel.style.display = name === 'asym' ? '' : 'none';
+    if (symPanel) symPanel.style.display = name === 'asym' ? 'none' : '';
+    if (asymPanel) asymPanel.style.display = name === 'asym' ? '' : 'none';
     design.sil3d = (name === 'asym');
-    if(name === 'asym'){
+    if (name === 'asym') {
       ensureCage();
       refreshShapeCage();
       updateCageNote();
-    } else if(window.hideShapeCage){
+    } else if (window.hideShapeCage) {
       window.hideShapeCage();
     }
     // Covers entering freeform mode on a restored design, and keeps the
@@ -3712,9 +4024,9 @@
     updateCageResetState();
   }
 
-  (function(){
-    document.querySelectorAll('.sil-mode-btn').forEach(function(btn){
-      btn.addEventListener('click', function(){
+  (function () {
+    document.querySelectorAll('.sil-mode-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
         previewArmed = true;   // switching silhouette mode is a design action
         design.sil_mode = btn.getAttribute('data-silmode');
         activateSilMode(design.sil_mode);   // sets design.sil3d before we persist it
@@ -3726,13 +4038,13 @@
   })();
 
   // Reset-cage button: clears all deformation back to 1.0 everywhere.
-  (function(){
+  (function () {
     var el = document.getElementById('cage-reset');
-    if(!el) return;
-    el.addEventListener('click', function(){
+    if (!el) return;
+    el.addEventListener('click', function () {
       ensureCage();
-      for(var i = 0; i < design.cage.length; i++){
-        for(var j = 0; j < design.cage[i].length; j++) design.cage[i][j] = 1.0;
+      for (var i = 0; i < design.cage.length; i++) {
+        for (var j = 0; j < design.cage[i].length; j++) design.cage[i][j] = 1.0;
       }
       // Arm the preview, exactly as the cage-drag callback does. schedulePreview
       // is a no-op while previewArmed is false, and that flag starts false on
@@ -3753,40 +4065,40 @@
   // selection size. Guarded with typeof since viewer.js may call it before
   // this file has run (module load order), or not at all if viewer.js failed
   // to load.
-  window.onCageSelectionChange = function(n){
+  window.onCageSelectionChange = function (n) {
     var el = document.getElementById('cage-selcount');
-    if(el){
+    if (el) {
       el.textContent = n === 0 ? 'No points selected'
         : (n === 1 ? '1 point selected' : (n + ' points selected'));
       el.classList.toggle('has-sel', n > 0);
     }
     var btn = document.getElementById('cage-reset-sel');
-    if(btn) btn.disabled = (n === 0);
+    if (btn) btn.disabled = (n === 0);
     var clr = document.getElementById('cage-clear-sel');
-    if(clr) clr.disabled = (n === 0);
+    if (clr) clr.disabled = (n === 0);
   };
 
   // Clear-selection button: a pointer-only path to the same thing Esc does,
   // for when a keyboard shortcut isn't reaching the viewport listener.
-  (function(){
+  (function () {
     var el = document.getElementById('cage-clear-sel');
-    if(!el) return;
-    el.addEventListener('click', function(){
-      if(window.clearCageSelection) window.clearCageSelection();
+    if (!el) return;
+    el.addEventListener('click', function () {
+      if (window.clearCageSelection) window.clearCageSelection();
     });
   })();
 
   // Reset-selected-points button: resets only the handles in the current
   // cage selection back to 1.0, leaving the rest of the cage untouched.
-  (function(){
+  (function () {
     var el = document.getElementById('cage-reset-sel');
-    if(!el) return;
-    el.addEventListener('click', function(){
-      if(!window.getCageSelection) return;
+    if (!el) return;
+    el.addEventListener('click', function () {
+      if (!window.getCageSelection) return;
       var sel = window.getCageSelection();
-      if(!sel.length) return;
+      if (!sel.length) return;
       ensureCage();
-      for(var k = 0; k < sel.length; k++) design.cage[sel[k].i][sel[k].j] = 1.0;
+      for (var k = 0; k < sel.length; k++) design.cage[sel[k].i][sel[k].j] = 1.0;
       previewArmed = true;   // same reason as the reset-all handler above
       persistDesign();
       schedulePreview();
@@ -3805,14 +4117,14 @@
   // machine limit. See PRINTER_SLOPE / activeSlopeLimit() near the top of
   // this file. z_amp_max caps amplitude outright; THIS caps printability of
   // whatever amplitude is still inside that ceiling.
-  function lerpProfile(prof, t){
-    for(var i=1;i<prof.length;i++){
-      if(t <= prof[i][0]){
-        var t0=prof[i-1][0], v0=prof[i-1][1], t1=prof[i][0], v1=prof[i][1];
-        return t1-t0 < 1e-9 ? v1 : v0 + (t-t0)/(t1-t0)*(v1-v0);
+  function lerpProfile(prof, t) {
+    for (var i = 1; i < prof.length; i++) {
+      if (t <= prof[i][0]) {
+        var t0 = prof[i - 1][0], v0 = prof[i - 1][1], t1 = prof[i][0], v1 = prof[i][1];
+        return t1 - t0 < 1e-9 ? v1 : v0 + (t - t0) / (t1 - t0) * (v1 - v0);
       }
     }
-    return prof[prof.length-1][1];
+    return prof[prof.length - 1][1];
   }
 
   // The amplitude at which the slope check itself trips, for the CURRENT
@@ -3832,28 +4144,28 @@
   // radius the cap was not computed from. Mirrors serve.py's
   // _min_wall_radius() so the browser and the server explain a flagged
   // design with the same two numbers.
-  function minWallRadius(radius, sil){
+  function minWallRadius(radius, sil) {
     var minSil = sil[0][1];
-    for(var i=1;i<sil.length;i++){ if(sil[i][1] < minSil) minSil = sil[i][1]; }
+    for (var i = 1; i < sil.length; i++) { if (sil[i][1] < minSil) minSil = sil[i][1]; }
     var r = (typeof radius === 'number' && isFinite(radius)) ? radius : 0;
     return r * minSil;
   }
-  function slopeAmpCap(slopeLimit, radius, waves, sil){
-    if(!waves) return null;
+  function slopeAmpCap(slopeLimit, radius, waves, sil) {
+    if (!waves) return null;
     return slopeLimit * minWallRadius(radius, sil) / waves;
   }
 
-  function updateSlope(){
+  function updateSlope() {
     var el = document.getElementById('slope-read');
-    if(!el) return;
+    if (!el) return;
     var waves = Math.round(design.z_waves);
     var radius = design.radius;
     var amp = ampEditor.profile(), sil = silEditor.profile();
     var slopeLimit = activeSlopeLimit();
     var peak = 0;
-    for(var t=0; t<=1.0001; t+=0.02){
+    for (var t = 0; t <= 1.0001; t += 0.02) {
       var s = lerpProfile(amp, t) * waves / Math.max(radius * lerpProfile(sil, t), 1e-6);
-      if(s > peak) peak = s;
+      if (s > peak) peak = s;
     }
     var over = peak > slopeLimit + 1e-9;
 
@@ -3864,9 +4176,9 @@
     // existed). Only computed when the design is actually over the limit --
     // there is nothing to explain otherwise.
     var hint = '';
-    if(over){
+    if (over) {
       var ampCapHint = slopeAmpCap(slopeLimit, radius, waves, sil);
-      if(ampCapHint != null && isFinite(ampCapHint)){
+      if (ampCapHint != null && isFinite(ampCapHint)) {
         hint = ' (' + waves + ' waves at r' +
           minWallRadius(radius, sil).toFixed(0) + ' caps amp at ' +
           ampCapHint.toFixed(2) + 'mm)';
@@ -3892,12 +4204,12 @@
     // and never re-clamp a control point, unlike setRange(), because this
     // ceiling is print-quality advice the server warns about but still
     // generates past, not a hard stop.
-    if(typeof ampEditor !== 'undefined' && ampEditor){
+    if (typeof ampEditor !== 'undefined' && ampEditor) {
       var zCap = PRINTER_ZCAP[design.printer];
-      if(typeof zCap === 'number' && isFinite(zCap)){
+      if (typeof zCap === 'number' && isFinite(zCap)) {
         ampEditor.setHardWallLabel('amp limit ' + fmtMm(zCap));
         var slopeCap = slopeAmpCap(slopeLimit, radius, waves, sil);
-        if(slopeCap != null && isFinite(slopeCap) && slopeCap < zCap){
+        if (slopeCap != null && isFinite(slopeCap) && slopeCap < zCap) {
           ampEditor.setSoftLimit(slopeCap, 'slope cap ' + slopeCap.toFixed(2) + ' (' + waves + ' waves)');
         } else {
           ampEditor.clearSoftLimit();
@@ -3923,44 +4235,44 @@
   // Only the value the DESIGN uses is clamped, not the text being typed, so an
   // intermediate "0" on the way to "0.9" is not fought. The field snaps to the
   // clamped number on commit (change/blur).
-  function bindNumber(id, field, isInt){
+  function bindNumber(id, field, isInt) {
     var el = document.getElementById(id);
-    if(!el) return;
+    if (!el) return;
     el.value = design[field];
-    function applyValue(commit){
+    function applyValue(commit) {
       var raw = parseFloat(el.value);
-      if(Number.isNaN(raw)) return;
+      if (Number.isNaN(raw)) return;
       var v = raw;
       var lo = parseFloat(el.min), hi = parseFloat(el.max);
-      if(isFinite(lo)) v = Math.max(lo, v);
-      if(isFinite(hi)) v = Math.min(hi, v);
-      if(isInt) v = Math.round(v);
+      if (isFinite(lo)) v = Math.max(lo, v);
+      if (isFinite(hi)) v = Math.min(hi, v);
+      if (isInt) v = Math.round(v);
       design[field] = v;
       // --warn is reserved for safety states, and style.css names "clamp
       // events" among them -- a value over this printer's ceiling is one.
       el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
-      if(commit){ el.value = v; el.classList.remove('out-of-range'); }
+      if (commit) { el.value = v; el.classList.remove('out-of-range'); }
       // Typing "3" then "0" into a radius, or dragging a range slider, is ONE
       // edit: coalesce the whole stream under this field's id so a single
       // Ctrl+Z returns to the value the field held before the edit started.
       // The commit (change/blur, or a spinner click) folds into the same entry
       // and then closes the run.
       persistDesign('num:' + id);
-      if(commit) endHistRun();
+      if (commit) endHistRun();
       updateSlope();
       schedulePreview();
     }
-    el.addEventListener('input', function(){ applyValue(false); });
-    el.addEventListener('change', function(){ applyValue(true); });
+    el.addEventListener('input', function () { applyValue(false); });
+    el.addEventListener('change', function () { applyValue(true); });
   }
   // `coalesceKey` (optional) lets a caller that adds a SECOND listener to the
   // same change event (bindLoopSelect, which also flips the style dropdown
   // to "Custom") fold both writes into one undo entry instead of leaving two.
-  function bindSelect(id, field, coalesceKey){
+  function bindSelect(id, field, coalesceKey) {
     var el = document.getElementById(id);
-    if(!el) return;
-    if(design[field]) el.value = design[field];
-    el.addEventListener('change', function(){
+    if (!el) return;
+    if (design[field]) el.value = design[field];
+    el.addEventListener('change', function () {
       design[field] = el.value;
       persistDesign(coalesceKey || null);
       schedulePreview();
@@ -4063,11 +4375,11 @@
   // showing under Texture until the user happened to touch a curve point.
   // draw() re-invokes each editor's formatter against the CURRENT design
   // values every time, so a bare redraw is enough; no extra state to sync.
-  (function(){
+  (function () {
     var radiusEl = document.getElementById('d-radius');
     var heightEl = document.getElementById('d-height');
-    if(radiusEl) radiusEl.addEventListener('input', function(){ silEditor.draw(); });
-    if(heightEl) heightEl.addEventListener('input', function(){
+    if (radiusEl) radiusEl.addEventListener('input', function () { silEditor.draw(); });
+    if (heightEl) heightEl.addEventListener('input', function () {
       ampEditor.draw(); silEditor.draw(); widthEditor.draw();
       syncMeshBaseBlendMax();
     });
@@ -4298,9 +4610,9 @@
   })();
   (function(){
     var el = document.getElementById('d-flh');
-    if(!el) return;
-    if(design.first_layer_height != null) el.value = design.first_layer_height;
-    el.addEventListener('input', function(){
+    if (!el) return;
+    if (design.first_layer_height != null) el.value = design.first_layer_height;
+    el.addEventListener('input', function () {
       var v = parseFloat(el.value);
       design.first_layer_height = (el.value === '' || Number.isNaN(v)) ? null : v;
       persistDesign('num:d-flh');
@@ -4322,15 +4634,15 @@
   bindNumber('d-pfadein', 'pattern_fade_in');
   bindNumber('d-pfadeout', 'pattern_fade_out');
 
-  (function(){
+  (function () {
     var en = document.getElementById('d-palternate');
     var hint = document.getElementById('lattice-hint');
-    if(!en) return;
+    if (!en) return;
     en.checked = !!design.pattern_alternate;
-    if(hint) hint.style.display = en.checked ? 'block' : 'none';
-    en.addEventListener('change', function(){
+    if (hint) hint.style.display = en.checked ? 'block' : 'none';
+    en.addEventListener('change', function () {
       design.pattern_alternate = en.checked;
-      if(hint) hint.style.display = en.checked ? 'block' : 'none';
+      if (hint) hint.style.display = en.checked ? 'block' : 'none';
       persistDesign();
       schedulePreview();
     });
@@ -4339,73 +4651,87 @@
   // Loop texture controls.
 
   var LOOP_STYLES = {
-    tiedspikes:{ loop_spacing_mm:4.0, loop_per_turn:0, loop_align:'stagger',
-                 loop_row:2.5, loop_up:3.2, loop_out:0,
-                 loop_flow:1.2, loop_speed:10, loop_cuff:3,
-                 loop_wave_amp:0, loop_waves:12,
-                 // Peak pause (dwell) without a retract lets the tip ooze at full
-                 // melt pressure for the whole hold -- by the time the descent
-                 // resumes, pressure has bled off and the first several segments
-                 // come out starved (looks like "no extrusion until the bottom").
-                 // Pairing the pause with a retract/unretract keeps pressure
-                 // controlled through the hold instead.
-                 loop_mode:'spike', loop_dwell:400, loop_lean:20, loop_coast:0.8,
-                 loop_retract:0.3 },
-    chainmail: { loop_spacing_mm:4.0, loop_per_turn:0, loop_align:'stagger',
-                 loop_row:2.5, loop_up:3.5, loop_out:0.5,
-                 loop_flow:1.2, loop_speed:10, loop_cuff:3,
-                 loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    fineknit:  { loop_spacing_mm:2.2, loop_per_turn:0, loop_align:'stagger',
-                 loop_row:1.8, loop_up:2.4, loop_out:0.3,
-                 loop_flow:1.1, loop_speed:10, loop_cuff:3,
-                 loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    opennet:   { loop_spacing_mm:10.0, loop_per_turn:0, loop_align:'stagger',
-                 loop_row:3.2, loop_up:3.6, loop_out:0.8,
-                 loop_flow:1.3, loop_speed:9, loop_cuff:3,
-                 loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    ribs:      { loop_spacing_mm:5.0, loop_per_turn:0, loop_align:'column',
-                 loop_row:2.2, loop_up:3.0, loop_out:0.5,
-                 loop_flow:1.2, loop_speed:10, loop_cuff:3,
-                 loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 },
-    zigzag:    { loop_spacing_mm:5.0, loop_per_turn:0, loop_align:'stagger',
-                 loop_row:3.0, loop_up:3.4, loop_out:0.6,
-                 loop_flow:1.25, loop_speed:9, loop_cuff:3,
-                 loop_wave_amp:1.2, loop_waves:10,
-                 loop_mode:'dip', loop_dwell:0 },
-    scallops:  { loop_spacing_mm:8.0, loop_per_turn:0, loop_align:'stagger',
-                 loop_row:4.0, loop_up:5.0, loop_out:1.0,
-                 loop_flow:1.3, loop_speed:9, loop_cuff:3,
-                 loop_wave_amp:0, loop_waves:12,
-                 loop_mode:'dip', loop_dwell:0 }
+    tiedspikes: {
+      loop_spacing_mm: 4.0, loop_per_turn: 0, loop_align: 'stagger',
+      loop_row: 2.5, loop_up: 3.2, loop_out: 0,
+      loop_flow: 1.2, loop_speed: 10, loop_cuff: 3,
+      loop_wave_amp: 0, loop_waves: 12,
+      // Peak pause (dwell) without a retract lets the tip ooze at full
+      // melt pressure for the whole hold -- by the time the descent
+      // resumes, pressure has bled off and the first several segments
+      // come out starved (looks like "no extrusion until the bottom").
+      // Pairing the pause with a retract/unretract keeps pressure
+      // controlled through the hold instead.
+      loop_mode: 'spike', loop_dwell: 400, loop_lean: 20, loop_coast: 0.8,
+      loop_retract: 0.3
+    },
+    chainmail: {
+      loop_spacing_mm: 4.0, loop_per_turn: 0, loop_align: 'stagger',
+      loop_row: 2.5, loop_up: 3.5, loop_out: 0.5,
+      loop_flow: 1.2, loop_speed: 10, loop_cuff: 3,
+      loop_wave_amp: 0, loop_waves: 12,
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    fineknit: {
+      loop_spacing_mm: 2.2, loop_per_turn: 0, loop_align: 'stagger',
+      loop_row: 1.8, loop_up: 2.4, loop_out: 0.3,
+      loop_flow: 1.1, loop_speed: 10, loop_cuff: 3,
+      loop_wave_amp: 0, loop_waves: 12,
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    opennet: {
+      loop_spacing_mm: 10.0, loop_per_turn: 0, loop_align: 'stagger',
+      loop_row: 3.2, loop_up: 3.6, loop_out: 0.8,
+      loop_flow: 1.3, loop_speed: 9, loop_cuff: 3,
+      loop_wave_amp: 0, loop_waves: 12,
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    ribs: {
+      loop_spacing_mm: 5.0, loop_per_turn: 0, loop_align: 'column',
+      loop_row: 2.2, loop_up: 3.0, loop_out: 0.5,
+      loop_flow: 1.2, loop_speed: 10, loop_cuff: 3,
+      loop_wave_amp: 0, loop_waves: 12,
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    zigzag: {
+      loop_spacing_mm: 5.0, loop_per_turn: 0, loop_align: 'stagger',
+      loop_row: 3.0, loop_up: 3.4, loop_out: 0.6,
+      loop_flow: 1.25, loop_speed: 9, loop_cuff: 3,
+      loop_wave_amp: 1.2, loop_waves: 10,
+      loop_mode: 'dip', loop_dwell: 0
+    },
+    scallops: {
+      loop_spacing_mm: 8.0, loop_per_turn: 0, loop_align: 'stagger',
+      loop_row: 4.0, loop_up: 5.0, loop_out: 1.0,
+      loop_flow: 1.3, loop_speed: 9, loop_cuff: 3,
+      loop_wave_amp: 0, loop_waves: 12,
+      loop_mode: 'dip', loop_dwell: 0
+    }
   };
 
-  function refreshLoopJitterRow(){
+  function refreshLoopJitterRow() {
     var row = document.getElementById('row-loop-jitter');
-    if(row) row.style.display = design.loop_align === 'jitter' ? '' : 'none';
+    if (row) row.style.display = design.loop_align === 'jitter' ? '' : 'none';
   }
 
   // Pushes the current design.loop_* fields into their DOM controls (used on
   // style-bundle apply and whenever the whole design is reloaded).
-  function updateLoopControlsFromDesign(){
+  function updateLoopControlsFromDesign() {
     var styleSel = document.getElementById('d-loop-style');
-    if(styleSel) styleSel.value = design.loop_style || 'chainmail';
-    function setVal(id, v){ var el = document.getElementById(id); if(el) el.value = v; }
+    if (styleSel) styleSel.value = design.loop_style || 'chainmail';
+    function setVal(id, v) { var el = document.getElementById(id); if (el) el.value = v; }
     setVal('d-loop-per-turn', design.loop_per_turn);
     setVal('d-loop-spacing', design.loop_spacing_mm);
     setVal('d-loop-stride', design.loop_turn_stride);
     var alignSel = document.getElementById('d-loop-align');
-    if(alignSel) alignSel.value = design.loop_align;
+    if (alignSel) alignSel.value = design.loop_align;
     setVal('d-loop-jitter', design.loop_jitter);
     setVal('d-loop-row', design.loop_row);
     setVal('d-loop-up', design.loop_up);
     setVal('d-loop-out', design.loop_out);
     setVal('d-loop-cuff', design.loop_cuff);
     var modeSel = document.getElementById('d-loop-mode');
-    if(modeSel) modeSel.value = design.loop_mode || 'dip';
+    if (modeSel) modeSel.value = design.loop_mode || 'dip';
     setVal('d-loop-dwell', design.loop_dwell);
     setVal('d-loop-lean', design.loop_lean);
     setVal('d-loop-coast', design.loop_coast);
@@ -4425,14 +4751,14 @@
   // Widest and narrowest row height any shipped style asks for. Read off the
   // table rather than written down, so adding a style re-spreads the others
   // instead of quietly falling outside the mapping below.
-  function authoredRowSpan(){
+  function authoredRowSpan() {
     var lo = Infinity, hi = -Infinity;
-    for(var k in LOOP_STYLES){
-      if(!LOOP_STYLES.hasOwnProperty(k)) continue;
+    for (var k in LOOP_STYLES) {
+      if (!LOOP_STYLES.hasOwnProperty(k)) continue;
       var r = LOOP_STYLES[k].loop_row;
-      if(!(r > 0)) continue;
-      if(r < lo) lo = r;
-      if(r > hi) hi = r;
+      if (!(r > 0)) continue;
+      if (r < lo) lo = r;
+      if (r > hi) hi = r;
     }
     return (lo <= hi) ? { lo: lo, hi: hi } : null;
   }
@@ -4467,16 +4793,16 @@
   //
   // Returns null when the bundle already fits as authored, or when the printer
   // list has not loaded yet; the bundle is then applied unchanged.
-  function fitLoopStyleToMachine(bundle){
+  function fitLoopStyleToMachine(bundle) {
     var cap = PRINTER_ZCAP[design.printer];
-    if(cap == null || typeof cap !== 'number' || !isFinite(cap)) return null;
+    if (cap == null || typeof cap !== 'number' || !isFinite(cap)) return null;
     var caps = loopCapsFor(PRINTER_META[design.printer], cap);
     var row = bundle.loop_row, up = bundle.loop_up;
-    if(!(row > 0) || !(up > 0)) return null;
-    if(row <= caps.row && up <= caps.up) return null;   // fits as authored
+    if (!(row > 0) || !(up > 0)) return null;
+    if (row <= caps.row && up <= caps.up) return null;   // fits as authored
     var span = authoredRowSpan();
     var fittedRow;
-    if(!span || span.hi <= span.lo || caps.min >= caps.row){
+    if (!span || span.hi <= span.lo || caps.min >= caps.row) {
       // One style, or a machine with no usable range at all: nothing to
       // spread across, so take the ceiling.
       fittedRow = caps.row;
@@ -4485,7 +4811,7 @@
       fittedRow = caps.min + f * (caps.row - caps.min);
     }
     var fittedUp = fittedRow * (up / row);                 // keep the hook ratio
-    function snap(v, hi){
+    function snap(v, hi) {
       // Round to the 0.01mm the inputs step in, then re-clamp -- rounding must
       // never be what pushes a value back over the machine's ceiling.
       return Math.max(caps.min, Math.min(hi, Math.round(v * 100) / 100));
@@ -4493,13 +4819,13 @@
     return { loop_row: snap(fittedRow, caps.row), loop_up: snap(fittedUp, caps.up) };
   }
 
-  function applyLoopStyle(styleName){
+  function applyLoopStyle(styleName) {
     design.loop_style = styleName;
     var bundle = LOOP_STYLES[styleName];
-    if(bundle){
-      for(var k in bundle){ if(bundle.hasOwnProperty(k)) design[k] = bundle[k]; }
+    if (bundle) {
+      for (var k in bundle) { if (bundle.hasOwnProperty(k)) design[k] = bundle[k]; }
       var fitted = fitLoopStyleToMachine(bundle);
-      if(fitted){
+      if (fitted) {
         design.loop_row = fitted.loop_row;
         design.loop_up = fitted.loop_up;
       }
@@ -4514,7 +4840,7 @@
     // previous style's trim must not stick to this one.
     loopStyleTrimmed = null;
     applyPrinterCaps();
-    if(fitted) loopStyleTrimmed = styleName;
+    if (fitted) loopStyleTrimmed = styleName;
     refreshLoopZcapNote();
     persistDesign();
     schedulePreview();
@@ -4525,48 +4851,48 @@
   // caller's coalescing key so the style->Custom switch joins that same undo
   // entry rather than adding one of its own (see persistDesign's coalescing
   // note).
-  function markLoopCustom(coalesceKey){
-    if(design.loop_style !== 'custom'){
+  function markLoopCustom(coalesceKey) {
+    if (design.loop_style !== 'custom') {
       design.loop_style = 'custom';
       var styleSel = document.getElementById('d-loop-style');
-      if(styleSel) styleSel.value = 'custom';
+      if (styleSel) styleSel.value = 'custom';
       persistDesign(coalesceKey || null);
     }
   }
-  function bindLoopNumber(id, field, isInt){
+  function bindLoopNumber(id, field, isInt) {
     bindNumber(id, field, isInt);
     var el = document.getElementById(id);
-    if(el) el.addEventListener('input', function(){ markLoopCustom('num:' + id); });
+    if (el) el.addEventListener('input', function () { markLoopCustom('num:' + id); });
   }
-  function bindLoopSelect(id, field){
+  function bindLoopSelect(id, field) {
     var key = 'sel:' + id;
     bindSelect(id, field, key);
     var el = document.getElementById(id);
-    if(el) el.addEventListener('change', function(){
+    if (el) el.addEventListener('change', function () {
       markLoopCustom(key);
       endHistRun();
     });
   }
 
-  function refreshLoopDwellRow(){
+  function refreshLoopDwellRow() {
     var show = design.loop_mode === 'spike' ? '' : 'none';
     var row = document.getElementById('row-loop-dwell');
-    if(row) row.style.display = show;
+    if (row) row.style.display = show;
     var lean = document.getElementById('row-loop-lean');
-    if(lean) lean.style.display = show;
+    if (lean) lean.style.display = show;
     var coast = document.getElementById('row-loop-coast');
-    if(coast) coast.style.display = show;
+    if (coast) coast.style.display = show;
     var retr = document.getElementById('row-loop-retract');
-    if(retr) retr.style.display = show;
+    if (retr) retr.style.display = show;
     var retrHint = document.getElementById('retract-hint');
-    if(retrHint) retrHint.style.display = show;
+    if (retrHint) retrHint.style.display = show;
   }
 
-  (function(){
+  (function () {
     var styleSel = document.getElementById('d-loop-style');
-    if(!styleSel) return;
+    if (!styleSel) return;
     styleSel.value = design.loop_style || 'chainmail';
-    styleSel.addEventListener('change', function(){
+    styleSel.addEventListener('change', function () {
       applyLoopStyle(styleSel.value);
     });
   })();
@@ -4575,9 +4901,9 @@
   bindLoopNumber('d-loop-spacing', 'loop_spacing_mm');
   bindLoopNumber('d-loop-stride', 'loop_turn_stride', true);
   bindLoopSelect('d-loop-align', 'loop_align');
-  (function(){
+  (function () {
     var alignSel = document.getElementById('d-loop-align');
-    if(alignSel) alignSel.addEventListener('change', refreshLoopJitterRow);
+    if (alignSel) alignSel.addEventListener('change', refreshLoopJitterRow);
   })();
   bindLoopNumber('d-loop-jitter', 'loop_jitter');
   bindLoopNumber('d-loop-row', 'loop_row');
@@ -4585,9 +4911,9 @@
   bindLoopNumber('d-loop-out', 'loop_out');
   bindLoopNumber('d-loop-cuff', 'loop_cuff', true);
   bindLoopSelect('d-loop-mode', 'loop_mode');
-  (function(){
+  (function () {
     var modeSel = document.getElementById('d-loop-mode');
-    if(modeSel) modeSel.addEventListener('change', refreshLoopDwellRow);
+    if (modeSel) modeSel.addEventListener('change', refreshLoopDwellRow);
   })();
   bindLoopNumber('d-loop-dwell', 'loop_dwell', true);
   bindLoopNumber('d-loop-lean', 'loop_lean', true);
@@ -4604,31 +4930,31 @@
   refreshLoopJitterRow();
 
   // Overhang flow slider.
-  (function(){
+  (function () {
     var slider = document.getElementById('d-overhang-k');
     var read = document.getElementById('overhang-k-read');
-    if(!slider) return;
+    if (!slider) return;
     slider.value = design.overhang_flow_k || 0;
-    if(read) read.textContent = parseFloat(slider.value).toFixed(2);
-    slider.addEventListener('input', function(){
+    if (read) read.textContent = parseFloat(slider.value).toFixed(2);
+    slider.addEventListener('input', function () {
       design.overhang_flow_k = parseFloat(slider.value);
-      if(read) read.textContent = design.overhang_flow_k.toFixed(2);
+      if (read) read.textContent = design.overhang_flow_k.toFixed(2);
       persistDesign('num:d-overhang-k');
     });
     slider.addEventListener('change', endHistRun);
   })();
 
   // Overhang-adaptive fan sliders (min ramps up to max at a steep overhang).
-  (function(){
-    function bindFanSlider(id, readId, field){
+  (function () {
+    function bindFanSlider(id, readId, field) {
       var slider = document.getElementById(id);
       var read = document.getElementById(readId);
-      if(!slider) return;
+      if (!slider) return;
       slider.value = design[field] != null ? design[field] : 100;
-      if(read) read.textContent = slider.value + '%';
-      slider.addEventListener('input', function(){
+      if (read) read.textContent = slider.value + '%';
+      slider.addEventListener('input', function () {
         design[field] = parseFloat(slider.value);
-        if(read) read.textContent = slider.value + '%';
+        if (read) read.textContent = slider.value + '%';
         persistDesign('num:' + id);
       });
       slider.addEventListener('change', endHistRun);
@@ -4638,11 +4964,11 @@
   })();
 
   // Fan-off-layers numeric input.
-  (function(){
+  (function () {
     var el = document.getElementById('d-fan-off-layers');
-    if(!el) return;
+    if (!el) return;
     el.value = design.fan_off_layers || 0;
-    el.addEventListener('input', function(){
+    el.addEventListener('input', function () {
       var v = parseInt(el.value, 10);
       design.fan_off_layers = Number.isNaN(v) ? 0 : Math.max(0, Math.min(v, 50));
       persistDesign('num:d-fan-off-layers');
@@ -4657,13 +4983,13 @@
   // applyPointEditsPreview() for the client-side mirror math.
   var PE_FFD_ROWS = 3, PE_FFD_COLS = 6;
 
-  function ensurePointFFDGrid(){
-    if(Array.isArray(design.point_ffd_grid) && design.point_ffd_grid.length &&
-       Array.isArray(design.point_ffd_grid[0])) return;
+  function ensurePointFFDGrid() {
+    if (Array.isArray(design.point_ffd_grid) && design.point_ffd_grid.length &&
+      Array.isArray(design.point_ffd_grid[0])) return;
     var grid = [];
-    for(var i = 0; i < PE_FFD_ROWS; i++){
+    for (var i = 0; i < PE_FFD_ROWS; i++) {
       var row = [];
-      for(var j = 0; j < PE_FFD_COLS; j++) row.push(0);
+      for (var j = 0; j < PE_FFD_COLS; j++) row.push(0);
       grid.push(row);
     }
     design.point_ffd_grid = grid;
@@ -4675,41 +5001,41 @@
   // so the rail dot can never show "on" for a modifier that silently sends
   // nothing (e.g. Push enabled with amp_mm still at 0, or Smooth enabled
   // with iterations at 0).
-  function pointEditMaskMeaningful(){
+  function pointEditMaskMeaningful() {
     return !!(design.point_mask_enable && design.point_mask_channel &&
-              design.point_mask_channel !== 'none');
+      design.point_mask_channel !== 'none');
   }
-  function pointEditProtectionMeaningful(){
+  function pointEditProtectionMeaningful() {
     return !!(design.point_protection_enable &&
-      ((design.point_protection_bottom||0) > 0 || (design.point_protection_top||0) > 0));
+      ((design.point_protection_bottom || 0) > 0 || (design.point_protection_top || 0) > 0));
   }
-  function pointEditFFDMeaningful(){
+  function pointEditFFDMeaningful() {
     return !!(design.point_ffd_enable && design.point_ffd_grid &&
-      design.point_ffd_grid.some(function(r){ return r.some(function(v){ return Math.abs(v) > 1e-6; }); }));
+      design.point_ffd_grid.some(function (r) { return r.some(function (v) { return Math.abs(v) > 1e-6; }); }));
   }
-  function pointEditSmoothMeaningful(){
+  function pointEditSmoothMeaningful() {
     return !!(design.point_smooth_enable && Math.round(design.point_smooth_iterations || 0) > 0);
   }
-  function pointEditRadialPushMeaningful(){
+  function pointEditRadialPushMeaningful() {
     return !!(design.point_radial_push_enable && design.point_radial_push_amp);
   }
 
-  function pointEditAnyEnabled(){
+  function pointEditAnyEnabled() {
     return pointEditMaskMeaningful() || pointEditProtectionMeaningful() ||
-           pointEditFFDMeaningful() || pointEditSmoothMeaningful() ||
-           pointEditRadialPushMeaningful();
+      pointEditFFDMeaningful() || pointEditSmoothMeaningful() ||
+      pointEditRadialPushMeaningful();
   }
 
-  function updatePointEditActiveDot(){
+  function updatePointEditActiveDot() {
     var dot = document.getElementById('pe-active-dot');
-    if(dot) dot.classList.toggle('active', pointEditAnyEnabled());
-    document.querySelectorAll('.pe-rail-item').forEach(function(btn){
+    if (dot) dot.classList.toggle('active', pointEditAnyEnabled());
+    document.querySelectorAll('.pe-rail-item').forEach(function (btn) {
       var tab = btn.getAttribute('data-pe-tab');
       var on = (tab === 'mask' && pointEditMaskMeaningful()) ||
-               (tab === 'protection' && pointEditProtectionMeaningful()) ||
-               (tab === 'ffd' && pointEditFFDMeaningful()) ||
-               (tab === 'smooth' && pointEditSmoothMeaningful()) ||
-               (tab === 'radial' && pointEditRadialPushMeaningful());
+        (tab === 'protection' && pointEditProtectionMeaningful()) ||
+        (tab === 'ffd' && pointEditFFDMeaningful()) ||
+        (tab === 'smooth' && pointEditSmoothMeaningful()) ||
+        (tab === 'radial' && pointEditRadialPushMeaningful());
       btn.classList.toggle('enabled', !!on);
     });
   }
@@ -4731,23 +5057,23 @@
     if(btn) btn.classList.toggle('pe-out-of-scope', outOfScope);
   }
 
-  function buildFFDGridUI(){
+  function buildFFDGridUI() {
     ensurePointFFDGrid();
     var container = document.getElementById('pe-ffd-grid');
-    if(!container) return;
+    if (!container) return;
     container.innerHTML = '';
     var rows = design.point_ffd_grid.length, cols = design.point_ffd_grid[0].length;
     container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
     // Build top-to-bottom (row rows-1 = top of print) for an intuitive layout.
-    for(var i = rows - 1; i >= 0; i--){
-      for(var j = 0; j < cols; j++){
-        (function(ri, ci){
+    for (var i = rows - 1; i >= 0; i--) {
+      for (var j = 0; j < cols; j++) {
+        (function (ri, ci) {
           var inp = document.createElement('input');
           inp.type = 'number'; inp.step = '0.25'; inp.min = '-4'; inp.max = '4';
           inp.value = design.point_ffd_grid[ri][ci];
-          var tFrac = rows > 1 ? ri/(rows-1) : 0;
+          var tFrac = rows > 1 ? ri / (rows - 1) : 0;
           inp.title = 'height t=' + tFrac.toFixed(2) + ', azimuth cell ' + ci + ' (mm radial push)';
-          inp.addEventListener('input', function(){
+          inp.addEventListener('input', function () {
             var v = parseFloat(inp.value);
             design.point_ffd_grid[ri][ci] = Number.isNaN(v) ? 0 : Math.max(-4, Math.min(4, v));
             // Per-cell key: editing one FFD cell is one undo entry, and moving
@@ -4765,9 +5091,9 @@
 
   // Re-syncs every Point Edit control from `design` -- called on load/undo/
   // redo/preset-apply, mirroring applyDesignToUI()'s job for the rest of the panel.
-  function applyPointEditUIFromDesign(){
-    var set = function(id, v){ var el = document.getElementById(id); if(el && v != null) el.value = v; };
-    var chk = function(id, v){ var el = document.getElementById(id); if(el) el.checked = !!v; };
+  function applyPointEditUIFromDesign() {
+    var set = function (id, v) { var el = document.getElementById(id); if (el && v != null) el.value = v; };
+    var chk = function (id, v) { var el = document.getElementById(id); if (el) el.checked = !!v; };
     chk('pe-mask-enable', design.point_mask_enable);
     set('pe-mask-channel', design.point_mask_channel || 'checker');
     set('pe-mask-scaleu', design.point_mask_scale_u);
@@ -4792,51 +5118,51 @@
     updatePointEditScopeNote();
   }
 
-  (function(){
+  (function () {
     var modal = document.getElementById('point-edit-modal');
     var openBtn = document.getElementById('point-edit-btn');
     var closeBtn = document.getElementById('pe-modal-close');
     var doneBtn = document.getElementById('pe-modal-done');
     var backdrop = modal ? modal.querySelector('.pe-modal-backdrop') : null;
-    if(!modal || !openBtn) return;
+    if (!modal || !openBtn) return;
 
-    function openModal(){
+    function openModal() {
       previewArmed = true;
       modal.style.display = 'flex';
     }
-    function closeModal(){ modal.style.display = 'none'; }
+    function closeModal() { modal.style.display = 'none'; }
     // Exposed so the active-summary "N point-edit mods" chip (see
     // updateActiveSummary()) can open the modal directly rather than just
     // switching to the Texture step.
     window.__openPointEditModal = openModal;
     openBtn.addEventListener('click', openModal);
-    if(closeBtn) closeBtn.addEventListener('click', closeModal);
-    if(doneBtn) doneBtn.addEventListener('click', closeModal);
-    if(backdrop) backdrop.addEventListener('click', closeModal);
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (doneBtn) doneBtn.addEventListener('click', closeModal);
+    if (backdrop) backdrop.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && modal.style.display !== 'none') closeModal();
     });
 
     // Rail tab switching.
     var railBtns = Array.prototype.slice.call(document.querySelectorAll('.pe-rail-item'));
     var panels = {};
-    railBtns.forEach(function(btn){
+    railBtns.forEach(function (btn) {
       var name = btn.getAttribute('data-pe-tab');
       panels[name] = document.querySelector('.pe-panel[data-pe-panel="' + name + '"]');
     });
-    railBtns.forEach(function(btn){
-      btn.addEventListener('click', function(){
+    railBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
         var name = btn.getAttribute('data-pe-tab');
-        railBtns.forEach(function(b){ b.classList.toggle('active', b === btn); });
-        for(var k in panels){ if(panels[k]) panels[k].classList.toggle('active', k === name); }
+        railBtns.forEach(function (b) { b.classList.toggle('active', b === btn); });
+        for (var k in panels) { if (panels[k]) panels[k].classList.toggle('active', k === name); }
       });
     });
 
-    function bindPEBool(id, field){
+    function bindPEBool(id, field) {
       var el = document.getElementById(id);
-      if(!el) return;
+      if (!el) return;
       el.checked = !!design[field];
-      el.addEventListener('change', function(){
+      el.addEventListener('change', function () {
         design[field] = el.checked;
         previewArmed = true;
         persistDesign();
@@ -4844,13 +5170,13 @@
         updatePointEditActiveDot();
       });
     }
-    function bindPENumber(id, field){
+    function bindPENumber(id, field) {
       var el = document.getElementById(id);
-      if(!el) return;
-      if(design[field] != null) el.value = design[field];
-      el.addEventListener('input', function(){
+      if (!el) return;
+      if (design[field] != null) el.value = design[field];
+      el.addEventListener('input', function () {
         var v = parseFloat(el.value);
-        if(Number.isNaN(v)) return;
+        if (Number.isNaN(v)) return;
         design[field] = v;
         previewArmed = true;
         persistDesign('num:' + id);
@@ -4859,11 +5185,11 @@
       });
       el.addEventListener('change', endHistRun);
     }
-    function bindPESelect(id, field){
+    function bindPESelect(id, field) {
       var el = document.getElementById(id);
-      if(!el) return;
-      if(design[field]) el.value = design[field];
-      el.addEventListener('change', function(){
+      if (!el) return;
+      if (design[field]) el.value = design[field];
+      el.addEventListener('change', function () {
         design[field] = el.value;
         previewArmed = true;
         persistDesign();
@@ -4898,10 +5224,10 @@
     buildFFDGridUI();
 
     var ffdResetBtn = document.getElementById('pe-ffd-reset');
-    if(ffdResetBtn) ffdResetBtn.addEventListener('click', function(){
+    if (ffdResetBtn) ffdResetBtn.addEventListener('click', function () {
       ensurePointFFDGrid();
-      for(var i = 0; i < design.point_ffd_grid.length; i++){
-        for(var j = 0; j < design.point_ffd_grid[i].length; j++) design.point_ffd_grid[i][j] = 0;
+      for (var i = 0; i < design.point_ffd_grid.length; i++) {
+        for (var j = 0; j < design.point_ffd_grid[i].length; j++) design.point_ffd_grid[i][j] = 0;
       }
       buildFFDGridUI();
       persistDesign();
@@ -4909,7 +5235,7 @@
     });
 
     var resetAllBtn = document.getElementById('pe-reset-all');
-    if(resetAllBtn) resetAllBtn.addEventListener('click', function(){
+    if (resetAllBtn) resetAllBtn.addEventListener('click', function () {
       design.point_mask_enable = false;
       design.point_mask_channel = 'checker';
       design.point_mask_scale_u = 8;
@@ -4957,10 +5283,10 @@
   // for the reasoning behind each colour choice). Read via getComputedStyle
   // so a future palette edit in CSS needs no matching edit here.
   var ZONE_PALETTE_SIZE = 5;
-  function zoneColorVar(colorIdx){
+  function zoneColorVar(colorIdx) {
     return '--zone-c' + ((((colorIdx | 0) % ZONE_PALETTE_SIZE) + ZONE_PALETTE_SIZE) % ZONE_PALETTE_SIZE + 1);
   }
-  function zoneColorHex(z){
+  function zoneColorHex(z) {
     var name = zoneColorVar(z && z.color_idx != null ? z.color_idx : 0);
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#ff6fd8';
   }
@@ -4968,9 +5294,9 @@
   // using, so deleting a zone never recolours the survivors (an array-index-
   // derived colour would do exactly that on every remove). Falls back to
   // cycling by count once every slot is taken (ZONE_MAX_CLIENT 8 > 5).
-  function nextZoneColorIdx(zones){
-    for(var c = 0; c < ZONE_PALETTE_SIZE; c++){
-      if(!zones.some(function(z){ return z && z.color_idx === c; })) return c;
+  function nextZoneColorIdx(zones) {
+    for (var c = 0; c < ZONE_PALETTE_SIZE; c++) {
+      if (!zones.some(function (z) { return z && z.color_idx === c; })) return c;
     }
     return zones.length % ZONE_PALETTE_SIZE;
   }
@@ -4978,35 +5304,35 @@
   // place -- deliberately WITHOUT persistDesign(), which would push a
   // spurious undo entry just for loading a file; the next real edit persists
   // it naturally.
-  function normalizeZoneColors(){
+  function normalizeZoneColors() {
     var zones = design.zone_overrides;
-    if(!zones || !zones.length) return;
-    zones.forEach(function(z){
-      if(z && z.color_idx == null) z.color_idx = nextZoneColorIdx(zones);
+    if (!zones || !zones.length) return;
+    zones.forEach(function (z) {
+      if (z && z.color_idx == null) z.color_idx = nextZoneColorIdx(zones);
     });
   }
 
-  function minZoneSpan(){
+  function minZoneSpan() {
     return Math.max(2.0 * (design.layer_height || 0.3) / Math.max(design.height || 60, 1e-6), 1e-4);
   }
-  function zoneMmFromT(t){ return t * (design.height || 60); }
-  function zoneTFromMm(mm){ return (design.height > 0) ? mm / design.height : 0; }
+  function zoneMmFromT(t) { return t * (design.height || 60); }
+  function zoneTFromMm(mm) { return (design.height > 0) ? mm / design.height : 0; }
 
   // Single source of truth for "is this zone actually going to do anything"
   // -- enabled AND overrides at least one of pattern/depth/twist. The
   // POST-body assembly (buildGenerateBody) gates on this exact same
   // function, so the active dot can never show "on" for a zone that would
   // silently send nothing.
-  function zoneOverrideMeaningful(z){
+  function zoneOverrideMeaningful(z) {
     return !!(z && z.enabled && (z.pattern || z.pattern_amp != null ||
-              z.pattern_twist != null || z.xy_twist != null));
+      z.pattern_twist != null || z.xy_twist != null));
   }
-  function zoneOverridesAnyEnabled(){
+  function zoneOverridesAnyEnabled() {
     return (design.zone_overrides || []).some(zoneOverrideMeaningful);
   }
-  function updateZoneActiveDot(){
+  function updateZoneActiveDot() {
     var dot = document.getElementById('zo-active-dot');
-    if(dot) dot.classList.toggle('active', zoneOverridesAnyEnabled());
+    if (dot) dot.classList.toggle('active', zoneOverridesAnyEnabled());
   }
   // Zone overrides reach build_profile_spiral, the wall generator used by
   // the plain parametric wall AND both hybrid modes (a parametric OR mesh
@@ -5030,9 +5356,9 @@
   }
   document.getElementById('d-pattern').addEventListener('change', updateZoneScopeNote);
 
-  function positionZoneAxisEls(idx, band, hLo, hHi, axisH){
+  function positionZoneAxisEls(idx, band, hLo, hHi, axisH) {
     var z = (design.zone_overrides || [])[idx];
-    if(!z) return;
+    if (!z) return;
     var yTop = axisH * (1 - z.t_hi);
     var yBot = axisH * (1 - z.t_lo);
     band.style.top = yTop + 'px';
@@ -5045,30 +5371,30 @@
     // extra params, so every existing call site (initial build AND every
     // live-drag reposition in setZoneEdge) updates them for free.
     var host = band.parentNode;
-    if(host){
+    if (host) {
       var lHi = host.querySelector('.zo-axis-label[data-zone-idx="' + idx + '"][data-edge="hi"]');
       var lLo = host.querySelector('.zo-axis-label[data-zone-idx="' + idx + '"][data-edge="lo"]');
-      if(lHi){ lHi.style.top = yTop + 'px'; lHi.textContent = zoneMmFromT(z.t_hi).toFixed(2) + ' mm'; }
-      if(lLo){ lLo.style.top = yBot + 'px'; lLo.textContent = zoneMmFromT(z.t_lo).toFixed(2) + ' mm'; }
+      if (lHi) { lHi.style.top = yTop + 'px'; lHi.textContent = zoneMmFromT(z.t_hi).toFixed(2) + ' mm'; }
+      if (lLo) { lLo.style.top = yBot + 'px'; lLo.textContent = zoneMmFromT(z.t_lo).toFixed(2) + ' mm'; }
     }
   }
   var ZONE_AXIS_H = 260;   // matches --zo-axis height in style.css
   var ZO_AXIS_LABEL_GAP_PX = 17;   // ~ one .zo-axis-label's own rendered
-                                    // height (11px font * 1.45 line-height +
-                                    // padding/border) -- two labels closer
-                                    // than this in axis-Y read as overlapping.
+  // height (11px font * 1.45 line-height +
+  // padding/border) -- two labels closer
+  // than this in axis-Y read as overlapping.
   var ZO_AXIS_SCALE_INSET_PX = 9;  // nudges the two track scale labels
-                                    // (0 mm / full height) in from the very
-                                    // top/bottom of the 260px track so they
-                                    // stay clear of the track's own border
-                                    // even when a zone edge sits right at 0%/100%.
+  // (0 mm / full height) in from the very
+  // top/bottom of the 260px track so they
+  // stay clear of the track's own border
+  // even when a zone edge sits right at 0%/100%.
 
-  function renderZoneAxis(){
+  function renderZoneAxis() {
     var axisHost = document.getElementById('zo-axis');
-    if(!axisHost) return;
+    if (!axisHost) return;
     axisHost.innerHTML = '';
-    (design.zone_overrides || []).forEach(function(z, i){
-      if(!z.enabled) return;   // a disabled zone doesn't crowd the axis
+    (design.zone_overrides || []).forEach(function (z, i) {
+      if (!z.enabled) return;   // a disabled zone doesn't crowd the axis
       var color = zoneColorHex(z);
       var band = document.createElement('div');
       band.className = 'zo-axis-band';
@@ -5076,8 +5402,8 @@
       band.style.borderTopColor = color;
       band.style.borderBottomColor = color;
       band.style.background = 'color-mix(in srgb, ' + color + ' 32%, transparent)';   // raised
-        // from 14% -- same contrast pass as ZONE_TINT_BOOST in viewer.js, so the
-        // modal's own axis reads as clearly-coloured as the model does now.
+      // from 14% -- same contrast pass as ZONE_TINT_BOOST in viewer.js, so the
+      // modal's own axis reads as clearly-coloured as the model does now.
       axisHost.appendChild(band);
       var hHi = document.createElement('div');
       hHi.className = 'zo-axis-handle';
@@ -5130,61 +5456,61 @@
   // zone currently hovered/dragged, or null) always wins its own collisions;
   // after that, zone edge labels beat the track's own scale marks, which are
   // the least essential and the first hidden.
-  function cullZoneAxisLabels(focusIdx){
+  function cullZoneAxisLabels(focusIdx) {
     var axisHost = document.getElementById('zo-axis');
-    if(!axisHost) return;
+    if (!axisHost) return;
     var els = Array.prototype.slice.call(axisHost.querySelectorAll('.zo-axis-label'));
-    els.forEach(function(el){ el.style.display = ''; });
-    var items = els.map(function(el){
+    els.forEach(function (el) { el.style.display = ''; });
+    var items = els.map(function (el) {
       var zi = +el.getAttribute('data-zone-idx');
       var prio = (focusIdx != null && zi === focusIdx) ? 0 : (zi < 0 ? 2 : 1);
       return { el: el, top: parseFloat(el.style.top) || 0, prio: prio };
     });
-    items.sort(function(a, b){ return a.prio - b.prio || a.top - b.top; });
+    items.sort(function (a, b) { return a.prio - b.prio || a.top - b.top; });
     var placed = [];
-    items.forEach(function(it){
-      var collide = placed.some(function(p){ return Math.abs(p.top - it.top) < ZO_AXIS_LABEL_GAP_PX; });
-      if(collide) it.el.style.display = 'none';
+    items.forEach(function (it) {
+      var collide = placed.some(function (p) { return Math.abs(p.top - it.top) < ZO_AXIS_LABEL_GAP_PX; });
+      if (collide) it.el.style.display = 'none';
       else placed.push(it);
     });
   }
 
-  function syncZoneRowMmInputs(idx){
+  function syncZoneRowMmInputs(idx) {
     var row = document.querySelector('.zo-row[data-zone-row-idx="' + idx + '"]');
     var z = (design.zone_overrides || [])[idx];
-    if(!row || !z) return;
+    if (!row || !z) return;
     var fromInp = row.querySelector('[data-help-id="zo-from"] input');
     var toInp = row.querySelector('[data-help-id="zo-to"] input');
-    if(fromInp && document.activeElement !== fromInp) fromInp.value = zoneMmFromT(z.t_lo).toFixed(2);
-    if(toInp && document.activeElement !== toInp) toInp.value = zoneMmFromT(z.t_hi).toFixed(2);
+    if (fromInp && document.activeElement !== fromInp) fromInp.value = zoneMmFromT(z.t_lo).toFixed(2);
+    if (toInp && document.activeElement !== toInp) toInp.value = zoneMmFromT(z.t_hi).toFixed(2);
   }
 
   // Rebuilds #zo-rows + #zo-axis from `design.zone_overrides` -- called on
   // load/undo/redo/preset-apply (mirrors applyPointEditUIFromDesign()'s job)
   // and after any add/remove. Full rebuild each time, same convention as
   // buildFFDGridUI() above.
-  function renderZoneRows(){
+  function renderZoneRows() {
     var rowsHost = document.getElementById('zo-rows');
     var emptyHint = document.getElementById('zo-empty-hint');
-    if(!rowsHost) return;
+    if (!rowsHost) return;
     normalizeZoneColors();
     var zones = design.zone_overrides || [];
     rowsHost.innerHTML = '';
-    if(emptyHint) emptyHint.style.display = zones.length ? 'none' : '';
+    if (emptyHint) emptyHint.style.display = zones.length ? 'none' : '';
 
-    zones.forEach(function(z, i){
+    zones.forEach(function (z, i) {
       var row = document.createElement('div');
       row.className = 'zo-row' + (z.enabled ? '' : ' disabled')
         + (window.__zoneJustAdded === i ? ' is-new' : '');
       row.setAttribute('data-zone-row-idx', i);
       // Clears itself on the row's own next interaction, not on a timer --
       // the marker's job is "which one did I just add", not "for N seconds".
-      if(window.__zoneJustAdded === i){
+      if (window.__zoneJustAdded === i) {
         row.style.borderLeftColor = zoneColorHex(z);
-        row.addEventListener('pointerdown', function clearNew(){
+        row.addEventListener('pointerdown', function clearNew() {
           row.classList.remove('is-new');
           row.removeEventListener('pointerdown', clearNew);
-          if(window.__zoneJustAdded === i) window.__zoneJustAdded = null;
+          if (window.__zoneJustAdded === i) window.__zoneJustAdded = null;
         }, { once: true });
       }
 
@@ -5202,7 +5528,7 @@
       var enableChk = document.createElement('input');
       enableChk.type = 'checkbox';
       enableChk.checked = !!z.enabled;
-      enableChk.addEventListener('change', function(){
+      enableChk.addEventListener('change', function () {
         z.enabled = enableChk.checked;
         row.classList.toggle('disabled', !z.enabled);
         previewArmed = true;
@@ -5215,7 +5541,7 @@
       enableField.appendChild(enableChk);
       row.appendChild(enableField);
 
-      function numField(labelText, helpId, unit, value, step, min, max, placeholder, onChange){
+      function numField(labelText, helpId, unit, value, step, min, max, placeholder, onChange) {
         var f = document.createElement('div');
         f.className = 'drow zo-row-field';
         f.setAttribute('data-help-id', helpId);
@@ -5224,22 +5550,22 @@
         f.appendChild(lab);
         var inp = document.createElement('input');
         inp.type = 'number';
-        if(step != null) inp.step = step;
-        if(min != null) inp.min = min;
-        if(max != null) inp.max = max;
-        if(unit) inp.setAttribute('data-unit', unit);
-        if(placeholder) inp.placeholder = placeholder;
+        if (step != null) inp.step = step;
+        if (min != null) inp.min = min;
+        if (max != null) inp.max = max;
+        if (unit) inp.setAttribute('data-unit', unit);
+        if (placeholder) inp.placeholder = placeholder;
         inp.value = (value == null || value === '') ? '' : value;
-        inp.addEventListener('input', function(){ onChange(inp); });
+        inp.addEventListener('input', function () { onChange(inp); });
         inp.addEventListener('change', endHistRun);
         f.appendChild(inp);
         return f;
       }
 
       row.appendChild(numField('From (mm)', 'zo-from', 'mm',
-        +zoneMmFromT(z.t_lo).toFixed(2), 0.5, 0, design.height, null, function(inp){
+        +zoneMmFromT(z.t_lo).toFixed(2), 0.5, 0, design.height, null, function (inp) {
           var mm = parseFloat(inp.value);
-          if(Number.isNaN(mm)) return;
+          if (Number.isNaN(mm)) return;
           z.t_lo = Math.max(0, Math.min(zoneTFromMm(mm), z.t_hi - minZoneSpan()));
           previewArmed = true;
           persistDesign('zone:' + i + ':t_lo');
@@ -5248,9 +5574,9 @@
           refreshZoneRings();
         }));
       row.appendChild(numField('To (mm)', 'zo-to', 'mm',
-        +zoneMmFromT(z.t_hi).toFixed(2), 0.5, 0, design.height, null, function(inp){
+        +zoneMmFromT(z.t_hi).toFixed(2), 0.5, 0, design.height, null, function (inp) {
           var mm = parseFloat(inp.value);
-          if(Number.isNaN(mm)) return;
+          if (Number.isNaN(mm)) return;
           z.t_hi = Math.min(1, Math.max(zoneTFromMm(mm), z.t_lo + minZoneSpan()));
           previewArmed = true;
           persistDesign('zone:' + i + ':t_hi');
@@ -5259,9 +5585,9 @@
           refreshZoneRings();
         }));
       row.appendChild(numField('Blend (mm)', 'zo-blend', 'mm',
-        +zoneMmFromT(z.blend != null ? z.blend : 0.02).toFixed(2), 0.5, 0, design.height / 2, null, function(inp){
+        +zoneMmFromT(z.blend != null ? z.blend : 0.02).toFixed(2), 0.5, 0, design.height / 2, null, function (inp) {
           var mm = parseFloat(inp.value);
-          if(Number.isNaN(mm) || mm < 0) return;
+          if (Number.isNaN(mm) || mm < 0) return;
           z.blend = zoneTFromMm(mm);
           previewArmed = true;
           persistDesign('zone:' + i + ':blend');
@@ -5280,7 +5606,7 @@
       var optInherit = document.createElement('option');
       optInherit.value = ''; optInherit.textContent = '(use global)';
       pSel.appendChild(optInherit);
-      ZONE_PATTERNS.forEach(function(p){
+      ZONE_PATTERNS.forEach(function (p) {
         var o = document.createElement('option');
         o.value = p; o.textContent = p;
         pSel.appendChild(o);
@@ -5290,7 +5616,7 @@
       row.appendChild(pf);
 
       var depthField = numField('Depth (mm)', 'zo-depth', 'mm',
-        z.pattern_amp != null ? z.pattern_amp : '', 0.1, 0, 4, 'inherit', function(inp){
+        z.pattern_amp != null ? z.pattern_amp : '', 0.1, 0, 4, 'inherit', function (inp) {
           var v = inp.value === '' ? null : parseFloat(inp.value);
           z.pattern_amp = (v == null || Number.isNaN(v)) ? null : Math.max(0, Math.min(v, 4));
           previewArmed = true;
@@ -5301,7 +5627,7 @@
       var depthInput = depthField.querySelector('input');
       depthInput.disabled = !z.pattern;
       row.appendChild(depthField);
-      pSel.addEventListener('change', function(){
+      pSel.addEventListener('change', function () {
         z.pattern = pSel.value || '';
         depthInput.disabled = !z.pattern;
         previewArmed = true;
@@ -5311,7 +5637,7 @@
       });
 
       row.appendChild(numField('Pattern twist (turns)', 'zo-ptwist', 'turns',
-        z.pattern_twist != null ? z.pattern_twist : '', 0.25, -6, 6, 'inherit', function(inp){
+        z.pattern_twist != null ? z.pattern_twist : '', 0.25, -6, 6, 'inherit', function (inp) {
           var v = inp.value === '' ? null : parseFloat(inp.value);
           z.pattern_twist = (v == null || Number.isNaN(v)) ? null : v;
           previewArmed = true;
@@ -5321,7 +5647,7 @@
         }));
 
       row.appendChild(numField('XY twist (turns)', 'zo-twist', 'turns',
-        z.xy_twist != null ? z.xy_twist : '', 0.25, -6, 6, 'inherit', function(inp){
+        z.xy_twist != null ? z.xy_twist : '', 0.25, -6, 6, 'inherit', function (inp) {
           var v = inp.value === '' ? null : parseFloat(inp.value);
           z.xy_twist = (v == null || Number.isNaN(v)) ? null : v;
           previewArmed = true;
@@ -5339,7 +5665,7 @@
       removeBtn.type = 'button';
       removeBtn.className = 'zo-row-remove';
       removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', function(){ removeZone(i); });
+      removeBtn.addEventListener('click', function () { removeZone(i); });
       row.appendChild(removeBtn);
 
       rowsHost.appendChild(row);
@@ -5359,19 +5685,19 @@
   // that: not a bug, just this control genuinely having nothing to rotate on
   // a circle. Told here rather than silently letting it look broken, the
   // same reasoning as #zo-scope-note for loop fabric/STL mode above.
-  function zoneTwistNoOpNote(z){
-    if(design.shape !== 'circle') return null;
-    if(z.xy_twist == null || z.xy_twist === 0) return null;
+  function zoneTwistNoOpNote(z) {
+    if (design.shape !== 'circle') return null;
+    if (z.xy_twist == null || z.xy_twist === 0) return null;
     return 'No visible effect on a circle shape -- there is no angular ' +
-           'asymmetry for a twist to rotate. Try star or square instead.';
+      'asymmetry for a twist to rotate. Try star or square instead.';
   }
-  function updateZoneTwistCautions(){
+  function updateZoneTwistCautions() {
     var zones = design.zone_overrides || [];
-    document.querySelectorAll('.zo-row').forEach(function(row){
+    document.querySelectorAll('.zo-row').forEach(function (row) {
       var idx = parseInt(row.getAttribute('data-zone-row-idx'), 10);
       var z = zones[idx];
       var el = row.querySelector('.zo-twist-caution');
-      if(!el || !z) return;
+      if (!el || !z) return;
       var note = zoneTwistNoOpNote(z);
       el.textContent = note || '';
       el.style.display = note ? '' : 'none';
@@ -5383,7 +5709,7 @@
 
   // Single removal path -- both the modal row's Remove button and the
   // in-model right-click "Remove zone" entry (viewer.js) call this.
-  function removeZone(i){
+  function removeZone(i) {
     design.zone_overrides.splice(i, 1);
     previewArmed = true;
     persistDesign();
@@ -5398,7 +5724,7 @@
   // fraction `t`, for viewer.js's right-click handler -- kept here rather
   // than in viewer.js because only this closure holds `design` and
   // effectiveBaseSpec(), which previewWallOffset() needs.
-  window.__zoneTFromWorldY = function(worldY){
+  window.__zoneTFromWorldY = function (worldY) {
     var off = window.previewWallOffset ? window.previewWallOffset(design, effectiveBaseSpec()) : { wallOff: 0 };
     var t = (worldY - off.wallOff) / Math.max(design.height || 60, 1e-6);
     return Math.max(0, Math.min(1, t));
@@ -5407,30 +5733,30 @@
   // here for the same reason __zoneTFromWorldY is (only this closure holds
   // `design`). Deliberately the exact inverse of zoneMmFromT below, but
   // exposed globally since viewer.js has no other way to reach it.
-  window.__zoneMmFromT = function(t){ return zoneMmFromT(t); };
+  window.__zoneMmFromT = function (t) { return zoneMmFromT(t); };
   // The exact inverse, exposed for the same reason: the on-model chip's
   // double-click-to-edit (viewer.js's zoneLabelBeginEdit) needs to turn a
   // typed mm value back into a t before it can call window.__zoneRingDrag,
   // and must use the SAME conversion the row's own From/To (mm) inputs use
   // -- not a re-derivation from window.__previewWallMeta's height, which
   // can briefly disagree with design.height mid-debounce.
-  window.__zoneTFromMm = function(mm){ return zoneTFromMm(mm); };
-  window.__zoneCanAdd = function(){
+  window.__zoneTFromMm = function (mm) { return zoneTFromMm(mm); };
+  window.__zoneCanAdd = function () {
     return (design.zone_overrides || []).length < ZONE_MAX_CLIENT;
   };
   // Right-click "Add zone here" (viewer.js): adds a zone and shows its rings
   // immediately WITHOUT opening the modal -- see openModal's own comment for
   // why forcing the modal open on every add was the friction being fixed.
-  window.__zoneAddAt = function(seedT){
-    if(!window.__zoneCanAdd()) return -1;
+  window.__zoneAddAt = function (seedT) {
+    if (!window.__zoneCanAdd()) return -1;
     addZone(seedT);
     renderZoneRows();
     return design.zone_overrides.length - 1;
   };
 
-  function addZone(seedT){
+  function addZone(seedT) {
     var zones = design.zone_overrides || (design.zone_overrides = []);
-    if(zones.length >= ZONE_MAX_CLIENT) return;
+    if (zones.length >= ZONE_MAX_CLIENT) return;
     var t = seedT != null ? seedT : 0.5;
     var half = 0.06;
     // Bands may overlap (v2) -- no clamp against existing zones here, unlike
@@ -5456,18 +5782,18 @@
   // slideBand=true moves both edges together (the whole band), preserving
   // its span -- the modal's own hint already promises "drag its middle to
   // slide it"; Shift+drag on either UI does the same thing.
-  function setZoneEdge(idx, edge, t, slideBand){
+  function setZoneEdge(idx, edge, t, slideBand) {
     var zones = design.zone_overrides || [];
     var z = zones[idx];
-    if(!z) return;
+    if (!z) return;
     var minSpan = minZoneSpan();
-    if(slideBand){
+    if (slideBand) {
       var span = Math.max(z.t_hi - z.t_lo, minSpan);
       var half = span / 2;
       var mid = Math.max(half, Math.min(t, 1 - half));
       z.t_lo = mid - half;
       z.t_hi = mid + half;
-    } else if(edge === 'lo'){
+    } else if (edge === 'lo') {
       z.t_lo = Math.max(0, Math.min(t, z.t_hi - minSpan));
     } else {
       z.t_hi = Math.min(1, Math.max(t, z.t_lo + minSpan));
@@ -5487,7 +5813,7 @@
     // persist per drag is also exactly what the 'zoneaxis:<idx>' coalescing
     // key already collapsed a whole drag's worth of persists down to, so the
     // undo stack still gets exactly one entry holding the pre-drag state.
-    if(zoneEdgeDragLive()){
+    if (zoneEdgeDragLive()) {
       zoneEdgePersistPending = 'zoneaxis:' + idx;
       designRev++;
       updateStaleBadge();
@@ -5502,7 +5828,7 @@
     var band = document.querySelector('#zo-axis .zo-axis-band[data-zone-idx="' + idx + '"]');
     var hLo = document.querySelector('#zo-axis .zo-axis-handle[data-zone-idx="' + idx + '"][data-edge="lo"]');
     var hHi = document.querySelector('#zo-axis .zo-axis-handle[data-zone-idx="' + idx + '"][data-edge="hi"]');
-    if(band && hLo && hHi) positionZoneAxisEls(idx, band, hLo, hHi, ZONE_AXIS_H);
+    if (band && hLo && hHi) positionZoneAxisEls(idx, band, hLo, hHi, ZONE_AXIS_H);
     cullZoneAxisLabels(idx);
     syncZoneRowMmInputs(idx);
     // The modal axis drag has no viewer.js counterpart doing its own live
@@ -5513,7 +5839,7 @@
     // pointermove. Falls back to the full refresh whenever this zone has no
     // live rings to move (out-of-scope design, disabled zone, or the modal
     // just opened and showZoneRings() hasn't built them yet).
-    if(!(zoneAxisDragging && window.__zoneRingsMoveZone && window.__zoneRingsMoveZone(idx, z.t_lo, z.t_hi))){
+    if (!(zoneAxisDragging && window.__zoneRingsMoveZone && window.__zoneRingsMoveZone(idx, z.t_lo, z.t_hi))) {
       refreshZoneRings();
     }
     // Returned so viewer.js's in-model ring drag can reposition its OWN ring
@@ -5533,12 +5859,12 @@
   // drag sets zoneAxisDragging below.
   var zoneEdgePersistPending = null;   // coalesce key of a persist not yet flushed, or null
   var zoneAxisDragging = false;
-  function zoneEdgeDragLive(){ return zoneAxisDragging || !!window.__zoneRingDragActive; }
-  function flushZoneEdgePersist(){
-    if(!zoneEdgePersistPending) return;
+  function zoneEdgeDragLive() { return zoneAxisDragging || !!window.__zoneRingDragActive; }
+  function flushZoneEdgePersist() {
+    if (!zoneEdgePersistPending) return;
     var key = zoneEdgePersistPending;
     zoneEdgePersistPending = null;   // null first: re-entrancy safe, and a
-                                      // stray second flush is a no-op.
+    // stray second flush is a no-op.
     persistDesign(key);
     // persistDesign only ARMS the coalescing run (histRunKey); closing it
     // here, rather than waiting on the idle timer or the capture-phase
@@ -5569,15 +5895,15 @@
          && design.mesh_base_mode !== 'planar_base');
     var zones = (design.zone_overrides || []);
     var live = [];
-    zones.forEach(function(z, idx){
-      if(z && z.enabled) live.push({ idx: idx, t_lo: z.t_lo, t_hi: z.t_hi, color: zoneColorHex(z) });
+    zones.forEach(function (z, idx) {
+      if (z && z.enabled) live.push({ idx: idx, t_lo: z.t_lo, t_hi: z.t_hi, color: zoneColorHex(z) });
     });
-    if(outOfScope || !live.length){ window.hideZoneRings(); return; }
+    if (outOfScope || !live.length) { window.hideZoneRings(); return; }
     window.showZoneRings(live);
   }
   window.__refreshZoneRings = refreshZoneRings;
 
-  (function(){
+  (function () {
     var modal = document.getElementById('zone-modal');
     var openBtn = document.getElementById('zone-btn');
     var closeBtn = document.getElementById('zo-modal-close');
@@ -5585,7 +5911,7 @@
     var addBtn = document.getElementById('zo-add-zone');
     var resetBtn = document.getElementById('zo-reset-all');
     var backdrop = modal ? modal.querySelector('.zo-modal-backdrop') : null;
-    if(!modal || !openBtn) return;
+    if (!modal || !openBtn) return;
 
     // seedT (optional): a height fraction to seed a new zone at. No longer
     // used by the right-click flow (viewer.js's "Add zone here" calls
@@ -5596,39 +5922,39 @@
     // focusIdx (optional): scrolls to and pulses that zone's row -- used by
     // the right-click "Edit zone N textures..." entry (viewer.js), which
     // reaches an EXISTING zone the user already positioned on the model.
-    function openModal(seedT, focusIdx){
+    function openModal(seedT, focusIdx) {
       previewArmed = true;
-      if(seedT != null) addZone(seedT);
+      if (seedT != null) addZone(seedT);
       renderZoneRows();
       modal.style.display = 'flex';
-      if(focusIdx != null){
+      if (focusIdx != null) {
         var row = document.querySelector('.zo-row[data-zone-row-idx="' + focusIdx + '"]');
-        if(row){
+        if (row) {
           row.scrollIntoView({ block: 'nearest' });
           // Same pulse-cue convention as the param-search jump-to-control
           // (designer.js's param-search IIFE): remove-reflow-add so a
           // repeat call restarts the animation instead of no-op'ing.
           row.classList.remove('param-search-hit'); void row.offsetWidth;
           row.classList.add('param-search-hit');
-          setTimeout(function(){ row.classList.remove('param-search-hit'); }, 1400);
+          setTimeout(function () { row.classList.remove('param-search-hit'); }, 1400);
         }
       }
     }
-    function closeModal(){ modal.style.display = 'none'; }
+    function closeModal() { modal.style.display = 'none'; }
     window.__openZoneModal = openModal;
     // Right-click "Edit zone N textures..." (viewer.js) -- opens the modal
     // scrolled to and pulsing an EXISTING zone, adding nothing new.
-    window.__zoneOpenModalAt = function(idx){ openModal(null, idx); };
+    window.__zoneOpenModalAt = function (idx) { openModal(null, idx); };
 
-    openBtn.addEventListener('click', function(){ openModal(null); });
-    if(closeBtn) closeBtn.addEventListener('click', closeModal);
-    if(doneBtn) doneBtn.addEventListener('click', closeModal);
-    if(backdrop) backdrop.addEventListener('click', closeModal);
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && modal.style.display !== 'none') closeModal();
+    openBtn.addEventListener('click', function () { openModal(null); });
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (doneBtn) doneBtn.addEventListener('click', closeModal);
+    if (backdrop) backdrop.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && modal.style.display !== 'none') closeModal();
     });
-    if(addBtn) addBtn.addEventListener('click', function(){ addZone(0.5); renderZoneRows(); });
-    if(resetBtn) resetBtn.addEventListener('click', function(){
+    if (addBtn) addBtn.addEventListener('click', function () { addZone(0.5); renderZoneRows(); });
+    if (resetBtn) resetBtn.addEventListener('click', function () {
       design.zone_overrides = [];
       previewArmed = true;
       renderZoneRows();
@@ -5645,18 +5971,18 @@
     // interactions can never disagree about a bound.
     var axisHost = document.getElementById('zo-axis');
     var dragging = null;   // {idx, edge:'lo'|'hi'|'band', offset?:number}
-    if(axisHost){
-      axisHost.addEventListener('pointerdown', function(e){
+    if (axisHost) {
+      axisHost.addEventListener('pointerdown', function (e) {
         var t = e.target;
-        if(!t.classList) return;
-        if(t.classList.contains('zo-axis-handle')) {
+        if (!t.classList) return;
+        if (t.classList.contains('zo-axis-handle')) {
           dragging = { idx: parseInt(t.getAttribute('data-zone-idx'), 10), edge: t.getAttribute('data-edge') };
           t.classList.add('dragging');
-        } else if(t.classList.contains('zo-axis-band')) {
+        } else if (t.classList.contains('zo-axis-band')) {
           var idx = parseInt(t.getAttribute('data-zone-idx'), 10);
           var zones = design.zone_overrides || [];
           var z = zones[idx];
-          if(!z) return;
+          if (!z) return;
           var mid = (z.t_lo + z.t_hi) / 2;
           var rect = axisHost.getBoundingClientRect();
           var pointerT = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
@@ -5670,25 +5996,25 @@
         t.setPointerCapture(e.pointerId);
       });
     }
-    function tAtClientY(clientY){
+    function tAtClientY(clientY) {
       var rect = axisHost.getBoundingClientRect();
       return Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
     }
-    document.addEventListener('pointermove', function(e){
-      if(!dragging) return;
+    document.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
       if (dragging.edge === 'band') {
         setZoneEdge(dragging.idx, 'lo', tAtClientY(e.clientY) + dragging.offset, true);
       } else {
         setZoneEdge(dragging.idx, dragging.edge, tAtClientY(e.clientY), e.shiftKey);
       }
     });
-    document.addEventListener('pointerup', function(e){
-      if(!dragging) return;
+    document.addEventListener('pointerup', function (e) {
+      if (!dragging) return;
       dragging = null;
       zoneAxisDragging = false;
-      if(axisHost) axisHost.querySelectorAll('.zo-axis-handle.dragging, .zo-axis-band.dragging').forEach(function(h){
+      if (axisHost) axisHost.querySelectorAll('.zo-axis-handle.dragging, .zo-axis-band.dragging').forEach(function (h) {
         h.classList.remove('dragging');
-        try { h.releasePointerCapture(e.pointerId); } catch(err){}
+        try { h.releasePointerCapture(e.pointerId); } catch (err) { }
       });
       // Flush the persist setZoneEdge deferred during the drag (see its own
       // comment), THEN the one full ring/label re-sync for this drag --
@@ -5705,14 +6031,14 @@
 
   // Print tab.
   bindSelect('d-nozzle', 'nozzle');
-  document.getElementById('d-nozzle').addEventListener('change', function(){ widthEditor.draw(); });
+  document.getElementById('d-nozzle').addEventListener('change', function () { widthEditor.draw(); });
   bindNumber('d-speed', 'print_speed');
   bindSelect('d-filament', 'filament');
-  (function(){
+  (function () {
     var el = document.getElementById('d-lwoverride');
-    if(!el) return;
-    if(design.line_width != null) el.value = design.line_width;
-    el.addEventListener('input', function(){
+    if (!el) return;
+    if (design.line_width != null) el.value = design.line_width;
+    el.addEventListener('input', function () {
       var v = parseFloat(el.value);
       design.line_width = (el.value === '' || Number.isNaN(v)) ? null : v;
       persistDesign('num:d-lwoverride');
@@ -5732,37 +6058,37 @@
   // server-side against the 320C absolute backstop). Previously these stored
   // whatever was typed, so the panel could show and send 400C to a printer
   // declaring 260C and let the server quietly cut it back.
-  function bindOptionalTemp(id, field, resetBtnId){
+  function bindOptionalTemp(id, field, resetBtnId) {
     var el = document.getElementById(id);
-    if(!el) return;
+    if (!el) return;
     var resetBtn = resetBtnId ? document.getElementById(resetBtnId) : null;
-    function syncOverrideMark(){
+    function syncOverrideMark() {
       var overridden = design[field] != null;
       el.classList.toggle('fm-overridden', overridden);
-      if(resetBtn) resetBtn.style.display = overridden ? '' : 'none';
+      if (resetBtn) resetBtn.style.display = overridden ? '' : 'none';
     }
-    if(design[field] != null) el.value = design[field];
+    if (design[field] != null) el.value = design[field];
     syncOverrideMark();
-    function applyTemp(commit){
+    function applyTemp(commit) {
       var raw = parseFloat(el.value);
-      if(el.value === '' || Number.isNaN(raw)){
+      if (el.value === '' || Number.isNaN(raw)) {
         design[field] = null;
         el.classList.remove('out-of-range');
       } else {
         var v = raw;
         var lo = parseFloat(el.min), hi = parseFloat(el.max);
-        if(isFinite(lo)) v = Math.max(lo, v);
-        if(isFinite(hi)) v = Math.min(hi, v);
+        if (isFinite(lo)) v = Math.max(lo, v);
+        if (isFinite(hi)) v = Math.min(hi, v);
         design[field] = v;
         el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
-        if(commit){ el.value = v; el.classList.remove('out-of-range'); }
+        if (commit) { el.value = v; el.classList.remove('out-of-range'); }
       }
       syncOverrideMark();
       persistDesign('num:' + id);
-      if(commit) endHistRun();
+      if (commit) endHistRun();
     }
-    el.addEventListener('input', function(){ applyTemp(false); });
-    el.addEventListener('change', function(){ applyTemp(true); });
+    el.addEventListener('input', function () { applyTemp(false); });
+    el.addEventListener('change', function () { applyTemp(true); });
   }
   bindOptionalTemp('d-nozzletemp', 'nozzle_temp', 'fm-reset-nozzle');
   bindOptionalTemp('d-bedtemp', 'bed_temp', 'fm-reset-bed');
@@ -5770,21 +6096,21 @@
   // Live "flow line width" readout mirroring serve.py: line_width = round(nozzle*1.125, 3),
   // or the explicit override. Purely informational; stale tracking is already handled
   // by bindSelect('d-nozzle') -> persistDesign().
-  (function(){
+  (function () {
     var hint = document.getElementById('nozzle-flow-hint');
     var nz = document.getElementById('d-nozzle');
     var lwo = document.getElementById('d-lwoverride');
-    if(!hint || !nz) return;
-    function fmt(n){ return String(Math.round(n*1000)/1000); }
-    function compute(){
+    if (!hint || !nz) return;
+    function fmt(n) { return String(Math.round(n * 1000) / 1000); }
+    function compute() {
       var ov = (lwo && lwo.value !== '') ? parseFloat(lwo.value) : NaN;
-      if(!Number.isNaN(ov)){ hint.textContent = 'Flow line width: ' + fmt(ov) + ' mm (override)'; return; }
+      if (!Number.isNaN(ov)) { hint.textContent = 'Flow line width: ' + fmt(ov) + ' mm (override)'; return; }
       // "auto (profile)": every current printer profile defaults to a 0.40 mm nozzle.
       var nd = nz.value === '' ? 0.4 : parseFloat(nz.value);
-      hint.textContent = 'Flow line width: ' + fmt(nd*1.125) + ' mm  (nozzle ' + nd + ' × 1.125)';
+      hint.textContent = 'Flow line width: ' + fmt(nd * 1.125) + ' mm  (nozzle ' + nd + ' × 1.125)';
     }
     nz.addEventListener('change', compute);
-    if(lwo) lwo.addEventListener('input', compute);
+    if (lwo) lwo.addEventListener('input', compute);
     compute();
   })();
 
@@ -5795,7 +6121,7 @@
   // print a base, so this is deliberately false when a mesh is loaded. Reads
   // the DOM select directly (like refreshPatternRows) so it does not depend
   // on listener order relative to whatever updates `design.pattern`.
-  function loopFabricActive(){
+  function loopFabricActive() {
     var noMesh = !(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
     return document.getElementById('d-pattern').value === 'loops' && noMesh;
   }
@@ -5808,7 +6134,7 @@
   // schedulePreview() (the live draft) both read this instead of each
   // re-deriving the same rule, so the draft can never promise a base the
   // request will not actually carry, or vice versa.
-  function effectiveBaseSpec(){
+  function effectiveBaseSpec() {
     var lf = loopFabricActive();
     // STL mode builds the wall with build_profile_spiral, which takes neither
     // a base style nor a skirt: it always paves the disks as the Archimedean
@@ -5843,10 +6169,10 @@
     };
   }
 
-  function refreshShapeRows(){
+  function refreshShapeRows() {
     var isStar = document.getElementById('d-shape').value === 'star';
     var starRows = document.getElementById('star-rows');
-    if(starRows) starRows.style.display = isStar ? '' : 'none';
+    if (starRows) starRows.style.display = isStar ? '' : 'none';
 
     var isOpen = design.bottom === 'open';
     var isLoopFabric = loopFabricActive();
@@ -5857,25 +6183,25 @@
     // not fold this into the loop-fabric condition below.
     var squishRow = document.getElementById('row-squish');
     var spacingRow = document.getElementById('row-spacing');
-    if(baseRow) baseRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
+    if (baseRow) baseRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
     // STL mode always paves the base as the Archimedean spiral and never lays
     // a skirt (build_profile_spiral takes neither), so those two rows are
     // inert there -- hide them rather than let the panel offer a choice the
     // generator will drop. Base layers and brim DO work in STL mode.
     var meshLoaded = !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
     var baseStyleRow = document.getElementById('row-basestyle');
-    if(baseStyleRow) baseStyleRow.style.display = (isOpen || isLoopFabric || meshLoaded) ? 'none' : '';
-    if(squishRow) squishRow.style.display = isOpen ? 'none' : '';
+    if (baseStyleRow) baseStyleRow.style.display = (isOpen || isLoopFabric || meshLoaded) ? 'none' : '';
+    if (squishRow) squishRow.style.display = isOpen ? 'none' : '';
     var flhHint = document.getElementById('flh-hint');
-    if(flhHint) flhHint.style.display = isOpen ? 'none' : '';
-    if(spacingRow) spacingRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
+    if (flhHint) flhHint.style.display = isOpen ? 'none' : '';
+    if (spacingRow) spacingRow.style.display = (isOpen || isLoopFabric) ? 'none' : '';
 
     var bottomRow = document.getElementById('d-bottom');
-    if(bottomRow) bottomRow.style.display = isLoopFabric ? 'none' : '';
+    if (bottomRow) bottomRow.style.display = isLoopFabric ? 'none' : '';
     var brimRow = document.getElementById('row-brim');
-    if(brimRow) brimRow.style.display = isLoopFabric ? 'none' : '';
+    if (brimRow) brimRow.style.display = isLoopFabric ? 'none' : '';
     var skirtRow = document.getElementById('row-skirt');
-    if(skirtRow) skirtRow.style.display = (isLoopFabric || meshLoaded) ? 'none' : '';
+    if (skirtRow) skirtRow.style.display = (isLoopFabric || meshLoaded) ? 'none' : '';
     var loopBaseHint = document.getElementById('loop-base-hint');
     if(loopBaseHint) loopBaseHint.style.display = isLoopFabric ? '' : 'none';
 
@@ -5930,16 +6256,16 @@
     // shape too -- refresh it here rather than only from the field's own
     // input handler, or switching TO circle after already setting a zone's
     // twist would leave the note stale (missing) until the field is touched.
-    if(typeof updateZoneTwistCautions === 'function') updateZoneTwistCautions();
+    if (typeof updateZoneTwistCautions === 'function') updateZoneTwistCautions();
   }
   document.getElementById('d-shape').addEventListener('change', refreshShapeRows);
 
   // Bottom type radios.
   var bottomRadios = document.querySelectorAll('input[name="d-bottom"]');
-  bottomRadios.forEach(function(r){
-    if(r.value === design.bottom) r.checked = true;
-    r.addEventListener('change', function(){
-      if(!r.checked) return;
+  bottomRadios.forEach(function (r) {
+    if (r.value === design.bottom) r.checked = true;
+    r.addEventListener('change', function () {
+      if (!r.checked) return;
       design.bottom = r.value;
       // Leave the stored Base layers value alone. buildGenerateBody() is the
       // single place that maps Bottom -> base_layers, and it already sends 0
@@ -5972,14 +6298,14 @@
 
   // Show pattern controls only when a texture is selected: loops have their
   // own row group, wave patterns share #pattern-rows.
-  function refreshPatternRows(){
+  function refreshPatternRows() {
     var val = document.getElementById('d-pattern').value;
     var waveRows = document.getElementById('pattern-rows');
     var loopRows = document.getElementById('loop-rows');
-    if(waveRows) waveRows.style.display = (val && val !== 'loops') ? 'block' : 'none';
-    if(loopRows) loopRows.style.display = (val === 'loops') ? 'block' : 'none';
+    if (waveRows) waveRows.style.display = (val && val !== 'loops') ? 'block' : 'none';
+    if (loopRows) loopRows.style.display = (val === 'loops') ? 'block' : 'none';
   }
-  document.getElementById('d-pattern').addEventListener('change', function(){
+  document.getElementById('d-pattern').addEventListener('change', function () {
     refreshPatternRows();
     refreshShapeRows();
   });
@@ -5988,7 +6314,7 @@
   refreshPatternRows();
 
   // ---- parameter search (jump-to-control) ---------------------------------
-  (function(){
+  (function () {
     var input = document.getElementById('param-search-input');
     var resultsEl = document.getElementById('param-search-results');
     var scroll = document.getElementById('panel-scroll');
@@ -6001,9 +6327,11 @@
     var planarScroll = document.querySelector('#planar-panel .panel-scroll');
 
     // conditional block -> the <select> id that controls its visibility
-    var BLOCK_CTRL = { 'star-rows':'d-shape', 'pattern-rows':'d-pattern',
-                       'loop-rows':'d-pattern' };
-    var STEP_LABEL = { model:'Model', texture:'Texture', print:'Print', generate:'Generate' };
+    var BLOCK_CTRL = {
+      'star-rows': 'd-shape', 'pattern-rows': 'd-pattern',
+      'loop-rows': 'd-pattern'
+    };
+    var STEP_LABEL = { model: 'Model', texture: 'Texture', print: 'Print', generate: 'Generate' };
 
     // An element's OWN text, ignoring nested elements. Both the things this
     // index reads carry decorative element children that textContent would
@@ -6084,21 +6412,24 @@
     }
 
     var matches = [], activeIdx = -1;
-    function esc(s){ return s.replace(/[&<>"]/g,function(c){
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+    function esc(s) {
+      return s.replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
 
-    function search(q){
+    function search(q) {
       q = q.trim().toLowerCase();
-      if(!q){ resultsEl.classList.remove('open'); return; }
+      if (!q) { resultsEl.classList.remove('open'); return; }
       var out = [];
-      for(var i=0;i<index.length && out.length<12;i++) if(index[i].lc.indexOf(q)>=0) out.push(index[i]);
-      out.sort(function(a,b){ return (a.lc.indexOf(q)===0?0:1) - (b.lc.indexOf(q)===0?0:1); });
+      for (var i = 0; i < index.length && out.length < 12; i++) if (index[i].lc.indexOf(q) >= 0) out.push(index[i]);
+      out.sort(function (a, b) { return (a.lc.indexOf(q) === 0 ? 0 : 1) - (b.lc.indexOf(q) === 0 ? 0 : 1); });
       matches = out; activeIdx = out.length ? 0 : -1;
       resultsEl.innerHTML = '';
-      out.forEach(function(m,i){
+      out.forEach(function (m, i) {
         var it = document.createElement('div');
-        it.className = 'param-search-item' + (i===0?' active':'');
-        it.setAttribute('role','option');
+        it.className = 'param-search-item' + (i === 0 ? ' active' : '');
+        it.setAttribute('role', 'option');
         it.id = 'psi-' + i;
         it.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
         var crumb = crumbFor(m);
@@ -6107,64 +6438,71 @@
         it.addEventListener('mouseenter', function(){ setActive(i); });
         resultsEl.appendChild(it);
       });
-      resultsEl.classList.toggle('open', out.length>0);
-      input.setAttribute('aria-expanded', out.length>0 ? 'true' : 'false');
-      input.setAttribute('aria-activedescendant', out.length>0 ? 'psi-0' : '');
+      resultsEl.classList.toggle('open', out.length > 0);
+      input.setAttribute('aria-expanded', out.length > 0 ? 'true' : 'false');
+      input.setAttribute('aria-activedescendant', out.length > 0 ? 'psi-0' : '');
     }
-    function setActive(i){ var ch = resultsEl.children;
-      if(ch[activeIdx]){ ch[activeIdx].classList.remove('active');
-        ch[activeIdx].setAttribute('aria-selected','false'); }
+    function setActive(i) {
+      var ch = resultsEl.children;
+      if (ch[activeIdx]) {
+        ch[activeIdx].classList.remove('active');
+        ch[activeIdx].setAttribute('aria-selected', 'false');
+      }
       activeIdx = i;
-      if(ch[i]){ ch[i].classList.add('active'); ch[i].setAttribute('aria-selected','true');
-        input.setAttribute('aria-activedescendant', ch[i].id); } }
+      if (ch[i]) {
+        ch[i].classList.add('active'); ch[i].setAttribute('aria-selected', 'true');
+        input.setAttribute('aria-activedescendant', ch[i].id);
+      }
+    }
 
     // Shared by the outside-click handler and Escape: empties the query and
     // drops the stale match list, not just the dropdown's open state. Does
     // NOT run on choose() -- picking a result is expected to leave the
     // chosen label sitting in the box, only leaving-without-picking clears it.
-    function clearSearch(){
+    function clearSearch() {
       input.value = '';
       matches = []; activeIdx = -1;
       resultsEl.classList.remove('open');
-      input.setAttribute('aria-expanded','false');
+      input.setAttribute('aria-expanded', 'false');
       input.removeAttribute('aria-activedescendant');
     }
 
-    function choose(m){
-      if(window.setAppMode) window.setAppMode(m.mode);      // reuse existing path
-      if(m.mode==='design' && m.step) activateStep(m.step); // reuse existing path
+    function choose(m) {
+      if (window.setAppMode) window.setAppMode(m.mode);      // reuse existing path
+      if (m.mode === 'design' && m.step) activateStep(m.step); // reuse existing path
       // A search hit inside a collapsed section would otherwise scroll to a
       // display:none row and flash nothing. Expand first, synchronously, so the
       // measurement below sees the real geometry.
       expandSectionsContaining(m.row);
-      if(m.ctrl) expandSectionsContaining(m.ctrl);
-      requestAnimationFrame(function(){
+      if (m.ctrl) expandSectionsContaining(m.ctrl);
+      requestAnimationFrame(function () {
         var target = m.row;
-        if(m.ctrl && m.row.offsetParent === null)           // hidden conditional block
+        if (m.ctrl && m.row.offsetParent === null)           // hidden conditional block
           target = m.ctrl.closest('.drow') || m.ctrl;
         var targetScroll = m.scrollEl || scroll;
         var cr = targetScroll.getBoundingClientRect(), er = target.getBoundingClientRect();
         targetScroll.scrollTop += (er.top - cr.top) - (targetScroll.clientHeight/2 - er.height/2);
         target.classList.remove('param-search-hit'); void target.offsetWidth;
         target.classList.add('param-search-hit');
-        setTimeout(function(){ target.classList.remove('param-search-hit'); }, 1400);
+        setTimeout(function () { target.classList.remove('param-search-hit'); }, 1400);
       });
       resultsEl.classList.remove('open'); input.blur();
     }
 
-    input.addEventListener('input', function(){ search(input.value); });
-    input.addEventListener('keydown', function(e){
+    input.addEventListener('input', function () { search(input.value); });
+    input.addEventListener('keydown', function (e) {
       // Escape must clear unconditionally -- checked before the matches-gate
       // below, otherwise a query with zero results (matches.length === 0)
       // would leave Escape silently doing nothing and the text stuck.
-      if(e.key==='Escape'){ clearSearch(); input.blur(); return; }
-      if(!matches.length) return;
-      if(e.key==='ArrowDown'){ e.preventDefault(); setActive(Math.min(activeIdx+1, matches.length-1)); }
-      else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(Math.max(activeIdx-1, 0)); }
-      else if(e.key==='Enter'){ e.preventDefault(); if(matches[activeIdx]) choose(matches[activeIdx]); }
+      if (e.key === 'Escape') { clearSearch(); input.blur(); return; }
+      if (!matches.length) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); setActive(Math.min(activeIdx + 1, matches.length - 1)); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(activeIdx - 1, 0)); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (matches[activeIdx]) choose(matches[activeIdx]); }
     });
-    document.addEventListener('click', function(e){
-      if(!e.target.closest('#param-search')) clearSearch(); });
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('#param-search')) clearSearch();
+    });
   })();
 
   // ---- parameter help tooltips (Orca-style hover panel) --------------------
@@ -6173,9 +6511,9 @@
   // of delegated listeners on the containers that hold every .drow/label.row
   // in the app -- the sidebar scroll area and the Point Edit Modifiers modal
   // (a separate overlay outside #panel-scroll) -- not one listener per row.
-  (function(){
+  (function () {
     var HELP = window.PARAM_HELP;
-    if(!HELP) return;
+    if (!HELP) return;
 
     var tip = document.createElement('div');
     tip.id = 'param-tooltip';
@@ -6188,10 +6526,10 @@
     var currentCtrl = null;   // control currently wearing aria-describedby
     var currentRow = null;    // row the visible/pending tooltip belongs to
 
-    function findRow(el){
+    function findRow(el) {
       return (el && el.closest) ? el.closest('.drow, label.row') : null;
     }
-    function labelSpan(row){
+    function labelSpan(row) {
       return row.querySelector(':scope > span');
     }
     // The id a row's tooltip is keyed on: prefer an explicit data-help-id
@@ -6201,21 +6539,21 @@
     // <span id> (the STL mesh-info rows have no input at all), and finally
     // the row's own id (the Bottom radio row has no per-input id -- see
     // id="d-bottom" on that .drow in index.html).
-    function helpIdFor(row){
+    function helpIdFor(row) {
       var explicit = row.getAttribute('data-help-id');
-      if(explicit) return explicit;
+      if (explicit) return explicit;
       var el = row.querySelector('input[id], select[id], textarea[id], span[id]');
-      if(el) return el.id;
+      if (el) return el.id;
       return row.id || null;
     }
-    function controlFor(row){
+    function controlFor(row) {
       return row.querySelector('input, select, textarea') || row;
     }
 
-    function hide(){
-      if(showTimer){ clearTimeout(showTimer); showTimer = null; }
+    function hide() {
+      if (showTimer) { clearTimeout(showTimer); showTimer = null; }
       tip.classList.remove('open');
-      if(currentCtrl){ currentCtrl.removeAttribute('aria-describedby'); currentCtrl = null; }
+      if (currentCtrl) { currentCtrl.removeAttribute('aria-describedby'); currentCtrl = null; }
       currentRow = null;
     }
 
@@ -6223,25 +6561,25 @@
     // the panel is docked at the right edge of the window (so opening
     // rightward would usually overflow) and rows near the bottom of a tall
     // sidebar must not push the tooltip below the fold. Measured, not assumed.
-    function position(anchorEl){
+    function position(anchorEl) {
       var ar = anchorEl.getBoundingClientRect();
       var tw = tip.offsetWidth, th = tip.offsetHeight;
       var gap = 8, margin = 8;
       var vw = window.innerWidth, vh = window.innerHeight;
 
       var x = ar.right + gap;
-      if(x + tw + margin > vw) x = ar.left - gap - tw;
+      if (x + tw + margin > vw) x = ar.left - gap - tw;
       x = Math.max(margin, Math.min(vw - tw - margin, x));
 
       var y = ar.top;
-      if(y + th + margin > vh) y = vh - th - margin;
+      if (y + th + margin > vh) y = vh - th - margin;
       y = Math.max(margin, y);
 
       tip.style.left = Math.round(x) + 'px';
       tip.style.top = Math.round(y) + 'px';
     }
 
-    function render(data){
+    function render(data) {
       tip.innerHTML = '';
       var desc = document.createElement('div');
       desc.className = 'param-tip-desc';
@@ -6257,50 +6595,50 @@
       tip.appendChild(defLine);
     }
 
-    function showFor(row, anchorEl, immediate){
+    function showFor(row, anchorEl, immediate) {
       var id = helpIdFor(row);
       var data = id ? HELP[id] : null;
-      if(!data) return;   // no entry for this id -- fail silent, never a broken empty box
-      function doShow(){
+      if (!data) return;   // no entry for this id -- fail silent, never a broken empty box
+      function doShow() {
         render(data);
         currentRow = row;
         currentCtrl = controlFor(row);
-        if(currentCtrl) currentCtrl.setAttribute('aria-describedby', tip.id);
+        if (currentCtrl) currentCtrl.setAttribute('aria-describedby', tip.id);
         position(anchorEl);   // tip is laid out (visibility:hidden) so this measures real content
         tip.classList.add('open');
       }
-      if(showTimer){ clearTimeout(showTimer); showTimer = null; }
-      if(immediate) doShow();
+      if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+      if (immediate) doShow();
       else showTimer = setTimeout(doShow, OPEN_DELAY);
     }
 
-    function onMouseOver(e){
+    function onMouseOver(e) {
       var row = findRow(e.target);
-      if(!row) return;
+      if (!row) return;
       var span = labelSpan(row);
-      if(!span || (e.target !== span && !span.contains(e.target))) return;
-      if(currentRow === row && tip.classList.contains('open')) return;
+      if (!span || (e.target !== span && !span.contains(e.target))) return;
+      if (currentRow === row && tip.classList.contains('open')) return;
       showFor(row, span, false);
     }
-    function onMouseOut(e){
+    function onMouseOut(e) {
       var row = findRow(e.target);
-      if(!row) return;
+      if (!row) return;
       var span = labelSpan(row);
-      if(!span) return;
+      if (!span) return;
       var to = e.relatedTarget;
-      if(to && (to === span || span.contains(to))) return;   // still inside the label
-      if(currentRow === row || showTimer) hide();
+      if (to && (to === span || span.contains(to))) return;   // still inside the label
+      if (currentRow === row || showTimer) hide();
     }
-    function onFocusIn(e){
+    function onFocusIn(e) {
       var ctrl = e.target;
-      if(!ctrl || !ctrl.matches || !ctrl.matches('input, select, textarea')) return;
+      if (!ctrl || !ctrl.matches || !ctrl.matches('input, select, textarea')) return;
       var row = findRow(ctrl);
-      if(!row) return;
+      if (!row) return;
       showFor(row, ctrl, true);   // no delay on keyboard focus
     }
-    function onFocusOut(e){
+    function onFocusOut(e) {
       var row = findRow(e.target);
-      if(row && row === currentRow) hide();
+      if (row && row === currentRow) hide();
     }
 
     var hoverContainers = [document.getElementById('panel-scroll'),
@@ -6329,102 +6667,118 @@
   })();
 
   updateSlope();
-  window.addEventListener('mousemove', function(){ if(document.getElementById('slope-read')) updateSlope(); });
+  window.addEventListener('mousemove', function () { if (document.getElementById('slope-read')) updateSlope(); });
 
 
   // ---- preset gallery + save/load -----------------------------------------
   var PRESETS = [
-    { name: 'Gentle Wave Vase', shape:'circle', radius:32, height:45, layer_height:0.30,
-      xy_twist:0, z_waves:5, z_twist:0, bottom:'solid', base_layers:2, brim:0,
-      squish:0.75, spacing_factor:1.25, print_speed:40, pattern:'',
-      amp_profile:[[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Twisted Star', shape:'star', radius:30, height:50, layer_height:0.30,
-      xy_twist:1.5, z_waves:5, z_twist:0, star_points:5, star_depth:0.35,
-      bottom:'solid', base_layers:2, brim:0, squish:0.75, spacing_factor:1.25,
-      print_speed:45, pattern:'',
-      amp_profile:[[0,0],[0.2,0.3],[0.4,0.6],[0.6,0.8],[0.8,0.8],[1.0,0.5]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Twisted Squircle', shape:'square', radius:30, height:55, layer_height:0.32,
-      xy_twist:1.0, z_waves:4, z_twist:0, bottom:'solid', base_layers:2, brim:0,
-      squish:0.75, spacing_factor:1.25, print_speed:45, pattern:'',
-      amp_profile:[[0,0],[0.2,0.3],[0.4,0.65],[0.6,0.9],[0.8,0.9],[1.0,0.5]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Ripple Vase', shape:'circle', radius:34, height:60, layer_height:0.30,
-      xy_twist:0, z_waves:6, z_twist:0, bottom:'solid', base_layers:2, brim:0,
-      squish:0.75, spacing_factor:1.25, print_speed:40, pattern:'ripple',
-      pattern_amp:1.2, pattern_waves:10, pattern_bands:8, pattern_twist:0.5,
-      pattern_fade_in:0.10, pattern_fade_out:0,
-      amp_profile:[[0,0],[0.15,0.25],[0.4,0.6],[0.7,0.7],[1.0,0.4]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Flared Vase', shape:'circle', radius:28, height:65, layer_height:0.30,
-      xy_twist:0, z_waves:5, z_twist:0, bottom:'solid', base_layers:2, brim:0,
-      squish:0.75, spacing_factor:1.25, print_speed:40, pattern:'',
-      amp_profile:[[0,0],[0.2,0.3],[0.5,0.7],[0.8,0.8],[1.0,0.5]],
-      radius_profile:[[0,0.7],[0.15,0.6],[0.4,0.8],[0.7,1.1],[1.0,1.25]] },
-    { name: 'Aggressive Twist Star', shape:'star', radius:28, height:55, layer_height:0.30,
-      xy_twist:3.0, z_waves:8, z_twist:1.0, star_points:6, star_depth:0.40,
-      bottom:'solid', base_layers:2, brim:0, squish:0.75, spacing_factor:1.25,
-      print_speed:90, pattern:'',
-      amp_profile:[[0,0],[0.2,0.2],[0.5,0.5],[0.8,0.7],[1.0,0.4]],
-      radius_profile:[[0,1],[0.2,1],[0.4,1],[0.6,1],[0.8,1],[1.0,1]] },
-    { name: 'Diamond Mesh Basket', shape:'circle', radius:32, height:50, layer_height:0.3,
-      xy_twist:0, z_waves:0, z_twist:0, bottom:'solid', base_layers:2, brim:0,
-      squish:0.75, spacing_factor:1.25, print_speed:25, pattern:'vwave',
-      pattern_amp:2.5, pattern_waves:24, pattern_bands:6, pattern_twist:0,
-      pattern_phase:0, pattern_fade_in:0.08, pattern_fade_out:0, pattern_alternate:true,
-      amp_profile:[[0,0],[1,0]],
-      radius_profile:[[0,1],[1,1]] },
-    { name: 'Loop Fabric Vase', shape:'circle', radius:32, height:45, layer_height:0.3,
-      xy_twist:0, z_waves:0, z_twist:0, bottom:'solid', base_layers:2, brim:0,
-      squish:0.75, spacing_factor:1.25, print_speed:25, pattern:'loops',
-      loop_style:'chainmail', loop_spacing_mm:4, loop_per_turn:0, loop_turn_stride:1,
-      loop_align:'stagger', loop_jitter:0.5, loop_row:2.5, loop_up:3.5, loop_out:0.5,
-      loop_cuff:3, loop_rejoin:2.0, loop_dwell:0, loop_flow:1.2, loop_speed:10,
-      loop_fade_in:0.1, loop_fade_out:0,
-      amp_profile:[[0,0],[1,0]],
-      radius_profile:[[0,1],[1,1]] },
+    {
+      name: 'Gentle Wave Vase', shape: 'circle', radius: 32, height: 45, layer_height: 0.30,
+      xy_twist: 0, z_waves: 5, z_twist: 0, bottom: 'solid', base_layers: 2, brim: 0,
+      squish: 0.75, spacing_factor: 1.25, print_speed: 40, pattern: '',
+      amp_profile: [[0, 0], [0.2, 0.3], [0.4, 0.6], [0.6, 0.8], [0.8, 0.8], [1.0, 0.5]],
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Twisted Star', shape: 'star', radius: 30, height: 50, layer_height: 0.30,
+      xy_twist: 1.5, z_waves: 5, z_twist: 0, star_points: 5, star_depth: 0.35,
+      bottom: 'solid', base_layers: 2, brim: 0, squish: 0.75, spacing_factor: 1.25,
+      print_speed: 45, pattern: '',
+      amp_profile: [[0, 0], [0.2, 0.3], [0.4, 0.6], [0.6, 0.8], [0.8, 0.8], [1.0, 0.5]],
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Twisted Squircle', shape: 'square', radius: 30, height: 55, layer_height: 0.32,
+      xy_twist: 1.0, z_waves: 4, z_twist: 0, bottom: 'solid', base_layers: 2, brim: 0,
+      squish: 0.75, spacing_factor: 1.25, print_speed: 45, pattern: '',
+      amp_profile: [[0, 0], [0.2, 0.3], [0.4, 0.65], [0.6, 0.9], [0.8, 0.9], [1.0, 0.5]],
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Ripple Vase', shape: 'circle', radius: 34, height: 60, layer_height: 0.30,
+      xy_twist: 0, z_waves: 6, z_twist: 0, bottom: 'solid', base_layers: 2, brim: 0,
+      squish: 0.75, spacing_factor: 1.25, print_speed: 40, pattern: 'ripple',
+      pattern_amp: 1.2, pattern_waves: 10, pattern_bands: 8, pattern_twist: 0.5,
+      pattern_fade_in: 0.10, pattern_fade_out: 0,
+      amp_profile: [[0, 0], [0.15, 0.25], [0.4, 0.6], [0.7, 0.7], [1.0, 0.4]],
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Flared Vase', shape: 'circle', radius: 28, height: 65, layer_height: 0.30,
+      xy_twist: 0, z_waves: 5, z_twist: 0, bottom: 'solid', base_layers: 2, brim: 0,
+      squish: 0.75, spacing_factor: 1.25, print_speed: 40, pattern: '',
+      amp_profile: [[0, 0], [0.2, 0.3], [0.5, 0.7], [0.8, 0.8], [1.0, 0.5]],
+      radius_profile: [[0, 0.7], [0.15, 0.6], [0.4, 0.8], [0.7, 1.1], [1.0, 1.25]]
+    },
+    {
+      name: 'Aggressive Twist Star', shape: 'star', radius: 28, height: 55, layer_height: 0.30,
+      xy_twist: 3.0, z_waves: 8, z_twist: 1.0, star_points: 6, star_depth: 0.40,
+      bottom: 'solid', base_layers: 2, brim: 0, squish: 0.75, spacing_factor: 1.25,
+      print_speed: 90, pattern: '',
+      amp_profile: [[0, 0], [0.2, 0.2], [0.5, 0.5], [0.8, 0.7], [1.0, 0.4]],
+      radius_profile: [[0, 1], [0.2, 1], [0.4, 1], [0.6, 1], [0.8, 1], [1.0, 1]]
+    },
+    {
+      name: 'Diamond Mesh Basket', shape: 'circle', radius: 32, height: 50, layer_height: 0.3,
+      xy_twist: 0, z_waves: 0, z_twist: 0, bottom: 'solid', base_layers: 2, brim: 0,
+      squish: 0.75, spacing_factor: 1.25, print_speed: 25, pattern: 'vwave',
+      pattern_amp: 2.5, pattern_waves: 24, pattern_bands: 6, pattern_twist: 0,
+      pattern_phase: 0, pattern_fade_in: 0.08, pattern_fade_out: 0, pattern_alternate: true,
+      amp_profile: [[0, 0], [1, 0]],
+      radius_profile: [[0, 1], [1, 1]]
+    },
+    {
+      name: 'Loop Fabric Vase', shape: 'circle', radius: 32, height: 45, layer_height: 0.3,
+      xy_twist: 0, z_waves: 0, z_twist: 0, bottom: 'solid', base_layers: 2, brim: 0,
+      squish: 0.75, spacing_factor: 1.25, print_speed: 25, pattern: 'loops',
+      loop_style: 'chainmail', loop_spacing_mm: 4, loop_per_turn: 0, loop_turn_stride: 1,
+      loop_align: 'stagger', loop_jitter: 0.5, loop_row: 2.5, loop_up: 3.5, loop_out: 0.5,
+      loop_cuff: 3, loop_rejoin: 2.0, loop_dwell: 0, loop_flow: 1.2, loop_speed: 10,
+      loop_fade_in: 0.1, loop_fade_out: 0,
+      amp_profile: [[0, 0], [1, 0]],
+      radius_profile: [[0, 1], [1, 1]]
+    },
   ];
 
-  (function(){
+  (function () {
     var sel = document.getElementById('preset-select');
-    PRESETS.forEach(function(p, i){
+    PRESETS.forEach(function (p, i) {
       var o = document.createElement('option');
       o.value = i; o.textContent = p.name;
       sel.appendChild(o);
     });
-    sel.addEventListener('change', function(){
-      if(sel.value === '') return;
+    sel.addEventListener('change', function () {
+      if (sel.value === '') return;
       var p = PRESETS[parseInt(sel.value)];
-      if(!p) return;
-      for(var k in p){ if(k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
+      if (!p) return;
+      for (var k in p) { if (k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
       design.cage = null;
       previewArmed = true;
       applyDesignToUI();
       sel.value = '';
     });
-    
+
     // Populate the right-click preset context menu
     var ctxItems = document.getElementById('preset-ctx-items');
     var ctxMenu = document.getElementById('preset-context-menu');
-    if(ctxItems && ctxMenu){
-      PRESETS.forEach(function(p, i){
+    if (ctxItems && ctxMenu) {
+      PRESETS.forEach(function (p, i) {
         var btn = document.createElement('button');
         btn.className = 'preset-ctx-item';
-        
+
         var icon = document.createElement('div');
         icon.className = 'pci-icon';
         // Add a placeholder SVG for the icon
         icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
-        
+
         var label = document.createElement('span');
         label.textContent = p.name;
-        
+
         btn.appendChild(icon);
         btn.appendChild(label);
-        
-        btn.addEventListener('click', function(){
-          for(var k in p){ if(k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
+
+        btn.addEventListener('click', function () {
+          for (var k in p) { if (k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
           design.cage = null;
           previewArmed = true; // <--- Force preview update
           applyDesignToUI();
@@ -6432,16 +6786,16 @@
         });
         ctxItems.appendChild(btn);
       });
-      
+
       // Allow viewer.js to close the menu
-      window.__closePresetMenu = function(){
+      window.__closePresetMenu = function () {
         ctxMenu.style.display = 'none';
       };
       // Allow viewer.js to open the menu
-      window.__openPresetMenu = function(x, y){
+      window.__openPresetMenu = function (x, y) {
         const mw = 200; // estimated width
         const margin = 8;
-        if(x + mw + margin > window.innerWidth) x = window.innerWidth - mw - margin;
+        if (x + mw + margin > window.innerWidth) x = window.innerWidth - mw - margin;
         ctxMenu.style.left = Math.max(margin, Math.round(x)) + 'px';
         ctxMenu.style.top = Math.max(margin, Math.round(y)) + 'px';
         ctxMenu.style.display = 'block';
@@ -6449,14 +6803,14 @@
     }
   })();
 
-  function applyDesignToUI(){
-    if(printerComboBtn && design.printer){
+  function applyDesignToUI() {
+    if (printerComboBtn && design.printer) {
       setPrinterComboValue(design.printer);
-      if(PRINTER_BEDS[design.printer] && typeof window.setPreviewBedSize === 'function'){
+      if (PRINTER_BEDS[design.printer] && typeof window.setPreviewBedSize === 'function') {
         window.setPreviewBedSize(PRINTER_BEDS[design.printer][0], PRINTER_BEDS[design.printer][1]);
       }
-      if(PRINTER_BEDS[design.printer]){
-        design.bed_center = [PRINTER_BEDS[design.printer][0]/2, PRINTER_BEDS[design.printer][1]/2];
+      if (PRINTER_BEDS[design.printer]) {
+        design.bed_center = [PRINTER_BEDS[design.printer][0] / 2, PRINTER_BEDS[design.printer][1] / 2];
       }
       if(typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
     }
@@ -6469,7 +6823,7 @@
     document.getElementById('d-stardepth').value = design.star_depth;
     document.getElementById('d-base').value = design.base_layers;
     document.getElementById('d-brim').value = design.brim;
-    var _set = function(id, v){ var el = document.getElementById(id); if(el) el.value = v; };
+    var _set = function (id, v) { var el = document.getElementById(id); if (el) el.value = v; };
     _set('d-spine', design.spine_mm || 0);
     _set('d-spinedeg', design.spine_deg || 0);
     _set('d-ovality', design.ovality || 0);
@@ -6516,7 +6870,7 @@
     if(typeof syncPlanarSeamBlendRows === 'function') syncPlanarSeamBlendRows();
     if(typeof syncPlanarLayerHeightRead === 'function') syncPlanarLayerHeightRead();
     var flhEl = document.getElementById('d-flh');
-    if(flhEl) flhEl.value = design.first_layer_height != null ? design.first_layer_height : '';
+    if (flhEl) flhEl.value = design.first_layer_height != null ? design.first_layer_height : '';
     document.getElementById('d-spacing').value = design.spacing_factor;
     document.getElementById('d-waves').value = design.z_waves;
     document.getElementById('d-ztwist').value = design.z_twist;
@@ -6528,42 +6882,42 @@
     document.getElementById('d-pfadein').value = design.pattern_fade_in;
     document.getElementById('d-pfadeout').value = design.pattern_fade_out;
     var palternateEl = document.getElementById('d-palternate');
-    if(palternateEl) palternateEl.checked = !!design.pattern_alternate;
+    if (palternateEl) palternateEl.checked = !!design.pattern_alternate;
     var latticeHintEl = document.getElementById('lattice-hint');
-    if(latticeHintEl) latticeHintEl.style.display = design.pattern_alternate ? 'block' : 'none';
+    if (latticeHintEl) latticeHintEl.style.display = design.pattern_alternate ? 'block' : 'none';
     document.getElementById('d-speed').value = design.print_speed;
     var lwEl = document.getElementById('d-lwoverride');
-    if(lwEl) lwEl.value = design.line_width != null ? design.line_width : '';
+    if (lwEl) lwEl.value = design.line_width != null ? design.line_width : '';
     var nozzleTempEl = document.getElementById('d-nozzletemp');
-    if(nozzleTempEl) nozzleTempEl.value = design.nozzle_temp != null ? design.nozzle_temp : '';
+    if (nozzleTempEl) nozzleTempEl.value = design.nozzle_temp != null ? design.nozzle_temp : '';
     var bedTempEl = document.getElementById('d-bedtemp');
-    if(bedTempEl) bedTempEl.value = design.bed_temp != null ? design.bed_temp : '';
+    if (bedTempEl) bedTempEl.value = design.bed_temp != null ? design.bed_temp : '';
     var bottomRadios = document.querySelectorAll('input[name="d-bottom"]');
     bottomRadios.forEach(function(r){ r.checked = r.value === design.bottom; });
     var meshUsageRadios = document.querySelectorAll('input[name="mesh-usage"]');
     meshUsageRadios.forEach(function(r){ r.checked = r.value === design.mesh_base_mode; });
     var nozzleEl = document.getElementById('d-nozzle');
-    if(nozzleEl) nozzleEl.value = design.nozzle || '';
+    if (nozzleEl) nozzleEl.value = design.nozzle || '';
     var smoothEl = document.getElementById('sil-smooth');
-    if(smoothEl) smoothEl.checked = !!design.radius_profile_smooth;
+    if (smoothEl) smoothEl.checked = !!design.radius_profile_smooth;
     // Loop controls
     updateLoopControlsFromDesign();
     // Overhang flow
     var ohSlider = document.getElementById('d-overhang-k');
-    if(ohSlider){ ohSlider.value = design.overhang_flow_k || 0; }
+    if (ohSlider) { ohSlider.value = design.overhang_flow_k || 0; }
     var ohRead = document.getElementById('overhang-k-read');
-    if(ohRead) ohRead.textContent = (design.overhang_flow_k || 0).toFixed(2);
+    if (ohRead) ohRead.textContent = (design.overhang_flow_k || 0).toFixed(2);
     // Fan min/max (speed selected by wall lean)
     var fanMinSlider = document.getElementById('d-fan-min');
-    if(fanMinSlider){ fanMinSlider.value = design.fan_overhang_min != null ? design.fan_overhang_min : 100; }
+    if (fanMinSlider) { fanMinSlider.value = design.fan_overhang_min != null ? design.fan_overhang_min : 100; }
     var fanMinRead = document.getElementById('fan-min-read');
-    if(fanMinRead) fanMinRead.textContent = (design.fan_overhang_min != null ? design.fan_overhang_min : 100) + '%';
+    if (fanMinRead) fanMinRead.textContent = (design.fan_overhang_min != null ? design.fan_overhang_min : 100) + '%';
     var fanMaxSlider = document.getElementById('d-fan-max');
-    if(fanMaxSlider){ fanMaxSlider.value = design.fan_overhang_max != null ? design.fan_overhang_max : 100; }
+    if (fanMaxSlider) { fanMaxSlider.value = design.fan_overhang_max != null ? design.fan_overhang_max : 100; }
     var fanMaxRead = document.getElementById('fan-max-read');
-    if(fanMaxRead) fanMaxRead.textContent = (design.fan_overhang_max != null ? design.fan_overhang_max : 100) + '%';
+    if (fanMaxRead) fanMaxRead.textContent = (design.fan_overhang_max != null ? design.fan_overhang_max : 100) + '%';
     var fanOffEl = document.getElementById('d-fan-off-layers');
-    if(fanOffEl) fanOffEl.value = design.fan_off_layers || 0;
+    if (fanOffEl) fanOffEl.value = design.fan_off_layers || 0;
     ampEditor.setProfile(design.amp_profile);
     silEditor.setProfile(design.radius_profile);
     widthEditor.setProfile(design.width_profile);
@@ -6582,10 +6936,10 @@
     applyPrinterCaps();
     design.amp_profile = ampEditor.profile();
     ampEditor.draw(); silEditor.draw(); widthEditor.draw();
-    if(typeof applyPointEditUIFromDesign === 'function') applyPointEditUIFromDesign();
-    if(typeof window.__applyZoneUIFromDesign === 'function') window.__applyZoneUIFromDesign();
-    if(typeof updateZoneActiveDot === 'function') updateZoneActiveDot();
-    if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+    if (typeof applyPointEditUIFromDesign === 'function') applyPointEditUIFromDesign();
+    if (typeof window.__applyZoneUIFromDesign === 'function') window.__applyZoneUIFromDesign();
+    if (typeof updateZoneActiveDot === 'function') updateZoneActiveDot();
+    if (typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
     persistDesign();
     refreshShapeRows();
     refreshPatternRows();
@@ -6599,7 +6953,7 @@
   // different serialization), wrapped in a small envelope so the edit-
   // history log travels with it. A session that hasn't edited anything
   // exports history: [].
-  document.getElementById('save-design').addEventListener('click', function(){
+  document.getElementById('save-design').addEventListener('click', function () {
     var data = JSON.parse(JSON.stringify(design));
     data.amp_profile = ampEditor.profile();
     data.radius_profile = silEditor.profile();
@@ -6611,18 +6965,23 @@
       design: data,
       history: histLog.slice()   // shallow copy: entries pass through verbatim
     };
-    var blob = new Blob([JSON.stringify(env, null, 2)], {type:'application/json'});
+    var blob = new Blob([JSON.stringify(env, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
     a.download = 'trident_design_' + design.shape + '_' + design.height + 'mm.trident';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   });
 
   // Load design from a .trident (or an older plain-design .json) file.
-  document.getElementById('load-design').addEventListener('click', function(){
-    document.getElementById('load-design-file').click();
+  document.getElementById('load-design').addEventListener('click', function () {
+    previewArmed = true;
+    if (document.getElementById('mode-viewer').classList.contains('active')) {
+      document.getElementById('file').click();
+    } else {
+      document.getElementById('load-design-file').click();
+    }
   });
   // JSON.parse rejects the bare tokens NaN/Infinity, but NOT a numeral that
   // overflows to one at parse time -- {"height": 1e999} is syntactically
@@ -6638,37 +6997,38 @@
   // exported_at/history -- deliberately the ONE gate for the whole loaded
   // object (envelope and all), not a second, easier-to-forget-about check
   // scoped to just `design`.
-  function findNonFiniteNumber(v, path){
-    if(typeof v === 'number') return isFinite(v) ? null : (path || '(root)');
-    if(Array.isArray(v)){
-      for(var i = 0; i < v.length; i++){
+  function findNonFiniteNumber(v, path) {
+    if (typeof v === 'number') return isFinite(v) ? null : (path || '(root)');
+    if (Array.isArray(v)) {
+      for (var i = 0; i < v.length; i++) {
         var hit = findNonFiniteNumber(v[i], (path || '') + '[' + i + ']');
-        if(hit) return hit;
+        if (hit) return hit;
       }
       return null;
     }
-    if(v && typeof v === 'object'){
-      for(var k in v){
-        if(!Object.prototype.hasOwnProperty.call(v, k)) continue;
+    if (v && typeof v === 'object') {
+      for (var k in v) {
+        if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
         var hit2 = findNonFiniteNumber(v[k], (path ? path + '.' : '') + k);
-        if(hit2) return hit2;
+        if (hit2) return hit2;
       }
     }
     return null;
   }
 
-  document.getElementById('load-design-file').addEventListener('change', function(e){
-    if(!e.target.files.length) return;
-    
+  document.getElementById('load-design-file').addEventListener('change', function (e) {
+    previewArmed = true;
+    if (!e.target.files.length) return;
+
     var fname = e.target.files[0].name;
     var fext = fname.toLowerCase().split('.').pop();
-    
+
     if (fext === 'stl') {
       uploadSTL(e.target.files[0]);
       e.target.value = '';
       return;
     }
-    
+
     // Captured NOW, synchronously: reader.onload below fires asynchronously,
     // by which point `e.target.value = ''` (also below, runs synchronously
     // right after readAsText) has already cleared e.target.files -- reading
@@ -6677,12 +7037,12 @@
     // alert, silently skipping applyDesignToUI() (and with it, e.g., a
     // printer switch the loaded file specified).
     var reader = new FileReader();
-    reader.onload = function(ev){
+    reader.onload = function (ev) {
       try {
         var loaded = JSON.parse(ev.target.result);
-        if(!loaded || typeof loaded !== 'object') throw new Error('not an object');
+        if (!loaded || typeof loaded !== 'object') throw new Error('not an object');
         var badPath = findNonFiniteNumber(loaded, '');
-        if(badPath) throw new Error('non-finite value at ' + badPath + ' (NaN/Infinity are not valid design values)');
+        if (badPath) throw new Error('non-finite value at ' + badPath + ' (NaN/Infinity are not valid design values)');
         // Detected by SHAPE, never by file extension -- #load-design-file
         // accepts both .trident and legacy .json, and both are read
         // identically as text; only their CONTENTS differ. No key of
@@ -6690,15 +7050,15 @@
         // discriminator against a bare old-format design file.
         var isEnv = loaded.format === TRIDENT_FORMAT && loaded.design && typeof loaded.design === 'object';
         var src = isEnv ? loaded.design : loaded;
-        if(isEnv && +loaded.format_version > TRIDENT_FORMAT_VERSION){
+        if (isEnv && +loaded.format_version > TRIDENT_FORMAT_VERSION) {
           alert('This .trident file was saved by a newer version -- some information may not be shown.');
         }
         // History first, so the "imported <file>" entry below lands AFTER
         // whatever the file itself carried, keeping one continuous log
         // across repeated export/import/edit rounds rather than resetting
         // it each time.
-        if(isEnv && Array.isArray(loaded.history)){
-          histLog = loaded.history.filter(function(h){
+        if (isEnv && Array.isArray(loaded.history)) {
+          histLog = loaded.history.filter(function (h) {
             return h && typeof h === 'object' && typeof h.summary === 'string';
           }).slice(-HIST_LOG_MAX);
           saveHistLog();
@@ -6706,16 +7066,16 @@
         } else {
           histLabelOnce = 'imported ' + fname + ' (no edit history in file)';
         }
-        for(var k in src){ if(design.hasOwnProperty(k)) design[k] = src[k]; }
+        for (var k in src) { if (design.hasOwnProperty(k)) design[k] = src[k]; }
         applyDesignToUI();
-        if(isEnv && loaded.history && loaded.history.length && typeof openHistoryModal === 'function'){
+        if (isEnv && loaded.history && loaded.history.length && typeof openHistoryModal === 'function') {
           openHistoryModal();
         }
-      } catch(err){
+      } catch (err) {
         alert('Could not load design: ' + err.message);
       }
     };
-    reader.onerror = function(){
+    reader.onerror = function () {
       // Without this, a failed read leaves onload never firing and the
       // user staring at silence with no idea the load did nothing.
       alert('Could not read file: ' + (reader.error ? reader.error.message : 'unknown error'));
@@ -6733,40 +7093,40 @@
   // is exactly the same "declared later, safe to call earlier" pattern
   // already used throughout this file (e.g. flushZoneEdgePersist, referenced
   // by pointerup listeners well before its own definition).
-  function openHistoryModal(){
+  function openHistoryModal() {
     var modal = document.getElementById('history-modal');
-    if(!modal) return;
+    if (!modal) return;
     renderHistList();
     modal.style.display = 'flex';
   }
-  function closeHistoryModal(){
+  function closeHistoryModal() {
     var modal = document.getElementById('history-modal');
-    if(modal) modal.style.display = 'none';
+    if (modal) modal.style.display = 'none';
   }
-  (function(){
+  (function () {
     var modal = document.getElementById('history-modal');
-    if(!modal) return;
+    if (!modal) return;
     var btn = document.getElementById('history-btn');
-    if(btn) btn.addEventListener('click', openHistoryModal);
+    if (btn) btn.addEventListener('click', openHistoryModal);
     var closeBtn = document.getElementById('eh-modal-close');
-    if(closeBtn) closeBtn.addEventListener('click', closeHistoryModal);
+    if (closeBtn) closeBtn.addEventListener('click', closeHistoryModal);
     var doneBtn = document.getElementById('eh-modal-done');
-    if(doneBtn) doneBtn.addEventListener('click', closeHistoryModal);
+    if (doneBtn) doneBtn.addEventListener('click', closeHistoryModal);
     var backdrop = modal.querySelector('.eh-modal-backdrop');
-    if(backdrop) backdrop.addEventListener('click', closeHistoryModal);
-    document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && modal.style.display !== 'none') closeHistoryModal();
+    if (backdrop) backdrop.addEventListener('click', closeHistoryModal);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && modal.style.display !== 'none') closeHistoryModal();
     });
   })();
 
-  function renderHistList(){
+  function renderHistList() {
     var list = document.getElementById('eh-list');
     var empty = document.getElementById('eh-empty');
-    if(!list) return;
+    if (!list) return;
     list.innerHTML = '';
-    if(empty) empty.style.display = histLog.length ? 'none' : '';
+    if (empty) empty.style.display = histLog.length ? 'none' : '';
     // Newest first -- iterate the persisted (oldest-first) array backwards.
-    for(var i = histLog.length - 1; i >= 0; i--){
+    for (var i = histLog.length - 1; i >= 0; i--) {
       var e = histLog[i];
       var li = document.createElement('li');
       li.className = 'eh-item';
@@ -6774,8 +7134,8 @@
       when.className = 'eh-when';
       var d = new Date(e.at);
       when.textContent = isNaN(d.getTime()) ? String(e.at) :
-        d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) + '  ' +
-        d.toLocaleDateString([], {day:'numeric', month:'short'});
+        d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '  ' +
+        d.toLocaleDateString([], { day: 'numeric', month: 'short' });
       var what = document.createElement('span');
       what.className = 'eh-what';
       // textContent only, never innerHTML: this renders values out of
@@ -6796,29 +7156,29 @@
   var stlUploadSeq = 0;
 
   if (stlDrop && stlFile) {
-    stlDrop.addEventListener('click', function(){ stlFile.click(); });
+    stlDrop.addEventListener('click', function () { stlFile.click(); });
     // A div with role="button" gets no automatic Enter/Space activation --
     // mirrors the #pm-drop handler above so both drop zones behave the same.
-    stlDrop.addEventListener('keydown', function(e){
-      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); stlFile.click(); }
+    stlDrop.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); stlFile.click(); }
     });
-    stlFile.addEventListener('change', function(e){
-      if(e.target.files.length > 0) uploadSTL(e.target.files[0]);
+    stlFile.addEventListener('change', function (e) {
+      if (e.target.files.length > 0) uploadSTL(e.target.files[0]);
     });
 
-    stlDrop.addEventListener('dragover', function(e){
+    stlDrop.addEventListener('dragover', function (e) {
       e.preventDefault(); e.stopPropagation();
       stlDrop.classList.add('drag-over');
     });
-    stlDrop.addEventListener('dragleave', function(e){
+    stlDrop.addEventListener('dragleave', function (e) {
       stlDrop.classList.remove('drag-over');
     });
-    stlDrop.addEventListener('drop', function(e){
+    stlDrop.addEventListener('drop', function (e) {
       e.preventDefault(); e.stopPropagation();
       stlDrop.classList.remove('drag-over');
       var files = e.dataTransfer.files;
-      for(var i=0; i<files.length; i++){
-        if(files[i].name.toLowerCase().slice(-4) === '.stl'){
+      for (var i = 0; i < files.length; i++) {
+        if (files[i].name.toLowerCase().slice(-4) === '.stl') {
           uploadSTL(files[i]);
           return;
         }
@@ -6826,8 +7186,8 @@
     });
   }
 
-  function uploadSTL(file){
-    if(file.size > MESH_MAX_MB * 1024 * 1024){
+  function uploadSTL(file) {
+    if (file.size > MESH_MAX_MB * 1024 * 1024) {
       alert('File too large (max ' + MESH_MAX_MB + ' MB).');
       return;
     }
@@ -6874,14 +7234,14 @@
         end('Upload failed: ' + err, true);
       });
     };
-    reader.onerror = function(){
-      if(mySeq !== stlUploadSeq) return;
+    reader.onerror = function () {
+      if (mySeq !== stlUploadSeq) return;
       end('Could not read file: ' + (reader.error ? reader.error.message : 'unknown error'), true);
     };
     reader.readAsArrayBuffer(file);
   }
 
-  function showMeshInfo(data, filename){
+  function showMeshInfo(data, filename) {
     var drop = document.getElementById('stl-drop');
     if (drop) drop.style.display = 'none';
     document.getElementById('mesh-info').style.display = 'block';
@@ -6892,21 +7252,21 @@
     document.getElementById('mesh-size').textContent = dx.toFixed(1) + ' x ' + dy.toFixed(1);
     document.getElementById('mesh-height').textContent = data.height.toFixed(1);
     showMeshCheck(data.vase_check);
-    if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
-    if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+    if (typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
+    if (typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
   }
 
   // We keep only the largest contour per layer, so holes and islands are dropped
   // silently. The server flags that on upload; surface it here so the user finds
   // out before printing rather than after.
-  function showMeshCheck(chk){
+  function showMeshCheck(chk) {
     var box = document.getElementById('mesh-check');
     var list = document.getElementById('mesh-check-notes');
-    if(!box || !list) return;
+    if (!box || !list) return;
     list.innerHTML = '';
-    if(!chk || chk.error){
+    if (!chk || chk.error) {
       box.style.display = chk && chk.error ? 'block' : 'none';
-      if(chk && chk.error){
+      if (chk && chk.error) {
         box.className = 'mesh-check warn';
         document.getElementById('mesh-check-icon').textContent = '!';
         document.getElementById('mesh-check-title').textContent = chk.error;
@@ -6919,7 +7279,7 @@
     var info = !bad && !warn && chk.solid_cross_section;
     // A clean star-convex vase needs no callout at all -- staying quiet when
     // everything is fine keeps the warning meaningful when it does appear.
-    if(!bad && !warn && !info){
+    if (!bad && !warn && !info) {
       box.style.display = 'none';
       return;
     }
@@ -6934,19 +7294,19 @@
     // warn-level notes are about slicing fidelity. A solid part that also trips a
     // caveat still needs to hear the hollow message -- it's the more consequential
     // one -- so this is keyed off the flag itself, not off the info level.
-    if(chk.solid_cross_section && !bad){
+    if (chk.solid_cross_section && !bad) {
       var liInfo = document.createElement('li');
       liInfo.textContent = 'This is a solid part, so the single-wall spiral traces only '
         + 'its outline - no infill, open top. Use Export STL below and slice in Orca '
         + 'if you want it solid.';
       list.appendChild(liInfo);
     }
-    for(var i = 0; i < notes.length; i++){
+    for (var i = 0; i < notes.length; i++) {
       var li = document.createElement('li');
       li.textContent = notes[i];
       list.appendChild(li);
     }
-    if(bad && chk.discarded_area_pct > 0){
+    if (bad && chk.discarded_area_pct > 0) {
       var li2 = document.createElement('li');
       li2.textContent = 'Up to ' + chk.discarded_area_pct
         + '% of a layer’s area is dropped (worst at Z '
@@ -7009,8 +7369,8 @@
     document.getElementById('mesh-info').style.display = 'none';
     showMeshCheck(null);
     if (stlFile) stlFile.value = '';
-    if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
-    if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+    if (typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
+    if (typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
     // Clearing the mesh can turn loops back into fabric (loop-fabric hides
     // base/brim/skirt) - re-evaluate those rows.
     refreshShapeRows();
@@ -7026,7 +7386,7 @@
   // Shared by the Generate and Export STL buttons -- both send the same
   // design snapshot to the server, just to different endpoints, so the body
   // assembly lives in one place instead of drifting out of sync.
-  function buildGenerateBody(){
+  function buildGenerateBody() {
     var baseSpec = effectiveBaseSpec();
     var body = {
       printer: design.printer || 'trident',
@@ -7058,29 +7418,29 @@
       overhang_flow_k: design.overhang_flow_k || 0,
       nozzle: design.nozzle || null
     };
-    if(design.cage && design.cage.some(function(r){ return r.some(function(v){ return Math.abs(v-1) > 1e-6; }); })){
+    if (design.cage && design.cage.some(function (r) { return r.some(function (v) { return Math.abs(v - 1) > 1e-6; }); })) {
       body.cage = design.cage;
     }
     // Overhang-adaptive fan: sliders are 0-100 (UI); only sent when not both
     // at the 100/100 no-op default (server also tolerates them absent).
-    if((design.fan_overhang_min != null && design.fan_overhang_min < 100) ||
-       (design.fan_overhang_max != null && design.fan_overhang_max < 100)){
+    if ((design.fan_overhang_min != null && design.fan_overhang_min < 100) ||
+      (design.fan_overhang_max != null && design.fan_overhang_max < 100)) {
       body.fan_min = Math.max(0, Math.min(design.fan_overhang_min != null ? design.fan_overhang_min : 100, 100)) / 100;
       body.fan_max = Math.max(0, Math.min(design.fan_overhang_max != null ? design.fan_overhang_max : 100, 100)) / 100;
     }
-    if(design.fan_off_layers > 0){
+    if (design.fan_off_layers > 0) {
       body.fan_off_layers = Math.round(design.fan_off_layers);
     }
     // Only sent when the user actually set an override -- absent means
     // "use the profile/filament default", same contract as serve.py's
     // _parse_nozzle_temp().
-    if(design.nozzle_temp != null && design.nozzle_temp !== ''){
+    if (design.nozzle_temp != null && design.nozzle_temp !== '') {
       body.nozzle_temp = design.nozzle_temp;
     }
     // Same contract via serve.py's _parse_bed_temp(), EXCEPT 0 is a real,
     // meaningful override (bed off) and must be sent, not treated as unset --
     // this check is "!= null", not truthy, so 0 passes through correctly.
-    if(design.bed_temp != null && design.bed_temp !== ''){
+    if (design.bed_temp != null && design.bed_temp !== '') {
       body.bed_temp = design.bed_temp;
     }
     // Point Edit Modifiers: each block is only sent when its modifier is
@@ -7088,7 +7448,7 @@
     // no-op input gracefully either way, but there's no reason to send inert
     // payloads). Only the parametric wall honors these -- loop fabric and
     // STL mode ignore them server-side and surface a warning in the report.
-    if(pointEditMaskMeaningful()){
+    if (pointEditMaskMeaningful()) {
       body.point_mask = {
         channel: design.point_mask_channel,
         scale_u: design.point_mask_scale_u,
@@ -7096,20 +7456,20 @@
         invert: !!design.point_mask_invert
       };
     }
-    if(pointEditProtectionMeaningful()){
+    if (pointEditProtectionMeaningful()) {
       body.point_protection = {
         protect_bottom: design.point_protection_bottom || 0,
         protect_top: design.point_protection_top || 0,
         falloff: design.point_protection_falloff || 0.08
       };
     }
-    if(pointEditFFDMeaningful()){
+    if (pointEditFFDMeaningful()) {
       body.point_ffd = {
         cage: window.buildFFDCageFromGrid(design.point_ffd_grid),
         strength: design.point_ffd_strength != null ? design.point_ffd_strength : 1.0
       };
     }
-    if(pointEditSmoothMeaningful()){
+    if (pointEditSmoothMeaningful()) {
       body.point_smooth = {
         iterations: Math.round(design.point_smooth_iterations),
         theta_amount: design.point_smooth_theta != null ? design.point_smooth_theta : 0.5,
@@ -7117,7 +7477,7 @@
         strength: design.point_smooth_strength != null ? design.point_smooth_strength : 1.0
       };
     }
-    if(pointEditRadialPushMeaningful()){
+    if (pointEditRadialPushMeaningful()) {
       body.point_radial_push = {
         amp_mm: design.point_radial_push_amp,
         strength: design.point_radial_push_strength != null ? design.point_radial_push_strength : 1.0
@@ -7129,13 +7489,13 @@
     // a height band, not the already-sliced path. Only the parametric wall
     // honors these -- loop fabric and STL mesh mode ignore them server-side
     // and surface a scope warning in the report.
-    if(zoneOverridesAnyEnabled()){
-      body.zone_overrides = design.zone_overrides.filter(zoneOverrideMeaningful).map(function(z){
+    if (zoneOverridesAnyEnabled()) {
+      body.zone_overrides = design.zone_overrides.filter(zoneOverrideMeaningful).map(function (z) {
         var entry = { t_lo: z.t_lo, t_hi: z.t_hi, blend: z.blend != null ? z.blend : 0.02 };
-        if(z.pattern) entry.pattern = z.pattern;
-        if(z.pattern_amp != null) entry.pattern_amp = z.pattern_amp;
-        if(z.pattern_twist != null) entry.pattern_twist = z.pattern_twist;
-        if(z.xy_twist != null) entry.xy_twist = z.xy_twist;
+        if (z.pattern) entry.pattern = z.pattern;
+        if (z.pattern_amp != null) entry.pattern_amp = z.pattern_amp;
+        if (z.pattern_twist != null) entry.pattern_twist = z.pattern_twist;
+        if (z.xy_twist != null) entry.xy_twist = z.xy_twist;
         return entry;
       });
     }
@@ -7166,9 +7526,9 @@
     // texture (server pattern stays null), wave patterns send the pattern_*
     // fields (and only those get pattern_alternate).
     var patternVal = design.pattern || '';
-    if(patternVal === 'loops'){
-      if(design.loop_per_turn > 0) body.loop_per_turn = Math.round(design.loop_per_turn);
-      if(design.loop_spacing_mm > 0) body.loop_spacing_mm = design.loop_spacing_mm;
+    if (patternVal === 'loops') {
+      if (design.loop_per_turn > 0) body.loop_per_turn = Math.round(design.loop_per_turn);
+      if (design.loop_spacing_mm > 0) body.loop_spacing_mm = design.loop_spacing_mm;
       body.loop_turn_stride = Math.round(design.loop_turn_stride);
       body.loop_align = design.loop_align;
       body.loop_jitter = design.loop_jitter;
@@ -7196,7 +7556,7 @@
       // design values are deliberately NOT mutated (same principle as the
       // Bottom radio above): the request is where this decision belongs, so
       // the settings return when the user leaves loops.
-    } else if(patternVal){
+    } else if (patternVal) {
       body.pattern = patternVal;
       body.pattern_amp = design.pattern_amp;
       body.pattern_waves = Math.round(design.pattern_waves);
@@ -7207,7 +7567,7 @@
       body.pattern_fade_out = design.pattern_fade_out;
       body.pattern_alternate = !!design.pattern_alternate;
     }
-    if(design.shape === 'star'){
+    if (design.shape === 'star') {
       body.star_points = Math.round(design.star_points);
       body.star_depth = design.star_depth;
     }
@@ -7292,22 +7652,22 @@
   // not in this table (a future stage, or a typo server-side) still shows
   // something reasonable rather than leaking the raw token to the user.
   var GEN_STAGE_LABELS = { toolpath: 'Building toolpath', verify: 'Verifying against printer limits' };
-  function genStageLabel(stage){
+  function genStageLabel(stage) {
     return GEN_STAGE_LABELS[stage] || ('Working (' + stage + ')');
   }
 
   var genProgressEl = document.getElementById('gen-progress');
   var genProgressFill = document.getElementById('gen-progress-fill');
-  function showGenProgress(frac, label){
+  function showGenProgress(frac, label) {
     var pct = Math.max(0, Math.min(99, Math.round(frac * 100))); // completion only via the 'done' line
     // 'block', not '': .gen-progress carries `display:none` in style.css, so
     // clearing the inline style falls back to that rule and the bar stays
     // invisible for the whole generate -- which is exactly what it did.
-    if(genProgressEl){ genProgressEl.style.display = 'block'; genProgressEl.setAttribute('aria-valuenow', String(pct)); }
-    if(genProgressFill) genProgressFill.style.width = pct + '%';
+    if (genProgressEl) { genProgressEl.style.display = 'block'; genProgressEl.setAttribute('aria-valuenow', String(pct)); }
+    if (genProgressFill) genProgressFill.style.width = pct + '%';
     // Header brand mark: same fraction, same clamp-to-99 intent, so the
     // spiral never visually completes before the stream's 'done' line does.
-    if(headerMarkEl){
+    if (headerMarkEl) {
       headerMarkEl.classList.remove('is-busy-indeterminate');
       headerMarkEl.classList.add('is-busy-determinate');
       headerMarkEl.style.setProperty('--mark-progress', pct / 100);
@@ -7315,10 +7675,10 @@
     statusEl.className = '';
     statusEl.textContent = label + '... ' + pct + '%';
   }
-  function hideGenProgress(){
-    if(genProgressEl) genProgressEl.style.display = 'none';
-    if(genProgressFill) genProgressFill.style.width = '0%';
-    if(headerMarkEl){
+  function hideGenProgress() {
+    if (genProgressEl) genProgressEl.style.display = 'none';
+    if (genProgressFill) genProgressFill.style.width = '0%';
+    if (headerMarkEl) {
       headerMarkEl.classList.remove('is-busy-determinate');
       headerMarkEl.style.removeProperty('--mark-progress');
     }
@@ -7337,7 +7697,7 @@
   // G-code silently does not match what the panel shows. Given this
   // project's stance on output matching the screen, that is exactly the
   // failure CLAUDE.md's safety-first stance exists to prevent.
-  function applyGenerateResult(j, clickRev){
+  function applyGenerateResult(j, clickRev) {
     lastGcode = j.gcode; lastName = j.filename;
     // Pressing Generate is a design action, so arm the draft preview. Without
     // this, a user who generated a restored design without touching a single
@@ -7345,16 +7705,16 @@
     // bare bed: the generated toolpath is (correctly) hidden outside the
     // viewer, and the draft that should replace it never drew.
     previewArmed = true;
-    if(window.clearPreview) window.clearPreview();
-    if(window.loadGcode){ window.loadGcode(j.filename, j.gcode); }
-    if(window.setAppMode) window.setAppMode('viewer');
+    if (window.clearPreview) window.clearPreview();
+    if (window.loadGcode) { window.loadGcode(j.filename, j.gcode); }
+    if (window.setAppMode) window.setAppMode('viewer');
     generatedRev = clickRev;          // the click-time revision, not the live one -- see above
     updateStaleBadge();
     reportEl.textContent = j.report || '';
     reportEl.style.display = 'block';
     dlBtn.style.display = 'block';
-    var nIssues = (j.issues||[]).length;
-    if(nIssues){
+    var nIssues = (j.issues || []).length;
+    if (nIssues) {
       statusEl.className = 'err';
       statusEl.textContent = nIssues + ' safety warning(s) - see report';
     } else {
@@ -7367,23 +7727,23 @@
   // unreachable (404 against an older server, a network error, or a
   // response with no streaming body) -- indeterminate spinner only, since
   // there is no progress signal to show a real bar for.
-  function runLegacyGenerate(body, clickRev){
+  function runLegacyGenerate(body, clickRev) {
     statusEl.className = '';
     statusEl.textContent = 'Generating (no progress available)...';
     apiFetch('/api/generate', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
-    }).then(function(resp){
-      return resp.json().then(function(j){ return {ok:resp.ok, j:j}; });
-    }).then(function(res){
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function (resp) {
+      return resp.json().then(function (j) { return { ok: resp.ok, j: j }; });
+    }).then(function (res) {
       genBtn.disabled = false;
       hideGenProgress();
-      if(!res.ok){
+      if (!res.ok) {
         statusEl.className = 'err';
         statusEl.textContent = res.j && res.j.error ? res.j.error : 'generation failed';
         return;
       }
       applyGenerateResult(res.j, clickRev);
-    }).catch(function(err){
+    }).catch(function (err) {
       genBtn.disabled = false;
       hideGenProgress();
       statusEl.className = 'err';
@@ -7391,7 +7751,7 @@
     });
   }
 
-  genBtn.addEventListener('click', function(){
+  genBtn.addEventListener('click', function () {
     var body = buildGenerateBody();
     // Captured together, alongside body: both are frozen at click time so
     // the eventual response can only ever be stamped against the design it
@@ -7407,9 +7767,9 @@
     var lastFrac = 0;
 
     apiFetch('/api/generate_stream', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
-    }).then(function(resp){
-      if(!resp.ok || !resp.body){
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function (resp) {
+      if (!resp.ok || !resp.body) {
         // Old server without this endpoint (404), or a response.body this
         // browser/proxy doesn't support streaming -- fall back below rather
         // than leaving Generate dead against an older deployment. The
@@ -7423,22 +7783,22 @@
       var decoder = new TextDecoder();
       var buf = ''; // carries a partial line across chunk boundaries
 
-      function handleLine(line){
+      function handleLine(line) {
         line = line.trim();
-        if(!line) return;
+        if (!line) return;
         var obj;
-        try { obj = JSON.parse(line); } catch(e){ return; }
-        if(obj.type === 'progress'){
+        try { obj = JSON.parse(line); } catch (e) { return; }
+        if (obj.type === 'progress') {
           var frac = (typeof obj.frac === 'number' && isFinite(obj.frac)) ? obj.frac : lastFrac;
-          if(frac < lastFrac) frac = lastFrac; // never let the bar go backwards
+          if (frac < lastFrac) frac = lastFrac; // never let the bar go backwards
           lastFrac = frac;
           showGenProgress(frac, genStageLabel(obj.stage));
-        } else if(obj.type === 'done'){
+        } else if (obj.type === 'done') {
           settled = true;
           genBtn.disabled = false;
           hideGenProgress();
           applyGenerateResult(obj.result, clickRev);
-        } else if(obj.type === 'error'){
+        } else if (obj.type === 'error') {
           // Status is 200 even here (see the endpoint's docstring) -- the
           // failure lives entirely in this line's "type", never in HTTP
           // status, so branching on resp.ok anywhere in this path would
@@ -7451,12 +7811,12 @@
         }
       }
 
-      function pump(){
-        return reader.read().then(function(res){
-          if(res.done){
-            if(buf.trim()) handleLine(buf);
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) {
+            if (buf.trim()) handleLine(buf);
             buf = '';
-            if(!settled){
+            if (!settled) {
               // The connection closed without a 'done' or 'error' line --
               // do not leave the button/bar stuck busy forever.
               genBtn.disabled = false;
@@ -7466,18 +7826,18 @@
             }
             return;
           }
-          buf += decoder.decode(res.value, {stream: true});
+          buf += decoder.decode(res.value, { stream: true });
           var lines = buf.split('\n');
           buf = lines.pop(); // last (possibly partial) line waits for the next chunk
           lines.forEach(handleLine);
-          if(settled){ try { reader.cancel(); } catch(e){} return; }
+          if (settled) { try { reader.cancel(); } catch (e) { } return; }
           return pump();
         });
       }
       return pump();
-    }).catch(function(err){
-      if(settled) return; // a real result already landed; a trailing network blip is moot
-      if(usedStream){
+    }).catch(function (err) {
+      if (settled) return; // a real result already landed; a trailing network blip is moot
+      if (usedStream) {
         // Broke mid-stream after we'd already committed to it (network
         // drop, malformed NDJSON) -- report it directly. Falling back to
         // /api/generate here would double-submit the same generation job.
@@ -7493,14 +7853,14 @@
     });
   });
 
-  dlBtn.addEventListener('click', function(){
-    if(lastGcode==null) return;
-    var blob = new Blob([lastGcode], {type:'text/plain'});
+  dlBtn.addEventListener('click', function () {
+    if (lastGcode == null) return;
+    var blob = new Blob([lastGcode], { type: 'text/plain' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url; a.download = lastName || 'design.gcode';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   });
 
   // ---- export STL ---------------------------------------------------------
@@ -7508,8 +7868,8 @@
   // giving a solid mesh of the sculpted surface for users who want to slice
   // it as a filled part in Orca rather than print our single-wall spiral.
   var exportStlBtn = document.getElementById('export-stl-btn');
-  if(exportStlBtn){
-    exportStlBtn.addEventListener('click', function(){
+  if (exportStlBtn) {
+    exportStlBtn.addEventListener('click', function () {
       // body is a click-time snapshot, same as Generate's -- but unlike
       // Generate, this handler never stamps a "matches the current design"
       // claim anywhere (no generatedRev-equivalent, no stale badge for
@@ -7520,17 +7880,17 @@
       exportStlBtn.disabled = true;
       statusEl.className = ''; statusEl.textContent = 'exporting STL...';
       apiFetch('/api/export_stl', {
-        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
-      }).then(function(resp){
-        if(!resp.ok){
-          return resp.json().then(function(j){
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      }).then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (j) {
             throw new Error(j && j.error ? j.error : 'STL export failed');
-          }).catch(function(e){
+          }).catch(function (e) {
             throw (e instanceof Error ? e : new Error('STL export failed'));
           });
         }
         return resp.blob();
-      }).then(function(blob){
+      }).then(function (blob) {
         exportStlBtn.disabled = false;
         var stlName = (lastName || ('trident_design_' + design.shape + '_' + design.height + 'mm.gcode'))
           .replace(/\.[^.]*$/, '') + '.stl';
@@ -7538,10 +7898,10 @@
         var a = document.createElement('a');
         a.href = url; a.download = stlName;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         statusEl.className = 'ok';
         statusEl.textContent = 'STL exported - ' + stlName;
-      }).catch(function(err){
+      }).catch(function (err) {
         exportStlBtn.disabled = false;
         statusEl.className = 'err';
         statusEl.textContent = 'STL export failed: ' + (err && err.message ? err.message : err);
@@ -7569,23 +7929,23 @@
   // this project treats as a hardware problem rather than a UI one. Imported
   // printers are likewise untouched: those are user assets (a .cfg they had to
   // find and import), not session scratch.
-  (function(){
+  (function () {
     var modal = document.getElementById('session-modal');
-    if(!modal || !cachedDesign) return;
+    if (!modal || !cachedDesign) return;
 
     var summary = document.getElementById('sr-summary');
-    if(summary){
+    if (summary) {
       var d = cachedDesign;
-      var pick = function(key){ return d[key] != null ? d[key] : DEFAULT_DESIGN[key]; };
+      var pick = function (key) { return d[key] != null ? d[key] : DEFAULT_DESIGN[key]; };
       var bits = [];
       var shape = String(pick('shape') || '');
-      if(shape) bits.push(shape.charAt(0).toUpperCase() + shape.slice(1));
+      if (shape) bits.push(shape.charAt(0).toUpperCase() + shape.slice(1));
       bits.push((+pick('radius') * 2).toFixed(0) + ' x ' + (+pick('height')).toFixed(0) + ' mm');
-      if(+pick('z_waves')) bits.push(pick('z_waves') + ' Z waves');
-      if(+pick('xy_twist')) bits.push(pick('xy_twist') + ' deg twist');
-      if(d.pattern) bits.push('texture: ' + d.pattern);
-      if(pick('bottom') !== 'open' && +pick('base_layers')) bits.push(pick('base_layers') + ' base layers');
-      bits.forEach(function(t){
+      if (+pick('z_waves')) bits.push(pick('z_waves') + ' Z waves');
+      if (+pick('xy_twist')) bits.push(pick('xy_twist') + ' deg twist');
+      if (d.pattern) bits.push('texture: ' + d.pattern);
+      if (pick('bottom') !== 'open' && +pick('base_layers')) bits.push(pick('base_layers') + ' base layers');
+      bits.forEach(function (t) {
         var el = document.createElement('span');
         el.className = 'chip';
         el.textContent = t;          // textContent, never innerHTML: this is
@@ -7594,14 +7954,14 @@
       });
     }
 
-    function close(){
+    function close() {
       modal.style.display = 'none';
       document.removeEventListener('keydown', onKey, true);
     }
     // Esc resolves to "continue" -- the choice that changes nothing. A stray
     // keypress must never be the thing that discards a design.
-    function onKey(e){
-      if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); continueSession(); }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); continueSession(); }
     }
 
     // Continuing means "the design from last time is the one I want", so draw
@@ -7621,22 +7981,22 @@
     //
     // Esc routes here too (it resolves to Continue), so the quiet way out of
     // the dialog shows the design as well.
-    function continueSession(){
+    function continueSession() {
       previewArmed = true;
       schedulePreview();
       close();
     }
 
     document.getElementById('sr-continue').addEventListener('click', continueSession);
-    document.getElementById('sr-new').addEventListener('click', function(){
+    document.getElementById('sr-new').addEventListener('click', function () {
       var keepPrinter = design.printer;
-      for(var k in DEFAULT_DESIGN){
-        if(!DEFAULT_DESIGN.hasOwnProperty(k)) continue;
+      for (var k in DEFAULT_DESIGN) {
+        if (!DEFAULT_DESIGN.hasOwnProperty(k)) continue;
         design[k] = JSON.parse(JSON.stringify(DEFAULT_DESIGN[k]));
       }
-      if(keepPrinter) design.printer = keepPrinter;
+      if (keepPrinter) design.printer = keepPrinter;
       applyDesignToUI();                 // repaints, persists, re-previews
-      if(typeof activateStep === 'function') activateStep('model');
+      if (typeof activateStep === 'function') activateStep('model');
       close();
     });
 
@@ -7645,6 +8005,8 @@
     modal.style.display = '';
     document.addEventListener('keydown', onKey, true);
     var primary = document.getElementById('sr-continue');
-    if(primary) primary.focus();
+    if (primary) primary.focus();
   })();
 })();
+
+

@@ -1,0 +1,447 @@
+﻿  // ---- Filament defaults --------------------------------------------------
+  // Default nozzle temp, bed temp, fan min/max for each built-in material key.
+  var FILAMENT_DEFAULTS = {
+    pla:  { label:'PLA',  nozzle:205, bed:60,  fanMin:100, fanMax:100 },
+    petg: { label:'PETG', nozzle:240, bed:70,  fanMin:50,  fanMax:80  },
+    abs:  { label:'ABS',  nozzle:245, bed:100, fanMin:20,  fanMax:40  },
+    tpu:  { label:'TPU',  nozzle:220, bed:45,  fanMin:30,  fanMax:60  },
+  };
+  var CUSTOM_FILAMENTS_KEY = 'trident_custom_filaments';
+
+  function loadCustomFilaments(){
+    try { return JSON.parse(localStorage.getItem(CUSTOM_FILAMENTS_KEY) || '[]'); } catch(e){ return []; }
+  }
+  function saveCustomFilaments(arr){
+    try { localStorage.setItem(CUSTOM_FILAMENTS_KEY, JSON.stringify(arr)); } catch(e){}
+  }
+
+  // ---- filament dropdown -------------------------------------------------
+  var famSel = document.getElementById('d-filament');
+
+  // Returns the defaults (nozzle/bed/fan) for whatever key is currently selected.
+  function getFilamentDefaults(key){
+    if(FILAMENT_DEFAULTS[key]) return FILAMENT_DEFAULTS[key];
+    // Custom profiles stored in localStorage may carry their own temps.
+    var customs = loadCustomFilaments();
+    for(var i=0;i<customs.length;i++) if(customs[i].key===key) return customs[i];
+    // Orca profiles: fall back to generic PLA defaults as a safe base.
+    return FILAMENT_DEFAULTS['pla'];
+  }
+
+  function populateFilamentSelect(preferKey){
+    famSel.innerHTML = '';
+    // 1. Built-ins
+    ['pla','petg','abs','tpu'].forEach(function(k){
+      var o = document.createElement('option');
+      o.value = k; o.textContent = FILAMENT_DEFAULTS[k].label;
+      famSel.appendChild(o);
+    });
+    // 2. Orca server profiles (appended if available, will be loaded async)
+    // 3. Custom saved profiles
+    loadCustomFilaments().forEach(function(c){
+      var o = document.createElement('option');
+      o.value = c.key; o.textContent = c.label + ' â˜…';
+      famSel.appendChild(o);
+    });
+    // Restore selection
+    var key = preferKey || design.filament || 'pla';
+    if(famSel.querySelector('option[value="'+key+'"]')) famSel.value = key;
+    else famSel.value = 'pla';
+  }
+
+  populateFilamentSelect();
+
+  // Orca filament names run past 400px, wider than the whole panel, and a
+  // <select> cannot ellipsize its own closed state -- so mirror the selection
+  // into the title attribute, making the full name reachable on hover.
+  function syncFilamentTitle(){
+    var o = famSel.options[famSel.selectedIndex];
+    famSel.title = o ? o.textContent : '';
+  }
+  var filComboBtn = document.getElementById('filament-combo-btn');
+  var filComboLabel = document.getElementById('filament-combo-label');
+  var filComboList = document.getElementById('filament-combo-list');
+  var filComboOpenState = false;
+  var filComboOptions = [];
+  var filComboActiveIdx = -1;
+
+  function setFilComboActive(idx) {
+    if(idx < 0) idx = 0;
+    if(idx >= filComboOptions.length) idx = filComboOptions.length - 1;
+    filComboActiveIdx = idx;
+    for(var i=0; i<filComboOptions.length; i++) {
+      var opt = filComboOptions[i].el;
+      if(i === idx) {
+        opt.setAttribute('aria-selected', 'true');
+        opt.classList.add('active');
+        opt.scrollIntoView({ block: 'nearest' });
+      } else {
+        opt.setAttribute('aria-selected', 'false');
+        opt.classList.remove('active');
+      }
+    }
+  }
+
+  function positionFilCombo() {
+    if(!filComboOpenState) return;
+    var btnRect = filComboBtn.getBoundingClientRect();
+    var spaceBelow = window.innerHeight - btnRect.bottom - 8;
+    var spaceAbove = btnRect.top - 8;
+    var openUp = spaceAbove > spaceBelow;
+    var avail = Math.max(60, openUp ? spaceAbove : spaceBelow);
+    filComboList.style.maxHeight = Math.min(320, avail) + 'px';
+    if(openUp){
+      filComboList.style.bottom = 'calc(100% + 4px)';
+      filComboList.style.top = 'auto';
+    } else {
+      filComboList.style.top = 'calc(100% + 4px)';
+      filComboList.style.bottom = 'auto';
+    }
+  }
+
+  function openFilCombo() {
+    if(filComboOpenState || !filComboOptions.length) return;
+    filComboOpenState = true;
+    filComboList.classList.add('open');
+    filComboBtn.setAttribute('aria-expanded', 'true');
+    positionFilCombo();
+    var idx = -1;
+    for(var i=0; i<filComboOptions.length; i++) {
+      if(filComboOptions[i].key === famSel.value) { idx = i; break; }
+    }
+    setFilComboActive(idx);
+    document.addEventListener('mousedown', onFilComboDocMouseDown, true);
+    window.addEventListener('resize', positionFilCombo);
+  }
+
+  function closeFilCombo() {
+    if(!filComboOpenState) return;
+    filComboOpenState = false;
+    filComboList.classList.remove('open');
+    filComboBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', onFilComboDocMouseDown, true);
+    window.removeEventListener('resize', positionFilCombo);
+  }
+
+  function onFilComboDocMouseDown(e) {
+    if(!filComboList.contains(e.target) && !filComboBtn.contains(e.target)) {
+      closeFilCombo();
+    }
+  }
+
+  function selectFilament(key) {
+    famSel.value = key;
+    var ev = document.createEvent('HTMLEvents');
+    ev.initEvent('change', false, true);
+    famSel.dispatchEvent(ev);
+  }
+
+  if(filComboBtn) {
+    filComboBtn.addEventListener('click', function() {
+      if(filComboOpenState) closeFilCombo(); else openFilCombo();
+    });
+    filComboBtn.addEventListener('keydown', function(e) {
+      switch(e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          if(!filComboOpenState) openFilCombo();
+          else setFilComboActive(filComboActiveIdx + 1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if(!filComboOpenState) openFilCombo();
+          else setFilComboActive(filComboActiveIdx - 1);
+          break;
+        case 'Enter':
+        case ' ':
+          e.preventDefault();
+          if(filComboOpenState && filComboActiveIdx >= 0) {
+            selectFilament(filComboOptions[filComboActiveIdx].key);
+            closeFilCombo();
+            filComboBtn.focus();
+          } else {
+            openFilCombo();
+          }
+          break;
+        case 'Escape':
+          e.preventDefault();
+          closeFilCombo();
+          filComboBtn.focus();
+          break;
+      }
+    });
+  }
+
+  function syncFilamentBarLabel(){
+    if(!filComboLabel || !filComboList) return;
+    var o = famSel.options[famSel.selectedIndex];
+    filComboLabel.textContent = o ? (o.textContent.replace(' â˜…','') || 'PLA') : 'PLA';
+    filComboLabel.title = filComboLabel.textContent;
+    
+    filComboList.innerHTML = '';
+    filComboOptions = [];
+    for(var i=0; i<famSel.options.length; i++) {
+      var optDom = famSel.options[i];
+      var opt = document.createElement('div');
+      opt.className = 'mb-combo-option';
+      opt.textContent = optDom.textContent;
+      opt.setAttribute('role', 'option');
+      opt.dataset.key = optDom.value;
+      (function(k){
+        opt.addEventListener('click', function(e){
+          e.stopPropagation();
+          selectFilament(k);
+          closeFilCombo();
+          filComboBtn.focus();
+        });
+      })(optDom.value);
+      filComboList.appendChild(opt);
+      filComboOptions.push({ key: optDom.value, el: opt });
+    }
+  }
+  famSel.addEventListener('change', syncFilamentTitle);
+  famSel.addEventListener('change', syncFilamentBarLabel);
+
+  // ---- Filament Edit modal ------------------------------------------------
+  (function(){
+    var fModal   = document.getElementById('filament-modal');
+    var fOpenBtn = document.getElementById('filament-edit-btn');
+    var fAddBtn  = document.getElementById('filament-add-btn');
+    var fBarRow  = document.getElementById('filament-bar-row');
+    var fCloseBtn= document.getElementById('fm-modal-close');
+    var fDoneBtn = document.getElementById('fm-modal-done');
+    var fBackdrop= fModal ? fModal.querySelector('.pm-modal-backdrop') : null;
+    var nozzleEl = document.getElementById('d-nozzletemp');
+    var bedEl    = document.getElementById('d-bedtemp');
+    var resetNozzle = document.getElementById('fm-reset-nozzle');
+    var resetBed    = document.getElementById('fm-reset-bed');
+    var customRow   = document.getElementById('fm-custom-row');
+    var customName  = document.getElementById('fm-custom-name');
+    var saveBtn     = document.getElementById('fm-save-custom-btn');
+    var saveStatus  = document.getElementById('fm-save-status');
+    var delBtn      = document.getElementById('fm-delete-custom-btn');
+    var tooltip     = document.getElementById('fm-tooltip');
+    if(!fModal || !fOpenBtn) return;
+
+    // Track whether the user has overridden temps from the filament's defaults.
+    var nozzleOverridden = (design.nozzle_temp !== null);
+    var bedOverridden    = (design.bed_temp !== null);
+
+    // Fill temp inputs with the current filament's defaults (not as placeholder).
+    function applyFilamentDefaults(key, keepOverrides){
+      var defs = getFilamentDefaults(key);
+      if(!keepOverrides || !nozzleOverridden){
+        nozzleEl.value = defs.nozzle;
+        if(!keepOverrides){ design.nozzle_temp = null; nozzleOverridden = false; }
+      }
+      if(!keepOverrides || !bedOverridden){
+        bedEl.value = defs.bed;
+        if(!keepOverrides){ design.bed_temp = null; bedOverridden = false; }
+      }
+      updateOverrideUI();
+    }
+
+    function updateOverrideUI(){
+      if(resetNozzle) resetNozzle.style.display = nozzleOverridden ? '' : 'none';
+      if(resetBed)    resetBed.style.display    = bedOverridden    ? '' : 'none';
+      if(nozzleEl) nozzleEl.classList.toggle('fm-overridden', nozzleOverridden);
+      if(bedEl)    bedEl.classList.toggle('fm-overridden', bedOverridden);
+      if(delBtn)   delBtn.style.visibility = (famSel.value || '').indexOf('custom_') === 0 ? 'visible' : 'hidden';
+    }
+
+    // When user types in a temp field, mark it overridden and persist.
+    function watchTempOverride(el, field, isNozzle){
+      if(!el) return;
+      // Seed value on modal open (handled in openFModal).
+      el.addEventListener('input', function(){
+        var raw = parseFloat(el.value);
+        var isOverride = !isNaN(raw);
+        if(isNozzle){ nozzleOverridden = isOverride; }
+        else { bedOverridden = isOverride; }
+        if(isOverride){
+          // Clamp to [min, max].
+          var lo = parseFloat(el.min), hi = parseFloat(el.max);
+          var v = raw;
+          if(isFinite(lo)) v = Math.max(lo, v);
+          if(isFinite(hi)) v = Math.min(hi, v);
+          design[field] = v;
+        } else {
+          design[field] = null;
+        }
+        persistDesign('num:'+el.id);
+        updateOverrideUI();
+        if(saveStatus) { saveStatus.style.display='none'; saveStatus.textContent=''; }
+      });
+      el.addEventListener('change', function(){ if(typeof endHistRun==='function') endHistRun(); });
+    }
+    watchTempOverride(nozzleEl, 'nozzle_temp', true);
+    watchTempOverride(bedEl,    'bed_temp',    false);
+
+    // Reset buttons restore the filament default.
+    function makeReset(btn, el, field, isNozzle){
+      if(!btn || !el) return;
+      btn.addEventListener('click', function(){
+        var defs = getFilamentDefaults(famSel.value);
+        el.value = isNozzle ? defs.nozzle : defs.bed;
+        design[field] = null;
+        if(isNozzle) nozzleOverridden = false; else bedOverridden = false;
+        persistDesign();
+        updateOverrideUI();
+      });
+    }
+    makeReset(resetNozzle, nozzleEl, 'nozzle_temp', true);
+    makeReset(resetBed,    bedEl,    'bed_temp',    false);
+
+    // Filament selector change: load defaults (keep user overrides if any).
+    famSel.addEventListener('change', function(){
+      design.filament = famSel.value;
+      persistDesign();
+      applyFilamentDefaults(famSel.value, true);
+      syncFilamentTitle();
+      syncFilamentBarLabel();
+    });
+
+    // Custom filament save.
+    if(saveBtn){
+      saveBtn.addEventListener('click', function(){
+        var name = (customName ? customName.value.trim() : '') || 'My filament';
+        var key  = 'custom_' + name.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+        var defs = getFilamentDefaults(famSel.value);
+        var profile = {
+          key: key, label: name,
+          nozzle: parseFloat(nozzleEl.value) || defs.nozzle,
+          bed:    parseFloat(bedEl.value)    || defs.bed,
+          fanMin: defs.fanMin, fanMax: defs.fanMax
+        };
+        var customs = loadCustomFilaments().filter(function(c){ return c.key !== key; });
+        customs.push(profile);
+        saveCustomFilaments(customs);
+        // Rebuild select and choose the newly saved profile.
+        var prevKey = famSel.value;
+        populateFilamentSelect(key);
+        design.filament = key;
+        syncFilamentTitle();
+        syncFilamentBarLabel();
+        persistDesign();
+        nozzleOverridden = false; bedOverridden = false;
+        updateOverrideUI();
+        if(saveStatus){
+          saveStatus.textContent = 'âœ“ Saved as "' + name + '"';
+          saveStatus.style.display = '';
+          setTimeout(function(){ if(saveStatus) saveStatus.style.display='none'; }, 3000);
+        }
+      });
+    }
+
+    var delConfirming = false;
+    function resetDelConfirm() {
+      if(!delBtn) return;
+      delConfirming = false;
+      delBtn.textContent = 'Delete';
+      delBtn.classList.remove('pm-link-confirm');
+    }
+
+    if(delBtn){
+      delBtn.addEventListener('click', function(){
+        if(!delConfirming) {
+          delConfirming = true;
+          delBtn.textContent = 'Confirm?';
+          delBtn.classList.add('pm-link-confirm');
+          setTimeout(function(){ if(delConfirming) resetDelConfirm(); }, 3000);
+          return;
+        }
+        var customs = loadCustomFilaments().filter(function(c){ return c.key !== famSel.value; });
+        saveCustomFilaments(customs);
+        populateFilamentSelect('pla');
+        design.filament = 'pla';
+        syncFilamentTitle();
+        syncFilamentBarLabel();
+        persistDesign();
+        nozzleOverridden = false; bedOverridden = false;
+        applyFilamentDefaults('pla', false);
+        resetDelConfirm();
+      });
+    }
+
+    // â„¹ï¸ tooltip logic (shared popup positioned near each button).
+    if(tooltip){
+      var activeInfoBtn = null;
+      function showTooltip(btn){
+        activeInfoBtn = btn;
+        if (btn.hasAttribute('data-tip-html')) {
+          tooltip.innerHTML = btn.getAttribute('data-tip-html');
+        } else {
+          tooltip.textContent = btn.getAttribute('data-tip') || '';
+        }
+        tooltip.style.display = '';
+        tooltip.style.position = 'fixed';
+        var btnRect = btn.getBoundingClientRect();
+        var left = btnRect.left;
+        var top = btnRect.bottom + 6;
+        var tipW = 240;
+        if(left + tipW > window.innerWidth - 12) left = window.innerWidth - tipW - 12;
+        if(top + 60 > window.innerHeight) top = btnRect.top - tooltip.offsetHeight - 6;
+        tooltip.style.left = left + 'px';
+        tooltip.style.top  = top  + 'px';
+      }
+      function hideTooltip(){ tooltip.style.display='none'; activeInfoBtn=null; }
+      document.body.addEventListener('mouseenter', function(e){
+        if(e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) showTooltip(e.target);
+      }, true);
+      document.body.addEventListener('mouseleave', function(e){
+        if(e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) hideTooltip();
+      }, true);
+      document.body.addEventListener('focus', function(e){
+        if(e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) showTooltip(e.target);
+      }, true);
+      document.body.addEventListener('blur', function(e){
+        if(e.target.classList && (e.target.classList.contains('fm-info-btn') || e.target.classList.contains('fm-hover-target'))) hideTooltip();
+      }, true);
+    }
+
+    function openFModal(){
+      if(typeof resetDelConfirm === 'function') resetDelConfirm();
+      // Sync temp inputs to current design state or filament defaults.
+      nozzleOverridden = (design.nozzle_temp !== null);
+      bedOverridden    = (design.bed_temp    !== null);
+      var defs = getFilamentDefaults(famSel.value);
+      nozzleEl.value = nozzleOverridden ? design.nozzle_temp : defs.nozzle;
+      bedEl.value    = bedOverridden    ? design.bed_temp    : defs.bed;
+      updateOverrideUI();
+      if(saveStatus){ saveStatus.style.display='none'; }
+      fModal.style.display = 'flex';
+      if(fCloseBtn) fCloseBtn.focus();
+    }
+    function closeFModal(){
+      fModal.style.display = 'none';
+      fOpenBtn.focus();
+    }
+
+    fOpenBtn.addEventListener('click', openFModal);
+    if(fAddBtn) fAddBtn.addEventListener('click', function(e){
+      e.stopPropagation();
+      openFModal();
+      if(customName) customName.focus();
+    });
+    if(fBarRow) fBarRow.addEventListener('click', function(e){
+      var combo = document.getElementById('filament-combo');
+      if(e.target === fOpenBtn || fOpenBtn.contains(e.target) || 
+         (fAddBtn && (e.target === fAddBtn || fAddBtn.contains(e.target))) ||
+         (combo && (e.target === combo || combo.contains(e.target)))) return;
+      openFModal();
+    });
+    if(fCloseBtn)  fCloseBtn.addEventListener('click',  closeFModal);
+    if(fDoneBtn)   fDoneBtn.addEventListener('click',   closeFModal);
+    if(fBackdrop)  fBackdrop.addEventListener('click',  closeFModal);
+    document.addEventListener('keydown', function(e){
+      if(fModal.style.display==='none') return;
+      if(e.key==='Escape') closeFModal();
+    });
+
+    // Seed sidebar label and title on load.
+    syncFilamentBarLabel();
+    syncFilamentTitle();
+    // Seed temp inputs on load (without marking as overridden).
+    applyFilamentDefaults(famSel.value, true);
+  })();
+
