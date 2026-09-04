@@ -1,5 +1,53 @@
 """Simple basic filament settings for PLA, PETG, ABS, TPU."""
 from __future__ import annotations
+import os
+import shutil
+from dataclasses import dataclass, field
+
+def orca_config_root() -> str | None:
+    """Best-effort path to the OrcaSlicer config directory for this OS."""
+    candidates = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(os.path.join(appdata, "OrcaSlicer"))
+    home = os.path.expanduser("~")
+    candidates += [
+        os.path.join(home, ".config", "OrcaSlicer"),                 # Linux
+        os.path.join(home, "Library", "Application Support", "OrcaSlicer"),  # macOS
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    return None
+
+def orca_binary_path(explicit: str | None = None) -> str | None:
+    """Best-effort path to the OrcaSlicer CLI binary for this OS."""
+    if explicit and os.path.isfile(explicit):
+        return explicit
+
+    env_path = os.environ.get("TRIDENT_ORCA_PATH")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+
+    for name in ("orca-slicer", "orcaslicer"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    candidates = []
+    program_files = os.environ.get("PROGRAMFILES")
+    if program_files:
+        candidates.append(os.path.join(program_files, "OrcaSlicer", "orca-slicer.exe"))
+    candidates.append("/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
+    home = os.path.expanduser("~")
+    candidates += [
+        os.path.join(home, ".local", "bin", "orca-slicer"),
+        "/usr/bin/orca-slicer",
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
 from dataclasses import dataclass, field
 
 BASIC_FILAMENTS = {
