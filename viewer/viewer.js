@@ -596,6 +596,16 @@ function parseGcode(text) {
   const cx = BED_X / 2, cy = BED_Y / 2;
   let x = 0, y = 0, z = 0, has = false, curF = 0;
   let minz = Infinity, maxz = -Infinity, minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+  // Bounding box of ONLY the extrude moves at the hybrid seam height, kept
+  // separate from minx/maxx/miny/maxy above (the whole print's bbox, used for
+  // the "Footprint" stat). A wall that flares wider than the planar base
+  // below it -- a star wall on a round mesh base, e.g. -- used to size the
+  // seam marker plane (see buildGeometry below) off the WHOLE print's bbox,
+  // so the marker ballooned out to the wall's widest point instead of the
+  // actual seam ring it is meant to mark. Populated only once meta.hybridSeamZ
+  // is known, which the header comment guarantees is set before any move
+  // lines are reached.
+  let seamMinX = Infinity, seamMaxX = -Infinity, seamMinY = Infinity, seamMaxY = -Infinity;
   let fil = 0, extrudeCount = 0, travelCount = 0, maxZrate = 0, relE = false;
   let curFan = 0, minFan = Infinity, maxFan = -Infinity, fanEverOn = false;   // sticky M106/M107 state (0..1)
   const ext = [], extCol = [], trv = [];          // world-space vertex arrays
@@ -682,6 +692,16 @@ function parseGcode(text) {
         if (relE) fil += e;
         minz = Math.min(minz, z, nz); maxz = Math.max(maxz, z, nz);
         minx = Math.min(minx, nx); maxx = Math.max(maxx, nx); miny = Math.min(miny, ny); maxy = Math.max(maxy, ny);
+        // See seamMinX's own comment above: same accumulation, restricted to
+        // moves at the seam height so the marker plane can be sized to the
+        // seam ring itself rather than the whole print's bbox.
+        if (meta.hybridSeamZ != null) {
+          const seamEps = meta.layerHeight ? meta.layerHeight * 0.5 : 0.05;
+          if (Math.abs(nz - meta.hybridSeamZ) <= seamEps) {
+            seamMinX = Math.min(seamMinX, nx); seamMaxX = Math.max(seamMaxX, nx);
+            seamMinY = Math.min(seamMinY, ny); seamMaxY = Math.max(seamMaxY, ny);
+          }
+        }
       } else {
         trv.push(ax, ay, az, bx, by, bz); travelCount++;
       }
@@ -719,6 +739,7 @@ function parseGcode(text) {
 
   return {
     ext: extFlat, extCol, trv: trvFlat, segSpeed, segFlow, meta, minz, maxz, minx, maxx, miny, maxy,
+    seamMinX, seamMaxX, seamMinY, seamMaxY,
     fil, extrudeCount, travelCount, maxZrate,
     riskFlags: null, riskyCount: null, overhang: null,   // filled in by load() -- see NOTE above
     estTime, estTimeSec, segT,
@@ -870,14 +891,25 @@ function buildGeometry(d) {
   // Hybrid planar/non-planar handoff marker (see trident_gcode/hybrid.py's
   // marker comment and parseGcode()'s hybridSeamZ above). Smallest useful
   // feedback for v1: one reference plane at the seam height, sized to the
-  // toolpath's own XY footprint rather than the whole bed so it reads as
-  // "here" rather than a full-bed slab. Uses --accent (0x2f6bff) -- never
-  // --ok/--warn/--danger/--accent-purple, all reserved to other subsystems.
+  // SEAM RING's own XY footprint (seamMinX/seamMaxX/seamMinY/seamMaxY --
+  // extrude moves at the seam height only) rather than the whole print's
+  // bbox. Using the whole-print bbox here used to balloon the marker out to
+  // the widest point of the ENTIRE object -- e.g. a star wall's points
+  // flaring past the round mesh base it sits on made the marker match the
+  // star's width, not the actual (narrower, round) seam ring underneath it.
+  // Falls back to the whole-print bbox only if no move landed within the
+  // seam-height epsilon (seamMinX stays Infinity), so a file with an
+  // unusually large layer height still gets a marker instead of none.
   if (d.meta.hybridSeamZ != null && isFinite(d.minx) && isFinite(d.maxx)) {
     const cx2 = BED_X / 2, cy2 = BED_Y / 2;
     const pad = 4; // mm, a little larger than the footprint so the edge is visible
-    const sx = Math.max(d.maxx - d.minx + pad * 2, pad * 2);
-    const sz = Math.max(d.maxy - d.miny + pad * 2, pad * 2);
+    const haveSeamFootprint = isFinite(d.seamMinX) && isFinite(d.seamMaxX);
+    const fx0 = haveSeamFootprint ? d.seamMinX : d.minx;
+    const fx1 = haveSeamFootprint ? d.seamMaxX : d.maxx;
+    const fy0 = haveSeamFootprint ? d.seamMinY : d.miny;
+    const fy1 = haveSeamFootprint ? d.seamMaxY : d.maxy;
+    const sx = Math.max(fx1 - fx0 + pad * 2, pad * 2);
+    const sz = Math.max(fy1 - fy0 + pad * 2, pad * 2);
     const pgeo = new THREE.PlaneGeometry(sx, sz);
     const pmat = new THREE.MeshBasicMaterial({
       color: 0x2f6bff, transparent: true, opacity: 0.16,
@@ -886,9 +918,9 @@ function buildGeometry(d) {
     hybridSeamObj = new THREE.Mesh(pgeo, pmat);
     hybridSeamObj.rotation.x = -Math.PI / 2;   // plane is XY by default; lay it flat (world XZ)
     hybridSeamObj.position.set(
-      (d.minx + d.maxx) / 2 - cx2,
+      (fx0 + fx1) / 2 - cx2,
       d.meta.hybridSeamZ,
-      cy2 - (d.miny + d.maxy) / 2
+      cy2 - (fy0 + fy1) / 2
     );
     scene.add(hybridSeamObj);
   }
