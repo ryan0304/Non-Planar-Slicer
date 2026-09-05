@@ -7251,9 +7251,21 @@
         // refreshMeshBasePreview()'s own comment for the placement contract.
         if (typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
 
-        design.shape = 'mesh';
-        var dShape = document.getElementById('d-shape');
-        if (dShape) dShape.value = 'mesh';
+        // design.shape stays whatever it already was (default 'circle') --
+        // it picks the CONTINUING WALL's own silhouette above the mesh
+        // (build_hybrid_print/build_mesh_hybrid_print both still take a real
+        // shape_fn regardless of the mesh base), not "is there a mesh
+        // loaded" -- that state already lives in meshState.mesh_id /
+        // design.mesh_base_mode. This used to force design.shape = 'mesh',
+        // a value <select id="d-shape"> has no matching <option> for (only
+        // circle/star/square exist), which silently blanked the dropdown,
+        // hid the star-only rows (refreshShapeRows() reads the select's own
+        // .value, not design.shape, so it saw "" and fell out of star mode),
+        // and -- the real bug, not just cosmetic -- made the next Generate
+        // send shape:"mesh" straight to _make_shape() in serve.py, which
+        // rejects it with "unknown shape: mesh (use circle, star, or
+        // square)". applyDesignToUI() below still re-syncs the dropdown
+        // from design.shape, now harmlessly, since it was never touched.
         if (typeof applyDesignToUI === 'function') applyDesignToUI();
       })
       .catch(function(err){
