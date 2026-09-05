@@ -1,0 +1,5 @@
+.git
+__pycache__
+*.pyc
+scratchpad
+00000.log

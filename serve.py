@@ -1116,6 +1116,61 @@ def _parse_mesh_hybrid_params(body, height):
     }
 
 
+# Both hybrid endpoints hardcode this rather than taking the request's own
+# points_per_turn (the parametric non-hybrid path's own control) -- named
+# once here so the pre-flight complexity estimate in
+# _hybrid_complexity_limits' caller can never drift from the actual value
+# passed to build_hybrid_print/build_mesh_hybrid_print below.
+_HYBRID_POINTS_PER_TURN = 240
+
+
+def _hybrid_complexity_limits(env=None):
+    """(max_wall_points, max_mesh_triangles) for the hybrid planar-base
+    endpoints, or None for either when there is no ceiling.
+
+    Deliberately UNLIMITED (None) by default, everywhere including a
+    self-hosted deployment with plenty of CPU/RAM and no request timeout --
+    this is NOT the CLAUDE.md "missing config becomes a conservative
+    default" rule (that rule is about a PHYSICAL machine limit silently
+    inheriting a different printer's number, e.g. max_z_velocity). This gate
+    guards a HOSTING resource budget instead, which does not exist for a
+    local run at all, so there is nothing conservative to default to -- an
+    artificial cap here would just be a made-up restriction on a machine it
+    was never measured against.
+
+    tools/orca_render_feasibility/'s feasibility probe measured a real
+    hybrid slice (star shape, 3 overlapping Zone Overrides, the production
+    points_per_turn=240, 37680 total wall points) at 65.1s wall-clock inside
+    a container capped at Render's free-tier 512 MB RAM / 0.1 vCPU -- most
+    of that time is pure-Python wall math (zone_weight/zone_twist_integral
+    per point), not the Orca subprocess, so it scales with point count
+    however tall/dense the request is, independent of whether Orca itself
+    would fit. Render's own render.yaml sets TRIDENT_MAX_HYBRID_WALL_POINTS
+    for that specific deployment; nothing here hardcodes a number for it.
+    """
+    env = os.environ if env is None else env
+
+    def _positive_int(name):
+        raw = (env.get(name) or "").strip()
+        if not raw:
+            return None
+        try:
+            val = int(raw)
+        except ValueError:
+            val = -1
+        if val <= 0:
+            sys.stderr.write(
+                "WARNING: %s=%r is not a positive integer; ignoring it "
+                "(no limit applied).\n" % (name, raw))
+            return None
+        return val
+
+    return (
+        _positive_int("TRIDENT_MAX_HYBRID_WALL_POINTS"),
+        _positive_int("TRIDENT_MAX_HYBRID_MESH_TRIANGLES"),
+    )
+
+
 def _parse_overhang_fan(body):
     """Fan min/max bounds (0..1 fractions) -- always concrete, never None. The
     fan runs between these two speeds, selected by wall lean (see
@@ -1509,10 +1564,12 @@ def generate_design(body):
         orca_path = orca_binary_path()
         if orca_path is None:
             raise ValueError(
-                "Hybrid planar base requires a local OrcaSlicer install. "
+                "Hybrid planar base requires a working OrcaSlicer install. "
                 "Install it (https://github.com/OrcaSlicer/OrcaSlicer) and "
                 "put it on PATH, or set TRIDENT_ORCA_PATH to its full path. "
-                "Not available on a hosted deployment."
+                "If this is the public deployment, that means the server's "
+                "own OrcaSlicer install is missing or broken -- a deployment "
+                "problem, not something a client request can fix."
             )
 
     # Mesh-hybrid pre-flight: cache lookup and a conservative LOWER bound on
@@ -1550,6 +1607,44 @@ def generate_design(body):
                 "mm) exceeds Z max %.1f. Reduce height, scale the mesh "
                 "down, or choose a printer with more Z clearance."
                 % (_mesh_height_est, height, profile.z_max))
+
+    # Hosting-resource complexity gate (see _hybrid_complexity_limits' own
+    # docstring for why this is unlimited unless a specific deployment opts
+    # in). Estimated, not exact -- build_hybrid_print's own layer-snapping
+    # can differ by up to one layer -- and deliberately on the generous side
+    # (ceil, not round) so this can never reject a design the real build
+    # would have accepted; it only exists to reject requests the feasibility
+    # probe's measurements say would blow past a reasonable request budget.
+    if hybrid_params is not None or mesh_hybrid_params is not None:
+        _max_wall_points, _max_mesh_tris = _hybrid_complexity_limits()
+        if _max_wall_points is not None:
+            if hybrid_params is not None:
+                _n_base = max(2, round(hybrid_params["hybrid_base_height"] / layer_height))
+                _upper_h = max(0.0, height - _n_base * layer_height)
+            else:
+                _upper_h = max(0.0, height)  # mesh-hybrid: height IS the wall above the mesh
+            _n_upper_layers_est = math.ceil(_upper_h / layer_height) + 1
+            _wall_points_est = _n_upper_layers_est * _HYBRID_POINTS_PER_TURN
+            if _wall_points_est > _max_wall_points:
+                raise ValueError(
+                    "This hybrid wall would generate an estimated ~%d points "
+                    "(%d layers x %d points/turn), above this deployment's "
+                    "%d-point limit (TRIDENT_MAX_HYBRID_WALL_POINTS) -- the "
+                    "wall's own Python geometry math, not OrcaSlicer, is what "
+                    "scales with this and can take minutes on a resource-"
+                    "constrained host. Reduce height or run this generator "
+                    "locally instead, where there is no such limit."
+                    % (_wall_points_est, _n_upper_layers_est,
+                       _HYBRID_POINTS_PER_TURN, _max_wall_points))
+        if _max_mesh_tris is not None and mesh_hybrid_params is not None:
+            _n_tris = len(mesh_hybrid_entry["tris"])
+            if _n_tris > _max_mesh_tris:
+                raise ValueError(
+                    "This mesh has %d triangles, above this deployment's %d-"
+                    "triangle limit (TRIDENT_MAX_HYBRID_MESH_TRIANGLES) for "
+                    "the OrcaSlicer subprocess -- simplify/decimate the mesh, "
+                    "or run this generator locally instead, where there is no "
+                    "such limit." % (_n_tris, _max_mesh_tris))
 
     point_mask, point_protection, point_ffd, point_smooth, point_radial_push = (
         _parse_point_edit_specs(body))
@@ -1648,7 +1743,7 @@ def generate_design(body):
             writer,
             shape_fn=shape, radius=radius, height=height,
             transition_height=hybrid_params["hybrid_base_height"],
-            layer_height=layer_height, points_per_turn=240,
+            layer_height=layer_height, points_per_turn=_HYBRID_POINTS_PER_TURN,
             wall_count=hybrid_params["wall_count"],
             infill_density=hybrid_params["infill_density"],
             infill_pattern=hybrid_params["infill_pattern"],
@@ -1678,7 +1773,7 @@ def generate_design(body):
             writer,
             tris=mesh_hybrid_entry["tris"],
             scale=mesh_hybrid_params["scale"],
-            layer_height=layer_height, points_per_turn=240,
+            layer_height=layer_height, points_per_turn=_HYBRID_POINTS_PER_TURN,
             shape_fn=shape, radius=radius, height=height,
             blend_height=mesh_hybrid_params["blend_height"],
             seam_style=mesh_hybrid_params["seam_style"],

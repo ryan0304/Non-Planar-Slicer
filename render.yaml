@@ -4,7 +4,9 @@
 # Anyone with the URL can import a printer config and generate G-code. The
 # per-session printer store keeps one visitor's imported printers away from
 # another's, but that is isolation, not access control -- there is no login
-# and this blueprint does not add one.
+# and this blueprint does not add one. That now extends to hybrid planar-
+# base requests too (see below): any visitor can trigger a real OrcaSlicer
+# subprocess on the server, not just the parametric/non-planar generator.
 #
 # Read tools/../README before pointing anyone at the result: every ceiling
 # this project ships was measured on one Voron Trident, and G-code it emits
@@ -13,19 +15,24 @@
 services:
   - type: web
     name: non-planar-slicer
-    runtime: python
+    runtime: docker
     plan: free
     # Nearest Render region to Malaysia/SEA. Others: oregon, ohio, virginia,
     # frankfurt. Changing this after the first deploy recreates the service.
     region: singapore
 
-    # No build step: this project is standard library only, by design (see
-    # CLAUDE.md). The command is a no-op that records the interpreter version
-    # in the build log. Setting it explicitly also stops Render's Python
-    # runtime from trying to run `pip install -r requirements.txt`, which
-    # does not exist here.
-    buildCommand: "python --version"
-    startCommand: "python serve.py"
+    # Docker runtime (not the native `runtime: python` this blueprint used
+    # before) because hybrid planar-base mode needs a real OrcaSlicer CLI
+    # binary alongside the app -- Render's native Python runtime has no way
+    # to install one. See ./Dockerfile for what that actually bundles and
+    # why, and tools/orca_render_feasibility/ for the probe that checked
+    # this fits Render's free-tier 512 MB RAM / 0.1 vCPU caps BEFORE this
+    # file was changed to use them, rather than assuming it would.
+    #
+    # No buildCommand/startCommand: the Dockerfile's own CMD replaces
+    # startCommand, and there is no separate build step to name for a
+    # Docker service (the whole Dockerfile IS the build).
+    dockerfilePath: ./Dockerfile
 
     # Render pings this to decide the deploy succeeded. "/" would serve a
     # directory listing of the repo, which is a 200 but not evidence the app
@@ -40,11 +47,29 @@ services:
       - key: TRIDENT_BIND
         value: 0.0.0.0
 
-      # 3.10+ is required (PEP 604 `X | None` annotations). Pinned rather
-      # than floating so a Render default bump cannot change the interpreter
-      # under a project whose output is fed to a physical machine.
-      - key: PYTHON_VERSION
-        value: "3.11.9"
+      # Hosting-resource ceilings for hybrid planar-base requests (see
+      # serve.py's _hybrid_complexity_limits docstring for the full
+      # reasoning: this is a request-budget concern, not a machine-safety
+      # one, so it is opt-in per deployment rather than a code default).
+      #
+      # FIRST-PASS NUMBERS, not derived from a formula -- tools/
+      # orca_render_feasibility/'s probe measured exactly ONE real hybrid
+      # request (a star with 3 overlapping Zone Overrides, the production
+      # points_per_turn=240, 37680 total wall points) completing in 65.1s
+      # under these same caps; these ceilings give roughly 1.6x/3x headroom
+      # above that one measured point and above the one real mesh tested
+      # (2728 triangles), not a validated worst case. Watch Render's actual
+      # request logs after this deploy and tighten (or loosen) both once
+      # real traffic gives more than one data point each.
+      - key: TRIDENT_MAX_HYBRID_WALL_POINTS
+        value: "60000"
+      - key: TRIDENT_MAX_HYBRID_MESH_TRIANGLES
+        value: "8000"
 
     # PORT is injected by Render at runtime and read by serve.py's
     # _bind_config(); it is deliberately NOT set here.
+    #
+    # PYTHON_VERSION (the previous native-runtime pin, 3.11.9) has no
+    # equivalent on a Docker service -- ./Dockerfile's own FROM line and
+    # Ubuntu 24.04's bundled python3 (3.12) are what fixes the interpreter
+    # now, so there is nothing for Render itself to pin here.

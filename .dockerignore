@@ -1,0 +1,6 @@
+.git
+__pycache__
+*.pyc
+scratchpad
+00000.log
+tools/orca_render_feasibility
