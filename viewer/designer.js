@@ -385,6 +385,17 @@
       // Only fires for old saves that predate sil_mode -- once it's saved with
       // a sil_mode value, this branch never re-triggers.
       if(saved.sil3d === true && !saved.sil_mode) design.sil_mode = 'asym';
+      // Repair a design.shape corrupted by a past bug: STL import used to
+      // force design.shape = 'mesh', a value <select id="d-shape"> has no
+      // matching <option> for (only circle/star/square exist -- see
+      // uploadSTL()'s own comment on why that line was removed). A session
+      // saved while that bug was live would otherwise resume permanently
+      // broken -- blank Shape dropdown, star-only rows hidden, and the next
+      // Generate rejected server-side -- even after the fix ships, since
+      // fixing the upload handler does nothing for state already on disk.
+      if(design.shape !== 'circle' && design.shape !== 'star' && design.shape !== 'square'){
+        design.shape = DEFAULT_DESIGN.shape;
+      }
       for(var ck in saved){
         if(!saved.hasOwnProperty(ck) || RESTORE_IGNORED_KEYS[ck]) continue;
         if(JSON.stringify(saved[ck]) !== JSON.stringify(DEFAULT_DESIGN[ck])){
