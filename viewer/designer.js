@@ -354,6 +354,55 @@
   // tell "user changed this" apart from "this just happens to have a value".
   var DEFAULT_DESIGN = JSON.parse(JSON.stringify(design));
 
+  // Every design field backed by a real <select> whose options are a fixed
+  // enum, paired with its actual valid values (mirrors each <select>'s own
+  // <option>s in viewer/index.html -- keep these two in sync if either
+  // changes). Used to repair ANY of these fields after merging in data this
+  // app did not just generate itself: a resumed localStorage session below,
+  // or a loaded .trident/.json file (see #load-design-file's handler, much
+  // later in this file) -- a plain `design[k] = src[k]` merge has no way to
+  // know a select-backed field's real domain.
+  //
+  // This generalizes one concrete, proven bug: STL import once forced
+  // design.shape = 'mesh', a value <select id="d-shape"> has no <option>
+  // for. Assigning a value with no matching option silently blanks the
+  // select rather than erroring, which cascaded three ways -- the dropdown
+  // looked empty, refreshShapeRows() (which reads the select's own .value,
+  // not design.shape) got fooled into hiding star-only rows, and the next
+  // Generate sent shape:"mesh" straight to serve.py's _make_shape(), which
+  // rejects anything but circle/star/square, breaking Generate outright.
+  // A SAVED FILE -- including one saved by this exact app while that bug
+  // was still live -- carries that same bad value right back in through
+  // this identical merge pattern, and the same failure mode applies to
+  // every field below, not just shape. Fixing the mechanism once here
+  // closes the whole class instead of chasing each field's own bug report.
+  var SELECT_BACKED_FIELDS = {
+    shape: ['circle', 'star', 'square'],
+    base_style: ['spiral', 'concentric'],
+    hybrid_infill_pattern: ['grid', 'line', 'triangles', 'cubic', 'gyroid', 'honeycomb', 'concentric', 'rectilinear'],
+    mesh_base_seam_style: ['fillet', 'chamfer'],
+    mesh_base_infill_pattern: ['grid', 'line', 'triangles', 'cubic', 'gyroid', 'honeycomb', 'concentric', 'rectilinear'],
+    pattern: ['', 'loops', 'vwave', 'hwave', 'ripple', 'diamond', 'bubbles', 'pleats', 'hammered'],
+    nozzle: ['', '0.2', '0.4', '0.6', '0.8'],
+    loop_style: ['tiedspikes', 'chainmail', 'fineknit', 'opennet', 'ribs', 'zigzag', 'scallops', 'custom'],
+    loop_align: ['stagger', 'column', 'jitter'],
+    loop_mode: ['dip', 'spike'],
+    point_mask_channel: ['checker', 'stripes_v', 'stripes_h', 'rings', 'diamond', 'gradient_v', 'gradient_h', 'radial'],
+    mesh_base_seam_position: ['', 'aligned', 'nearest', 'back', 'random'],
+    mesh_base_wall_generator: ['', 'classic', 'arachne'],
+    mesh_base_wall_sequence: ['', 'inner wall/outer wall', 'outer wall/inner wall', 'inner-outer-inner wall'],
+    mesh_base_top_pattern: ['', 'monotonic', 'monotonicline', 'concentric', 'zig-zag', 'rectilinear', 'alignedrectilinear', 'hilbertcurve', 'archimedeanchords', 'octagramspiral'],
+    mesh_base_bottom_pattern: ['', 'monotonic', 'monotonicline', 'concentric', 'zig-zag', 'rectilinear', 'alignedrectilinear', 'hilbertcurve', 'archimedeanchords', 'octagramspiral'],
+    mesh_base_support_type: ['', 'normal(auto)', 'tree(auto)'],
+    mesh_base_brim_type: ['', 'no_brim', 'outer_only', 'inner_only', 'outer_and_inner', 'auto_brim']
+  };
+  function repairSelectBackedFields(){
+    for(var field in SELECT_BACKED_FIELDS){
+      if(!Object.prototype.hasOwnProperty.call(SELECT_BACKED_FIELDS, field)) continue;
+      if(SELECT_BACKED_FIELDS[field].indexOf(design[field]) === -1) design[field] = DEFAULT_DESIGN[field];
+    }
+  }
+
   // Load persisted state, if any (merge over defaults so new fields survive).
   //
   // `cachedDesign` records what was found so the session-restore prompt at the
@@ -385,17 +434,10 @@
       // Only fires for old saves that predate sil_mode -- once it's saved with
       // a sil_mode value, this branch never re-triggers.
       if(saved.sil3d === true && !saved.sil_mode) design.sil_mode = 'asym';
-      // Repair a design.shape corrupted by a past bug: STL import used to
-      // force design.shape = 'mesh', a value <select id="d-shape"> has no
-      // matching <option> for (only circle/star/square exist -- see
-      // uploadSTL()'s own comment on why that line was removed). A session
-      // saved while that bug was live would otherwise resume permanently
-      // broken -- blank Shape dropdown, star-only rows hidden, and the next
-      // Generate rejected server-side -- even after the fix ships, since
-      // fixing the upload handler does nothing for state already on disk.
-      if(design.shape !== 'circle' && design.shape !== 'star' && design.shape !== 'square'){
-        design.shape = DEFAULT_DESIGN.shape;
-      }
+      // See SELECT_BACKED_FIELDS' own comment above: repairs design.shape
+      // and every other select-backed field a session saved before this fix
+      // (or while the original shape='mesh' bug was live) might still carry.
+      repairSelectBackedFields();
       for(var ck in saved){
         if(!saved.hasOwnProperty(ck) || RESTORE_IGNORED_KEYS[ck]) continue;
         if(JSON.stringify(saved[ck]) !== JSON.stringify(DEFAULT_DESIGN[ck])){
@@ -7102,6 +7144,14 @@
           histLabelOnce = 'imported ' + fname + ' (no edit history in file)';
         }
         for(var k in src){ if(design.hasOwnProperty(k)) design[k] = src[k]; }
+        // See SELECT_BACKED_FIELDS' own comment near the top of this file --
+        // a loaded .trident/.json file is exactly as untrusted as a resumed
+        // localStorage session for this purpose (more so: it can be edited
+        // by hand, or come from a future app version with a different
+        // shape/pattern/style vocabulary), and applyDesignToUI() below
+        // pushes every one of these fields straight into its <select> with
+        // no validation of its own.
+        repairSelectBackedFields();
         applyDesignToUI();
         if(isEnv && loaded.history && loaded.history.length && typeof openHistoryModal === 'function'){
           openHistoryModal();
