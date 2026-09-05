@@ -596,16 +596,42 @@ function parseGcode(text) {
   const cx = BED_X / 2, cy = BED_Y / 2;
   let x = 0, y = 0, z = 0, has = false, curF = 0;
   let minz = Infinity, maxz = -Infinity, minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
-  // Bounding box of ONLY the extrude moves at the hybrid seam height, kept
-  // separate from minx/maxx/miny/maxy above (the whole print's bbox, used for
-  // the "Footprint" stat). A wall that flares wider than the planar base
-  // below it -- a star wall on a round mesh base, e.g. -- used to size the
-  // seam marker plane (see buildGeometry below) off the WHOLE print's bbox,
-  // so the marker ballooned out to the wall's widest point instead of the
-  // actual seam ring it is meant to mark. Populated only once meta.hybridSeamZ
-  // is known, which the header comment guarantees is set before any move
-  // lines are reached.
+  // Bounding box of ONLY the seam ring's own extrude moves, kept separate
+  // from minx/maxx/miny/maxy above (the whole print's bbox, used for the
+  // "Footprint" stat). A wall that flares wider than the planar base below
+  // it -- a star wall on a round mesh base, e.g. -- used to size the seam
+  // marker plane (see buildGeometry below) off the WHOLE print's bbox, so
+  // the marker ballooned out to the wall's widest point instead of the
+  // actual seam ring it is meant to mark.
+  //
+  // NOT captured by Z-proximity to hybridSeamZ (an earlier version of this
+  // fix tried exactly that, `abs(nz - hybridSeamZ) <= layerHeight/2`, and
+  // shipped briefly): this app's non-planar walls apply an ANGLE-dependent
+  // Z-wave (z_waves/z_amp), so within a single revolution Z can swing well
+  // outside a quarter-layer epsilon depending on where around the ring you
+  // are. A Z-window catches only the handful of points where the wave
+  // happens to cross back near the nominal seam height -- a small, lopsided
+  // arc, not the full ring -- which is exactly what made a real design's
+  // marker come out half-sized and badly off-centre (64 x 32mm, y=[128,160]
+  // instead of a full ~64x64mm circle) despite the fix's own math being
+  // correct for a flat (non-wavy) first ring.
+  //
+  // Captured by COUNT instead: once Z first reaches the seam height, every
+  // extrude move is part of the wall, and HYBRID_POINTS_PER_TURN consecutive
+  // ones are exactly one full revolution -- sampling every angle around the
+  // ring regardless of how Z wanders within it. Capped at exactly one turn
+  // (not "everything from here on") so this still cannot re-widen into the
+  // original whole-print bug as the wall opens further into its parametric
+  // shape a few turns later.
   let seamMinX = Infinity, seamMaxX = -Infinity, seamMinY = Infinity, seamMaxY = -Infinity;
+  let seamCaptureActive = false, seamCaptureCount = 0;
+  // Mirrors serve.py's _HYBRID_POINTS_PER_TURN -- both hybrid endpoints
+  // hardcode 240 there (see that constant's own comment); duplicated here,
+  // not shared, because this project is deliberately a no-build-step vanilla
+  // JS frontend + stdlib-only Python backend with no mechanism to share a
+  // literal between them (see CLAUDE.md). If that server-side value ever
+  // changes, this needs to change with it.
+  const HYBRID_POINTS_PER_TURN = 240;
   let fil = 0, extrudeCount = 0, travelCount = 0, maxZrate = 0, relE = false;
   let curFan = 0, minFan = Infinity, maxFan = -Infinity, fanEverOn = false;   // sticky M106/M107 state (0..1)
   const ext = [], extCol = [], trv = [];          // world-space vertex arrays
@@ -692,14 +718,15 @@ function parseGcode(text) {
         if (relE) fil += e;
         minz = Math.min(minz, z, nz); maxz = Math.max(maxz, z, nz);
         minx = Math.min(minx, nx); maxx = Math.max(maxx, nx); miny = Math.min(miny, ny); maxy = Math.max(maxy, ny);
-        // See seamMinX's own comment above: same accumulation, restricted to
-        // moves at the seam height so the marker plane can be sized to the
-        // seam ring itself rather than the whole print's bbox.
-        if (meta.hybridSeamZ != null) {
-          const seamEps = meta.layerHeight ? meta.layerHeight * 0.5 : 0.05;
-          if (Math.abs(nz - meta.hybridSeamZ) <= seamEps) {
+        // See seamMinX's own comment above: capture exactly one full
+        // revolution's worth of points once the wall begins, by count, not
+        // by Z-proximity.
+        if (meta.hybridSeamZ != null && seamCaptureCount < HYBRID_POINTS_PER_TURN) {
+          if (!seamCaptureActive && nz >= meta.hybridSeamZ) seamCaptureActive = true;
+          if (seamCaptureActive) {
             seamMinX = Math.min(seamMinX, nx); seamMaxX = Math.max(seamMaxX, nx);
             seamMinY = Math.min(seamMinY, ny); seamMaxY = Math.max(seamMaxY, ny);
+            seamCaptureCount++;
           }
         }
       } else {
