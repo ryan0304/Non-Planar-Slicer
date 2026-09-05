@@ -428,6 +428,47 @@ One more wall texture, alongside the seven radius-displacement patterns
 Configured and previewed in the app (`serve.py` + the designer's Texture
 step); like the cage, it doesn't yet have a `generate.py` CLI flag.
 
+## Hybrid planar base (app only)
+
+A vase-mode wall is a single continuous bead with no real walls or infill,
+so it has no rigid, load-bearing base of its own. Hybrid mode gives it one:
+a genuinely solid planar base — real walls + infill, **sliced by a local
+OrcaSlicer install invoked as an external subprocess** (this app never
+links or embeds Orca's own AGPL-3.0 source, and never falls back to
+anything else if that subprocess fails) — from the bed up to a chosen
+height, then the usual continuous non-planar wall picks up and continues
+above it.
+
+Two ways to get a base, both on the Model step:
+
+- **Parametric base** — set **Hybrid base height (mm)** above `0` (the
+  default, off) and the app extrudes the current shape's own silhouette
+  (circle / star / square) into a solid disk up to that height. **Hybrid
+  wall count**, **Hybrid infill density**, and **Hybrid infill pattern**
+  (Grid, Line, Triangles, Cubic, Gyroid, Honeycomb, Concentric,
+  Rectilinear) control it the way OrcaSlicer's own Strength settings would.
+- **Your own mesh as the base** — import an STL, then under **Use this STL
+  as** pick **Planar base** instead of the default **Texture the whole
+  model**. The mesh prints as its true solid self — holes, bosses and
+  internal features all preserved, no silhouette-extrusion round-trip —
+  and the non-planar wall picks up from the mesh's own real top contour.
+  **Height** here means only the wall *above* the mesh, not the whole
+  object: a 20 mm mount with Height 200 prints a 220 mm object total.
+  **Seam blend** eases that hand-off instead of an abrupt one: **Enable
+  seam blend** (on by default) with **Blend height (mm)** (`0` = off
+  regardless of the toggle) spans the transition, **Seam style** picks
+  Fillet (a smooth round-over) or Chamfer (a straight beveled facet), and
+  **Seam intensity (%)** is how much of that Blend height the corner
+  actually uses. In the G-code viewer, a translucent blue plane marks the
+  exact handoff height — hover it for a tooltip identifying what it is.
+
+**This needs a real, working OrcaSlicer install to reach.** The Model step
+disables these controls up front, with an explanation, whenever
+`/api/orca_status` reports none is reachable, rather than letting you
+configure a hybrid print and only discover it's unavailable after clicking
+Generate. See [Running it for other people](#running-it-for-other-people)
+for what reaching that on a *hosted* deployment specifically takes.
+
 ## Multi-printer profiles
 
 `GET /api/printers` lists every configured `PrinterProfile` (bed size, Z max,
@@ -782,6 +823,32 @@ that changes before you do it:
   is unverified by anyone. If you hand the link to strangers, tell them to
   read it.
 
+**Hosting [Hybrid planar base](#hybrid-planar-base-app-only) too** needs a
+real OrcaSlicer install reachable *on the server*, not just your own
+machine — `render.yaml` now targets Render's Docker runtime and bundles a
+matching OrcaSlicer build for exactly that reason, rather than the plain
+Python runtime the blueprint used before hybrid mode existed. Two things
+worth knowing if you're setting this up yourself, not just using someone
+else's hosted copy:
+
+- **An already-running Render service can't be converted to Docker in
+  place** — `runtime: docker` in `render.yaml` only takes effect for a
+  *new* service created with Docker selected from the start. See
+  [`ORCA_RENDER_DEPLOYMENT.md`](ORCA_RENDER_DEPLOYMENT.md) for the full
+  story of standing this up for real, including a Cloudflare-proxied
+  custom-domain cutover that briefly took the live site down and a Render
+  dashboard quirk (the free instance type isn't pre-selected) worth not
+  missing.
+- **Two env vars gate hybrid requests on a resource-constrained host**:
+  `TRIDENT_MAX_HYBRID_WALL_POINTS` and `TRIDENT_MAX_HYBRID_MESH_TRIANGLES`
+  reject an oversized request before it ever reaches Orca or the wall
+  generator, with a clear error instead of a slow timeout. Unset (the
+  default everywhere except Render's own blueprint) means no ceiling at
+  all — this guards a *hosting* resource budget, not a machine safety
+  limit, so there is nothing to default to on a local run with no request
+  timeout. See that same file for the real numbers a feasibility probe
+  measured before these were chosen.
+
 To run it locally instead — the mode this is actually designed for:
 
 ```bash
@@ -907,9 +974,14 @@ read either one.
 ```
 generate.py                     CLI entry point
 serve.py                        static file server + JSON API for the browser app
+Dockerfile                      production deployment image (bundles OrcaSlicer for hosted hybrid mode)
+.dockerignore                   keeps dev-only files out of that image
+render.yaml                     Render blueprint (Docker runtime + the two hybrid resource-gate env vars)
+ORCA_RENDER_DEPLOYMENT.md       full write-up of standing up hosted hybrid mode -- read before touching either file above
 tools/make_sample_meshes.py     writes sample STLs into examples/
 tools/check_regression.py       byte-compares generated output against regression_ref/
 tools/test_printer_import.py    tests the custom-printer parser/validator (incl. a hostile config)
+tools/orca_render_feasibility/  throwaway probe: does OrcaSlicer fit a host's exact resource caps? (see ORCA_RENDER_DEPLOYMENT.md)
 calibrate.py                    calibration print suite (live-Z / flow / z-amp)
 presets.py                      curated, machine-safe presets
 trident_gcode/
@@ -921,7 +993,11 @@ trident_gcode/
   mesh.py                       pure-Python STL load + horizontal slicing
   surface.py                    non-planar height fields (+ STL top sampling)
   profile_stack.py              unified contour-stack format (parametric shapes + sliced meshes)
-  orca.py                       OrcaSlicer filament profile import
+  orca.py                       OrcaSlicer filament profile import + CLI binary discovery (orca_binary_path)
+  orca_slice.py                 hybrid mode's Orca CLI boundary: builds machine/process/filament JSON, runs the subprocess
+  orca_gcode_parser.py          fail-closed parser for Orca's own (untrusted) G-code output
+  orca_replay.py                replays parsed Orca moves through GcodeWriter -- never trusts Orca's raw E/F
+  hybrid.py                     orchestrates hybrid planar base + non-planar wall (parametric and mesh-base variants)
   printer_import.py             parse a Klipper/Orca/Cura/Prusa printer config (no validation -- raw only)
   printer_validate.py           the safety core: limits, clamps, G-code sanitation
   printer_store.py              custom printer profiles on disk (custom_printers/)
@@ -935,7 +1011,7 @@ trident_gcode/
     base_fill.py                solid base disk + brim as one continuous bead
     loop_fabric.py              knitted/chainmail wall texture generator
 viewer/index.html               3D viewer + browser design app shell
-viewer/viewer.js                Three.js scene, playback, telemetry
+viewer/viewer.js                Three.js scene, playback, telemetry (incl. the hybrid seam marker)
 viewer/designer.js              design wizard, curve editors, cage editor, undo/redo/persistence
 viewer/preview_math.js          live draft geometry (wall + base disks), mirrors the Python generators
 viewer/param_help.js            per-control help text shown in the design panel
@@ -958,4 +1034,9 @@ regression_ref/                 reference G-code checked by tools/check_regressi
       texture, multi-printer profiles, mesh upload, undo/redo — app-only so far
 - [x] Variable line width along the path
 - [x] Custom printer import (Klipper cfg / Orca / Prusa) with a validating parser
+- [x] Hybrid planar base — real OrcaSlicer-sliced solid base (parametric or
+      your own imported mesh) + the existing non-planar wall on top,
+      app-only; hosted deployments can reach it too via a Docker-based
+      Render setup that bundles OrcaSlicer (see
+      [`ORCA_RENDER_DEPLOYMENT.md`](ORCA_RENDER_DEPLOYMENT.md))
 - [ ] Feasibility study + prototype for true dynamic tri-Z bed tilt
