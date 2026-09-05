@@ -248,40 +248,37 @@ against genuinely extreme requests either way.
     the actual estimated point count; a request under that same cap still
     succeeded normally in the same run.
 
-## 8. What remains genuinely unverified
+## 8. What remained unverified before deploying (and how each was resolved)
 
 Documented explicitly rather than glossed over, because CLAUDE.md's own
-ethos is that unverified claims get labeled as such:
+ethos is that unverified claims get labeled as such. All four were open
+questions at commit time; Section 11 records how each was actually settled.
 
-- **Render's actual HTTP/proxy request timeout is not documented anywhere
+- **Render's actual HTTP/proxy request timeout was not documented anywhere
   found.** The `star_zones` case (65.1s) plus a cold start (30-60s after 15
   min idle) could plausibly stack past the ~100s other platforms in this
-  class commonly use -- but that number was never confirmed to apply to
-  Render specifically. This can only really be resolved by testing the live
-  deployment, not by more local investigation.
+  class commonly use. RESOLVED (Section 11): the real production number for
+  that same case was 30.0s, well clear of that ballpark.
 - All container-level testing ran on local Docker Desktop against Render's
-  *documented* specs, not Render's actual production infrastructure --
-  normal, unmeasured variance (network latency, shared-host noise) is not
-  accounted for.
+  *documented* specs, not Render's actual production infrastructure.
+  RESOLVED: real production numbers were faster than the local simulation,
+  not slower -- see Section 11.
 - Every scenario ran alone, once -- no concurrent-request behavior was
-  tested, and free tier is a single instance.
+  tested, and free tier is a single instance. STILL UNVERIFIED -- nothing
+  in Section 11 tested concurrency.
 - The per-scenario memory attribution caveat from Section 5 (bounded above
   by ~164 MB combined, but individual scenario numbers are approximate).
+  Unaffected by Section 11 -- still the best available bound.
 
-## 9. Decision and rollback
+## 9. Decision made before deploying
 
 Decided: deploy as-is (`TRIDENT_MAX_HYBRID_WALL_POINTS=60000`, not tightened
 further), and treat the first real live requests as the actual missing test
-for Section 8's open question -- plan is to hit the live URL with a light
-request first, then a star_zones-shaped heavy one, both warm and ideally
-right after a cold spin-up, and watch real wall-clock time.
+for Section 8's open questions, on the reasoning that typical real hybrid
+usage (e.g. the `Lamp Mount Test.stl` case: a short mechanical base, modest
+wall on top) sits nowhere near the tested ceiling anyway.
 
-If it goes badly: this is a one-commit rollback, not a rebuild. Reverting
-`render.yaml` and removing/ignoring `Dockerfile` restores the previous
-native-Python-runtime deployment exactly as it was before this effort
-started (git history has the prior working `render.yaml` verbatim).
-
-## 10. File map
+## 10. Pre-deploy file map
 
 | File | Role |
 |---|---|
@@ -291,3 +288,155 @@ started (git history has the prior working `render.yaml` verbatim).
 | `serve.py` | `_hybrid_complexity_limits()` gate + reworded error text |
 | `viewer/index.html` | reworded static hint text (logic unchanged) |
 | `tools/orca_render_feasibility/` | throwaway feasibility probe, kept for whenever Orca or Render's caps change and this needs re-checking |
+
+## 11. The actual deployment -- what happened, not what was planned
+
+Pushing the `render.yaml`/`Dockerfile` commit to `main` did **not** convert
+the existing Render service to Docker. Confirmed on the dashboard: the
+service still showed the `Python 3` badge and its Build Command was still
+`python --version` (the old native-runtime command), and the deploy that
+did run only took 50.4s -- far too fast to have pulled Ubuntu, installed
+~150 MB of apt packages, and downloaded the OrcaSlicer AppImage.
+
+**Root cause**: Render does not let an already-provisioned service's
+runtime type (native vs. Docker) change via `render.yaml` alone. Checked
+every Settings tab (General/Build/Deploy/Custom Domains/Networking/Edge
+Caching/Notifications/Health Checks/Maintenance Mode/Delete or suspend) --
+there is no "change runtime" control anywhere. This is a genuine Render
+platform limitation, not a mistake in the blueprint.
+
+### 11.1 The fix: a second, new service
+
+The only path is a **new** Web Service created with Docker selected from
+the start, pointed at the same GitHub repo. Created via Render's normal
+"New -> Web Service" flow (not "New -> Blueprint", to avoid any ambiguity
+about how Render would reconcile a `render.yaml` whose service `name:`
+already matches an existing service):
+
+- Repo: `ryan0304/Non-Planar-Slicer`, branch `main` -- Render auto-detected
+  the Dockerfile ("It looks like you're using Docker, so we've autofilled
+  some fields accordingly") and correctly pre-filled Language=Docker,
+  Region=Singapore.
+- **Instance type defaulted to the $7/month paid plan**, not free -- this
+  is NOT pre-selected as free and is easy to miss. Had to be explicitly
+  changed to the $0/month option.
+- The three env vars from `render.yaml` (`TRIDENT_BIND`,
+  `TRIDENT_MAX_HYBRID_WALL_POINTS`, `TRIDENT_MAX_HYBRID_MESH_TRIANGLES`)
+  had to be added by hand -- a plain "New Web Service" does not read
+  `render.yaml`'s `envVars` section.
+- Named `Non-Planar-Slicer-Docker` (service ID `srv-dadsmiou01pc73c5esi0`),
+  since the name `Non-Planar-Slicer` was already taken by the old service.
+
+Real Docker build this time (visibly "Building" for 59s+ in the dashboard,
+not the suspicious 50.4s from before). Once live, its own
+`https://non-planar-slicer-docker.onrender.com/api/orca_status` returned
+`{"available": true, "path": "/opt/orcaslicer/AppRun"}` -- confirmed on the
+first try, matching every finding from the local feasibility probe.
+
+### 11.2 Real production numbers (not simulated) -- Section 8's timeout question, answered
+
+Sent directly to the new service's own onrender.com URL, before touching
+the live domain, so the old service stayed untouched and serving in case
+anything went wrong:
+
+| Request | Result | Time |
+|---|---|---|
+| Light (10mm circle hybrid) | 200 OK | 12.6s |
+| Heavy (star + 3 zone overrides, same shape as the feasibility probe) | 200 OK | **30.0s** |
+
+30.0s in real production is *faster* than the 65.1s the local Docker
+Desktop simulation predicted for the identical case -- Render's real
+infrastructure outperformed the local stand-in, for whatever reason
+(better single-core turbo, less virtualization overhead, plain variance).
+This resolved Section 8's biggest open question well within a comfortable
+margin of the ~100s ballpark other platforms use, without ever learning
+Render's actual documented number (still not found).
+
+**A separate, unrelated bug found along the way**: the first heavy-request
+attempt used serve.py's *default* star shape (`star_points=5,
+star_depth=0.35`, since the test request omitted those fields) and got a
+400 from `hybrid.py`'s placement-sanity check: *"OrcaSlicer placed the base
+off-target (bounding-box center 119.8,117.5 vs intended 117.5,117.5)"*. The
+6-point star used throughout the feasibility probe never hit this. Not
+investigated further (out of scope for this deployment effort) -- plausibly
+related to a 5-point star's bounding box not sharing the shape's own
+rotational symmetry, but that is a guess, not a diagnosis. Worth a look
+separately; not a resource or Render-specific issue.
+
+### 11.3 The domain cutover: harder than expected, briefly caused a real outage
+
+Attempting to add `trident.mmucybertron.com` to the new service while it
+was still attached to the old one failed outright: *"This domain is
+already in use on Non-Planar-Slicer. Please delete it from that service and
+try again."* Render enforces one service per domain, with no atomic
+handoff.
+
+Consequence: removing the domain from the old service to free it up
+**immediately took the live site down** -- confirmed directly
+(`curl https://trident.mmucybertron.com/api/orca_status` started returning
+Cloudflare's own error page rather than JSON).
+
+That surfaced a fact not previously known going into this: **the domain is
+proxied through Cloudflare**, not pointed directly at Render. The error was
+Cloudflare's own **Error 1000, "DNS points to prohibited IP"** -- a
+Cloudflare-side rejection, not a Render error.
+
+Fix turned out simpler than feared: adding the domain to the new service in
+Render **verified immediately** (green checkmark, before any DNS change),
+and once Render finished issuing a fresh certificate for it, the live site
+recovered on its own -- **no Cloudflare DNS/CNAME record needed to be
+touched at all**. This means Cloudflare's proxy connects to Render via a
+stable edge, and Render internally routes each request by matching its Host
+header against whichever service currently has that domain verified,
+independent of the literal `*.onrender.com` CNAME target Render's own "View
+DNS details" dialog displays. (This is inferred from observed behavior, not
+confirmed from Render/Cloudflare documentation -- flagged as a guess, not a
+fact, per the same labeling discipline as everything else in this file.)
+
+**Total outage window**: on the order of a few minutes -- from removing the
+domain from the old service to the new service's certificate finishing
+issuance and traffic resuming.
+
+Confirmed recovered by direct check: `Server: cloudflare`,
+`x-render-origin-server: SimpleHTTP/0.6 Python/3.12.3` (proving the new
+Docker service, whose base image ships Python 3.12, was now the origin --
+the old native-runtime service pinned 3.11.9), `/api/orca_status`
+`available: true`. Followed by a full validation on the live domain itself:
+viewer page 200, a real hybrid `/api/generate` request 200 with `M83`
+confirmed present, 17.0s.
+
+### 11.4 Old service: suspended, not deleted
+
+`Non-Planar-Slicer` (the original native-Python service) was suspended
+(Settings -> Delete or suspend -> Suspend Web Service), not deleted --
+kept as an instant fallback: if the new Docker service ever needs to be
+rolled back, resuming the old one and re-adding the domain to it is a much
+faster recovery than recreating a service from scratch. It currently costs
+nothing while suspended and holds no traffic.
+
+## 12. Current state (post-deployment)
+
+| Service | Render service ID | Runtime | Status | Serves the domain? |
+|---|---|---|---|---|
+| `Non-Planar-Slicer-Docker` | `srv-dadsmiou01pc73c5esi0` | Docker | Live | Yes -- `trident.mmucybertron.com` |
+| `Non-Planar-Slicer` | `srv-d9njnpqjnfac73b7rg8g` | Python 3 (native) | Suspended | No (fallback only) |
+
+`render.yaml` in the repo now describes the *intended* configuration for
+`Non-Planar-Slicer-Docker` (region, plan, env vars) but is **not** wired to
+it via Render's Blueprint sync -- it was configured by hand through the
+dashboard, matching `render.yaml` field-for-field, for the reasons in
+Section 11.1. If `render.yaml` is edited again later, remember it will not
+auto-apply to `Non-Planar-Slicer-Docker` either, for the same platform
+reason described in Section 11.
+
+### Rollback, if ever needed
+
+1. Render dashboard -> `Non-Planar-Slicer` -> Settings -> Delete or suspend
+   -> Resume Web Service.
+2. Remove `trident.mmucybertron.com` from `Non-Planar-Slicer-Docker`'s
+   Custom Domains, then add it to `Non-Planar-Slicer`'s. Expect the same
+   brief outage pattern as Section 11.3 (Render's one-domain-per-service
+   rule applies either direction).
+3. `git revert` is optional/cosmetic at that point -- the two live services
+   are the actual source of truth for what's deployed, not `render.yaml`,
+   given Section 11's finding that it does not drive an existing service.
