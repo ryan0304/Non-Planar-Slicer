@@ -51,9 +51,15 @@ class GcodeWriter:
     retraction_speed: float = 60.0      # mm/s  (fast retract)
     unretract_speed: float = 40.0       # mm/s  (slow prime-back)
 
-    # Z-hop on retract (mm). Currently 0 — we have no mid-print travels, so this
-    # is a placeholder for future use.
-    z_hop: float = 0.0
+    # Wipe-on-retract: instead of a plain E-only retract, pull back
+    # `retract_before_wipe` (0..1) of retraction_length in place, then move
+    # `wipe_distance` mm opposite the last extrusion direction while pulling
+    # back the remainder -- reduces the ooze blob left at the exact spot
+    # extrusion stopped. wipe_distance <= 0 (the default) is a plain E-only
+    # retract, byte-identical to before this feature existed.
+    wipe_enabled: bool = False
+    wipe_distance: float = 0.0          # mm
+    retract_before_wipe: float = 1.0    # fraction 0..1
 
     # Pressure advance (klipper). None = don't emit SET_PRESSURE_ADVANCE.
     pressure_advance: float | None = None
@@ -69,6 +75,10 @@ class GcodeWriter:
     _width_clamp_events: int = 0
     _temp_clamp_events: int = 0
     _last_fan_frac: float | None = None
+    # Unit XY direction of the last EXTRUDING move, for the wipe direction
+    # (wipe moves opposite the bead just laid). None until the first
+    # extruding move with nonzero XY length has happened.
+    _last_extrude_dir: tuple[float, float] | None = None
     _moves: list = field(default_factory=list)   # (x,y,z,extruding,speed_mm_s) per move
     _bounds: list[float] = field(
         default_factory=lambda: [1e9, 1e9, 1e9, -1e9, -1e9, -1e9]
@@ -196,7 +206,40 @@ class GcodeWriter:
     def retract(self, mm: float | None = None, speed: float | None = None) -> None:
         mm = self.retraction_length if mm is None else mm
         speed = self.retraction_speed if speed is None else speed
+        if (self.wipe_enabled and self.wipe_distance > 0.0
+                and self._has_position and self._last_extrude_dir is not None):
+            self._wipe_retract(mm, speed)
+            return
         self._emit(f"G1 E-{mm:.4f} F{speed * 60:.0f}")
+
+    def _wipe_retract(self, mm: float, speed: float) -> None:
+        """Split a retract into an in-place pull-back plus a short wipe move
+        opposite the last extrusion direction, so the ooze blob left at the
+        exact spot extrusion stopped gets dragged into the wipe line instead
+        of sitting on the part. ``retract_before_wipe`` (0..1) is retracted
+        in place first; the remainder is retracted DURING the wipe move.
+
+        Routed through ``_move()`` -- the wipe move is the one new place a
+        "retract" changes XY, and it must go through the same bounds/non-
+        finite checks as every other move rather than a second, unchecked
+        path. ``_move()`` also folds ``e`` into ``_total_e`` (its normal job
+        for a real extrusion), which a retract's negative delta must NOT
+        do -- no other retract/unretract call counts toward filament used,
+        so this one is corrected back immediately after, keeping the wipe
+        retract exactly as filament-neutral in the report as a plain one.
+        """
+        before_frac = min(max(self.retract_before_wipe, 0.0), 1.0)
+        before_mm = mm * before_frac
+        remain_mm = mm - before_mm
+        if before_mm > 0.0:
+            self._emit(f"G1 E-{before_mm:.4f} F{speed * 60:.0f}")
+        dx, dy = self._last_extrude_dir
+        wx = self._x - dx * self.wipe_distance
+        wy = self._y - dy * self.wipe_distance
+        e = -remain_mm if remain_mm > 1e-9 else None
+        total_e_before = self._total_e
+        self._move(wx, wy, self._z, e=e, speed=speed, comment="wipe")
+        self._total_e = total_e_before
 
     def unretract(self, mm: float | None = None, speed: float | None = None) -> None:
         mm = self.retraction_length if mm is None else mm
@@ -248,6 +291,12 @@ class GcodeWriter:
             dist = (dx * dx + dy * dy + dz * dz) ** 0.5
             if dist > 0.0:
                 self._max_z_rate = max(self._max_z_rate, speed * abs(dz) / dist)
+                # Direction of the last EXTRUDING move (positive flow only --
+                # a retract's own negative e has no XY component anyway), for
+                # _wipe_retract()'s wipe direction (opposite the bead just laid).
+                xy_dist = math.hypot(dx, dy)
+                if e > 0.0 and xy_dist > 1e-9:
+                    self._last_extrude_dir = (dx / xy_dist, dy / xy_dist)
         f = speed * 60.0  # mm/s -> mm/min
         parts = ["G1", f"X{x:.4f}", f"Y{y:.4f}", f"Z{z:.4f}"]
         if e is not None:

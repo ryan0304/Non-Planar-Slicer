@@ -279,6 +279,44 @@ window.PARAM_HELP = {
     param: "bed_temp", def: "auto (filament bed temperature)"
   },
 
+  // ---- Filament settings modal: Retraction ----------------------------------
+  "d-retract-length": {
+    desc: "How far the filament retracts before a travel move. Leave blank to use the selected filament's default. 0 is a valid override (disables retraction).",
+    param: "retraction_length", def: "auto (filament default)"
+  },
+  "d-zhop": {
+    desc: "How high the nozzle lifts above the print before a travel move -- the initial approach, any skirt, and the seam between a hybrid print's planar base and its non-planar wall all use this. 0 disables the lift.",
+    param: "travel_clearance", def: "5 mm"
+  },
+  "d-hybrid-fan": {
+    desc: "Independent part-cooling fan speed for the solid planar base, separate from the non-planar wall's own Fan min/Fan max. Blank = the base follows the wall's own Fan off/Fan min setting instead.",
+    param: "planar_fan_speed (sent as a 0-1 fraction)", def: "auto (same as the wall's own cold-start setting)"
+  },
+  "d-zhop-type": {
+    desc: "Shape of that lift-and-travel. Only takes effect at the hybrid/mesh-hybrid seam (the one travel guaranteed to already have a real toolhead position to shape a lift from). Auto: today's default, a diagonal rise-and-approach then a straight drop. Normal: straight up in place, across, straight down. Slope: one smooth ramp instead of a sharp corner. Spiral: a small in-place helical rise instead of an instant vertical jump.",
+    param: "z_hop_type", def: "Auto"
+  },
+  "d-retract-speed": {
+    desc: "How fast the filament pulls back on a retract.",
+    param: "retraction_speed", def: "60 mm/s"
+  },
+  "d-unretract-speed": {
+    desc: "How fast the filament primes back on the following unretract.",
+    param: "unretract_speed", def: "40 mm/s"
+  },
+  "d-wipe-enable": {
+    desc: "Instead of a plain in-place retract, move a short distance opposite the last extrusion direction while retracting -- drags the ooze blob left at the exact spot extrusion stopped into a thin wipe line instead of leaving it on the part.",
+    param: "wipe_enabled", def: "off"
+  },
+  "d-wipe-distance": {
+    desc: "How far the wipe move travels, opposite the last extrusion direction.",
+    param: "wipe_distance", def: "0 mm (off)"
+  },
+  "d-wipe-before": {
+    desc: "How much of the retraction happens in place before the wipe move starts; the rest retracts during the wipe move.",
+    param: "retract_before_wipe (sent as a 0-1 fraction)", def: "100%"
+  },
+
   // ---- Point Edit Modifiers modal -------------------------------------------
   "pe-mask-enable": {
     desc: "Exposes or protects points using a procedural channel -- gates every deformation modifier below (Point FFD / Smooth / Radial Push). By itself it moves nothing.",

@@ -261,6 +261,12 @@
                       <option value="rectilinear">Rectilinear</option>
                     </select>
                   </div>
+                  <div class="drow" id="row-hybrid-fan"><span>Planar base fan
+                      <button type="button" class="fm-info-btn"
+                        data-tip-html="Independent part-cooling fan speed for the solid planar base, separate from the non-planar wall's own Fan min/Fan max (Filament settings). Set here to run the base at a different speed than the wall -- OrcaSlicer's own fan curve for the base is never used (this app always replays the base through its own fan control). Blank = the base follows the wall's Fan off/Fan min setting instead, same as today.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>planar_fan_speed</code> (sent as a 0-1 fraction)<br>Default: auto (same as the wall's own cold-start setting)</span>">&#9432;</button>
+                    </span><input type="number" id="d-hybrid-fan" min="0" max="100" step="5" placeholder="auto"><span
+                      style="font-size:11px;margin-left:4px">%</span>
+                  </div>
                   <div class="hint tight-top" id="hybrid-orca-hint" style="display:none">Hybrid planar
                     base requires a working OrcaSlicer install on the server; this one does not have it
                     available right now.</div>
@@ -1363,6 +1369,90 @@ Range: [0%, 100%]">Seam intensity (%)</span>
             <input type="number" id="d-bedtemp" class="pm-field-input" min="0" step="5">
             <button type="button" id="fm-reset-bed" class="fm-reset-btn" title="Reset to filament default"
               style="display:none">&#8635;</button>
+          </span>
+        </div>
+
+        <!-- Retraction -->
+        <div class="pm-group-head">Retraction
+          <button type="button" class="fm-info-btn"
+            data-tip="Controls the travel moves between prints: how far the filament pulls back before a travel, how fast it pulls back and primes again, and how high the nozzle lifts before crossing the print. Tune these to fix stringing/oozing for your printer and filament.">&#9432;</button>
+        </div>
+        <div class="pm-field-row">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="How far the filament retracts before a travel move. 0 mm disables retraction (some direct-drive setups run retraction-free).<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>retraction_length</code><br>Default: filament default</span>">Length
+            (mm)</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-retract-length" class="pm-field-input" min="0" max="15" step="0.1">
+            <button type="button" id="fm-reset-retract" class="fm-reset-btn" title="Reset to filament default"
+              style="display:none">&#8635;</button>
+          </span>
+        </div>
+        <div class="pm-field-row">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="How high the nozzle lifts above the print before a travel move (the initial approach, any skirt, and the seam between a hybrid print's planar base and its non-planar wall). 0 disables the lift, at the risk of dragging the nozzle over the brim/base.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>travel_clearance</code><br>Default: 5 mm</span>">Z-hop
+            (mm)</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-zhop" class="pm-field-input" min="0" max="30" step="0.1">
+            <button type="button" id="fm-reset-zhop" class="fm-reset-btn" title="Reset to default"
+              style="display:none">&#8635;</button>
+          </span>
+        </div>
+        <div class="pm-field-row">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="Shape of the travel that lifts the nozzle before crossing to a new position. Only takes effect at ONE travel today: the seam where a hybrid print's planar base hands off to the non-planar wall -- that is the one travel guaranteed to already have a real toolhead position to shape a lift from (a fresh print's very first travel has none). Auto: today's default, a diagonal rise-and-approach then a straight vertical drop. Normal: straight up in place, across, straight down. Slope: one smooth ramp instead of a sharp corner. Spiral: a small in-place helical rise instead of an instant vertical jump.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>z_hop_type</code><br>Default: Auto</span>">Z-hop
+            type</span>
+          <span class="pm-field-control">
+            <select id="d-zhop-type">
+              <option value="auto">Auto</option>
+              <option value="normal">Normal</option>
+              <option value="slope">Slope</option>
+              <option value="spiral">Spiral</option>
+            </select>
+          </span>
+        </div>
+        <div class="pm-field-row">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="How fast the filament pulls back on a retract.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>retraction_speed</code><br>Default: 60 mm/s</span>">Retraction
+            speed (mm/s)</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-retract-speed" class="pm-field-input" min="1" max="150" step="1">
+            <button type="button" id="fm-reset-retractspeed" class="fm-reset-btn" title="Reset to default"
+              style="display:none">&#8635;</button>
+          </span>
+        </div>
+        <div class="pm-field-row">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="How fast the filament primes back on the following unretract.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>unretract_speed</code><br>Default: 40 mm/s</span>">Deretraction
+            speed (mm/s)</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-unretract-speed" class="pm-field-input" min="1" max="150" step="1">
+            <button type="button" id="fm-reset-unretractspeed" class="fm-reset-btn" title="Reset to default"
+              style="display:none">&#8635;</button>
+          </span>
+        </div>
+        <div class="pm-field-row">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="Instead of a plain in-place retract, move a short distance opposite the last extrusion direction while retracting -- drags the ooze blob left at the exact spot extrusion stopped into a thin wipe line instead of leaving it on the part.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>wipe_enabled</code><br>Default: off</span>">Wipe
+            while retracting</span>
+          <span class="pm-field-control">
+            <input type="checkbox" id="d-wipe-enable">
+          </span>
+        </div>
+        <div class="pm-field-row" id="row-wipe-distance">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="How far the wipe move travels, opposite the last extrusion direction.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>wipe_distance</code><br>Default: 0 mm (off)</span>">Wipe
+            distance (mm)</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-wipe-distance" class="pm-field-input" min="0" max="20" step="0.1">
+          </span>
+        </div>
+        <div class="pm-field-row" id="row-wipe-before">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="How much of the retraction happens in place BEFORE the wipe move starts; the rest retracts DURING the wipe move.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>retract_before_wipe</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Retract
+            amount before wipe</span>
+          <span class="pm-field-control">
+            <input type="range" id="d-wipe-before" min="0" max="100" step="5" style="width:100px">
+            <span id="wipe-before-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
           </span>
         </div>
 

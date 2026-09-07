@@ -39,6 +39,7 @@ def stack_from_shape(
     layer_height: float,
     points_per_turn: int,
     radius_envelope: Callable[[float], float] | None = None,
+    theta0: float = 0.0,
 ) -> list[Contour]:
     """Sample a parametric shape into a stack of contours (one per layer).
 
@@ -47,6 +48,18 @@ def stack_from_shape(
     vertices placed at equally-spaced angles around the profile, optionally
     scaled per-layer by *radius_envelope(t)* where *t* is the height fraction
     in [0, 1].
+
+    *theta0* rotates every layer's angle grid by the same constant offset
+    (``theta = theta0 + 2*pi*j/n`` instead of ``theta = 2*pi*j/n``) -- 0.0
+    (the default) is byte-identical to before this parameter existed. Used
+    by :mod:`hybrid` to re-anchor index *j* = 0 on whichever point of the
+    wall's own outline sits nearest wherever a planar base actually finished,
+    rather than always the shape's own fixed ``theta=0`` point (see
+    hybrid.py's own seam-alignment comments). Applying the SAME offset to
+    every layer keeps the rotation a pure re-labelling of index *j*, so
+    every existing per-index effect (cage, texture, ovality, xy_twist) is
+    unaffected -- it changes which physical point is called index 0, not
+    what the ring looks like.
 
     Returns a list of *n_layers* contours, where ``n_layers = round(height /
     layer_height)``.
@@ -58,7 +71,7 @@ def stack_from_shape(
         scale = radius_envelope(t) if radius_envelope is not None else 1.0
         contour: Contour = []
         for j in range(points_per_turn):
-            theta = 2.0 * math.pi * j / points_per_turn
+            theta = theta0 + 2.0 * math.pi * j / points_per_turn
             r = shape_fn(theta) * scale
             contour.append((r * math.cos(theta), r * math.sin(theta)))
         contours.append(contour)
@@ -417,8 +430,18 @@ def blend_stack(
     radius_envelope: Callable[[float], float] | None = None,
     seam_style: str = "fillet",
     seam_coverage: float = 1.0,
+    theta0: float = 0.0,
 ) -> tuple[list[Contour], list[float]]:
     """Wall stack that starts at the mesh outline and eases into the shape.
+
+    *theta0* is forwarded to the internal :func:`stack_from_shape` call
+    verbatim -- see that function's own docstring. The CALLER is responsible
+    for rotating *mesh_ring* by the matching index shift before passing it
+    here (hybrid.py does this once, right after computing theta0, by rolling
+    the already-sampled mesh_ring array rather than re-sampling the mesh) so
+    ring 0 (the mesh ring, assigned exactly below) and every parametric ring
+    above it stay index-aligned under the SAME rotation. 0.0 (the default) is
+    byte-identical to before this parameter existed.
 
     *mesh_ring* is the seam ring from :func:`top_contour_from_mesh` (already
     angle-resampled, so its index *j* means the same azimuth as the parametric
@@ -508,7 +531,7 @@ def blend_stack(
 
     parametric = stack_from_shape(
         shape_fn, radius, height, layer_height, points_per_turn,
-        radius_envelope=radius_envelope,
+        radius_envelope=radius_envelope, theta0=theta0,
     )
 
     corner_extent = blend_height * seam_coverage

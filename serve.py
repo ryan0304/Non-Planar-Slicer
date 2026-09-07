@@ -1274,6 +1274,187 @@ def _parse_bed_temp(body, profile):
     return max(0.0, min(temp, ceiling))
 
 
+def _parse_retraction_length(body):
+    """User-requested retraction length override (mm), or None to leave the
+    profile/filament default alone.
+
+    Not a machine limit -- CLAUDE.md's "ceilings come from the selected
+    PrinterProfile" rule is about physical machine ceilings, and this is a
+    process setting instead, the same category as first_layer_flow /
+    spacing_factor -- so a fixed sane range is clamped here rather than
+    something derived from the printer. 0 is a legitimate, meaningful
+    override (some direct-drive setups run retraction-free) and is
+    preserved, not folded into "absent" -- same "!= None" discipline
+    _parse_bed_temp uses for its own 0.
+    """
+    raw = body.get("retraction_length")
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    # Non-finite is already rejected at the whole-request boundary
+    # (_reject_nonfinite_tree), but this stays defensive at the point of use
+    # for the same reason _parse_bed_temp does: never clamp a non-finite
+    # value, refuse it outright.
+    if not math.isfinite(val):
+        return None
+    return max(0.0, min(val, 15.0))
+
+
+def _parse_retraction_speed(body):
+    """User-requested retraction speed override (mm/s), or None to leave the
+    default alone. See _parse_retraction_length for why this is a fixed
+    sane range rather than a PrinterProfile-derived ceiling. Unlike
+    retraction length, 0 is excluded: 0 mm/s retraction speed means "never
+    actually retracts", which is a degenerate request rather than a real
+    user intent, so the floor is 1.0.
+    """
+    raw = body.get("retraction_speed")
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(val):
+        return None
+    return max(1.0, min(val, 150.0))
+
+
+def _parse_unretract_speed(body):
+    """User-requested unretract (prime-back) speed override (mm/s), or None
+    to leave the default alone. Same reasoning as _parse_retraction_speed."""
+    raw = body.get("unretract_speed")
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(val):
+        return None
+    return max(1.0, min(val, 150.0))
+
+
+def _parse_travel_clearance(body):
+    """User-requested Z-hop / travel clearance override (mm): how far the
+    toolhead lifts above the current surface before crossing to a new XY
+    position. Every generator's own initial approach to the print, any
+    skirt shielding, and (for a hybrid print) the planar-base-to-wall seam
+    handoff all use this value. Returns the generators' own 5.0mm default
+    when absent, so an untouched design's output is unchanged.
+
+    Deliberately not derived from PrinterProfile: the real safety net is
+    unchanged by this control -- every travel it produces still runs
+    through GcodeWriter.travel() -> _move() -> _check_bounds(), which
+    independently rejects a non-finite or out-of-envelope Z regardless of
+    what is clamped here. 0 is a legitimate override (disables the lift, at
+    the user's own risk of dragging over the brim/base) and is preserved,
+    not folded into "absent".
+    """
+    raw = body.get("travel_clearance")
+    if raw is None or raw == "":
+        return 5.0
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return 5.0
+    if not math.isfinite(val):
+        return 5.0
+    return max(0.0, min(val, 30.0))
+
+
+def _parse_wipe_distance(body):
+    """User-requested wipe-on-retract distance override (mm), or None to
+    leave GcodeWriter's own default (0.0, i.e. wipe off) alone. See
+    _parse_retraction_length for why this is a fixed sane range rather than
+    a PrinterProfile-derived ceiling -- it's a process setting, not a
+    machine limit. 0 is preserved as a real override (explicitly disables
+    the wipe), not folded into "absent".
+    """
+    raw = body.get("wipe_distance")
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(val):
+        return None
+    return max(0.0, min(val, 20.0))
+
+
+def _parse_retract_before_wipe(body):
+    """User-requested "retract amount before wipe" override (0..1 fraction
+    of the retraction length pulled back in place before the wipe move
+    starts), or None to leave the default (1.0, i.e. no wipe overlap) alone.
+    Sent by the client as a 0-100 percentage (matching the UI slider,
+    same wire convention as fan_min/fan_max) and converted to a fraction
+    here.
+    """
+    raw = body.get("retract_before_wipe")
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(val):
+        return None
+    return max(0.0, min(val, 100.0)) / 100.0
+
+
+_Z_HOP_TYPES = frozenset({"auto", "normal", "slope", "spiral"})
+
+
+def _parse_z_hop_type(body):
+    """User-requested Z-hop TYPE at the one travel this app can safely vary
+    it for: the seam where a hybrid print's already-finished planar base
+    hands off to the non-planar wall (build_profile_spiral's resume=True
+    path -- see that function's own z_hop_type docstring for what each of
+    the four values does). "auto" (default) reproduces today's exact
+    travel byte-for-byte. Every OTHER travel in this app (the very first
+    move of a fresh print, a skirt, loop fabric, a surface shell) has no
+    real prior position to shape a lift from at that point, or has no
+    resume concept at all, so this setting has no effect there -- it is
+    only ever forwarded to the hybrid/mesh-hybrid generator calls below.
+    Unrecognised values fall back to "auto" rather than raising -- this is
+    a travel-shape preference, not a safety-relevant clamp.
+    """
+    raw = body.get("z_hop_type")
+    if not isinstance(raw, str) or raw not in _Z_HOP_TYPES:
+        return "auto"
+    return raw
+
+
+def _parse_planar_fan_speed(body):
+    """User-requested part-cooling fan speed (0..1 fraction) for a hybrid
+    print's PLANAR base ONLY, independent of the non-planar wall's own
+    fan_overhang_min/fan_overhang_max/fan_off_layers -- see hybrid.py's
+    _slice_replay_and_seam's own planar_fan_speed docstring for exactly how
+    the two are kept independent (the base gets this fixed value from its
+    very first move; the wall's own overhang-adaptive fan takes over
+    immediately at the seam, unaffected by fan_off_layers once this is set).
+
+    Sent by the client as a 0-100 percentage (matching fan_min/fan_max's own
+    wire convention). None (absent/blank) leaves the base's fan to the
+    existing fan_off_layers-driven default, byte-identical to before this
+    setting existed.
+    """
+    raw = body.get("planar_fan_speed")
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(val):
+        return None
+    return max(0.0, min(val, 100.0)) / 100.0
+
+
 def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | None:
     """Extract hanging-loop parameters from the request body.
 
@@ -1457,6 +1638,41 @@ def generate_design(body):
     bed_temp = _parse_bed_temp(body, profile)
     if bed_temp is not None:
         writer_kwargs["bed_temp"] = bed_temp
+    # Retraction / travel overrides: same "applied after the filament merge
+    # so the user's explicit choice always wins" placement as nozzle/bed
+    # temp above. travel_clearance is resolved here (rather than left as a
+    # writer_kwarg) because it is a GENERATOR parameter (travel_z_clearance=),
+    # not a GcodeWriter field -- see _parse_travel_clearance's own docstring.
+    retraction_length = _parse_retraction_length(body)
+    if retraction_length is not None:
+        writer_kwargs["retraction_length"] = retraction_length
+    retraction_speed = _parse_retraction_speed(body)
+    if retraction_speed is not None:
+        writer_kwargs["retraction_speed"] = retraction_speed
+    unretract_speed = _parse_unretract_speed(body)
+    if unretract_speed is not None:
+        writer_kwargs["unretract_speed"] = unretract_speed
+    # Wipe on retract: only turned on when the client explicitly asks for it
+    # (a real boolean default-OFF checkbox, same "absence is a real value"
+    # contract as mesh_base_enable_support) -- distance/before-wipe overrides
+    # are otherwise inert on their own (GcodeWriter.wipe_enabled defaults
+    # False), matching every other optional override's "untouched control
+    # changes nothing" guarantee.
+    if body.get("wipe_enabled"):
+        writer_kwargs["wipe_enabled"] = True
+        wipe_distance = _parse_wipe_distance(body)
+        if wipe_distance is not None:
+            writer_kwargs["wipe_distance"] = wipe_distance
+        retract_before_wipe = _parse_retract_before_wipe(body)
+        if retract_before_wipe is not None:
+            writer_kwargs["retract_before_wipe"] = retract_before_wipe
+    travel_clearance = _parse_travel_clearance(body)
+    # Only meaningful at the hybrid/mesh-hybrid seam (build_profile_spiral's
+    # resume=True path) -- see _parse_z_hop_type's own docstring.
+    z_hop_type = _parse_z_hop_type(body)
+    # Only meaningful for a hybrid/mesh-hybrid planar base -- see
+    # _parse_planar_fan_speed's own docstring.
+    planar_fan_speed = _parse_planar_fan_speed(body)
 
     # Fail fast on a height that cannot fit whatever the waves do.
     #
@@ -1725,6 +1941,7 @@ def generate_design(body):
             first_layer_squish=squish,
             cuff_lh=layer_height,
             fan_speed=fan_overhang_min,
+            travel_z_clearance=travel_clearance,
         )
     elif hybrid_params is not None:
         # build_profile_spiral (the wall generator hybrid mode uses) now has
@@ -1760,6 +1977,8 @@ def generate_design(body):
             overhang_flow_k=overhang_flow_k,
             fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
             fan_off_layers=fan_off_layers, width_callback=width_fn,
+            travel_z_clearance=travel_clearance, z_hop_type=z_hop_type,
+            planar_fan_speed=planar_fan_speed,
         )
     elif mesh_hybrid_params is not None:
         # Same scope as the parametric hybrid branch above: Zone Overrides now
@@ -1797,6 +2016,8 @@ def generate_design(body):
             overhang_flow_k=overhang_flow_k,
             fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
             fan_off_layers=fan_off_layers, width_callback=width_fn,
+            travel_z_clearance=travel_clearance, z_hop_type=z_hop_type,
+            planar_fan_speed=planar_fan_speed,
         )
         # The printable-overhang check blend_stack() deliberately does NOT
         # apply itself (CLAUDE.md: no machine limit may be a module constant
@@ -1838,6 +2059,7 @@ def generate_design(body):
             point_ffd=point_ffd,
             point_smooth=point_smooth,
             point_radial_push=point_radial_push,
+            travel_z_clearance=travel_clearance,
         )
 
     gcode_text = writer.text()
@@ -2152,6 +2374,32 @@ def generate_surface_design(body):
     bed_temp = _parse_bed_temp(body, profile)
     if bed_temp is not None:
         writer_kwargs["bed_temp"] = bed_temp
+    # Retraction / travel overrides -- same placement/reasoning as
+    # generate_design()'s copy of this block.
+    retraction_length = _parse_retraction_length(body)
+    if retraction_length is not None:
+        writer_kwargs["retraction_length"] = retraction_length
+    retraction_speed = _parse_retraction_speed(body)
+    if retraction_speed is not None:
+        writer_kwargs["retraction_speed"] = retraction_speed
+    unretract_speed = _parse_unretract_speed(body)
+    if unretract_speed is not None:
+        writer_kwargs["unretract_speed"] = unretract_speed
+    # Wipe on retract: only turned on when the client explicitly asks for it
+    # (a real boolean default-OFF checkbox, same "absence is a real value"
+    # contract as mesh_base_enable_support) -- distance/before-wipe overrides
+    # are otherwise inert on their own (GcodeWriter.wipe_enabled defaults
+    # False), matching every other optional override's "untouched control
+    # changes nothing" guarantee.
+    if body.get("wipe_enabled"):
+        writer_kwargs["wipe_enabled"] = True
+        wipe_distance = _parse_wipe_distance(body)
+        if wipe_distance is not None:
+            writer_kwargs["wipe_distance"] = wipe_distance
+        retract_before_wipe = _parse_retract_before_wipe(body)
+        if retract_before_wipe is not None:
+            writer_kwargs["retract_before_wipe"] = retract_before_wipe
+    travel_clearance = _parse_travel_clearance(body)
 
     # Resolve the height field. STL comes from the shared mesh cache the
     # mesh_texture path also uses; radius then comes from the mesh's own
@@ -2201,6 +2449,7 @@ def generate_surface_design(body):
         shells=surface_shells,
         resolution=resolution,
         first_layer_z=first_layer_z,
+        travel_z_clearance=travel_clearance,
     )
 
     gcode_text = writer.text()
@@ -2390,6 +2639,32 @@ def generate_mesh_texture_design(body):
     bed_temp = _parse_bed_temp(body, profile)
     if bed_temp is not None:
         writer_kwargs["bed_temp"] = bed_temp
+    # Retraction / travel overrides -- same placement/reasoning as
+    # generate_design()'s copy of this block.
+    retraction_length = _parse_retraction_length(body)
+    if retraction_length is not None:
+        writer_kwargs["retraction_length"] = retraction_length
+    retraction_speed = _parse_retraction_speed(body)
+    if retraction_speed is not None:
+        writer_kwargs["retraction_speed"] = retraction_speed
+    unretract_speed = _parse_unretract_speed(body)
+    if unretract_speed is not None:
+        writer_kwargs["unretract_speed"] = unretract_speed
+    # Wipe on retract: only turned on when the client explicitly asks for it
+    # (a real boolean default-OFF checkbox, same "absence is a real value"
+    # contract as mesh_base_enable_support) -- distance/before-wipe overrides
+    # are otherwise inert on their own (GcodeWriter.wipe_enabled defaults
+    # False), matching every other optional override's "untouched control
+    # changes nothing" guarantee.
+    if body.get("wipe_enabled"):
+        writer_kwargs["wipe_enabled"] = True
+        wipe_distance = _parse_wipe_distance(body)
+        if wipe_distance is not None:
+            writer_kwargs["wipe_distance"] = wipe_distance
+        retract_before_wipe = _parse_retract_before_wipe(body)
+        if retract_before_wipe is not None:
+            writer_kwargs["retract_before_wipe"] = retract_before_wipe
+    travel_clearance = _parse_travel_clearance(body)
 
     writer = GcodeWriter(**writer_kwargs)
 
@@ -2443,6 +2718,7 @@ def generate_mesh_texture_design(body):
         fan_overhang_max=fan_overhang_max,
         fan_off_layers=fan_off_layers,
         width_callback=width_fn,
+        travel_z_clearance=travel_clearance,
     )
 
     gcode_text = writer.text()

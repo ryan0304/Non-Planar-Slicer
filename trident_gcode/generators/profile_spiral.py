@@ -23,6 +23,15 @@ from ..profile_stack import Contour, contour_normals, interpolate_contours
 from .base_fill import layered_base_and_brim, brim_outer_radius, blend_layer_z
 from .continuous_spiral import emit_loop, _overhang_fan, _fan_on_threshold
 
+# "Spiral" z_hop_type: a small in-place helical rise instead of an instant
+# vertical jump, approximated as a polyline of short G1 segments (this app
+# never emits G2/G3 -- see orca_gcode_parser.py's own arc-rejection policy).
+# The radius grows linearly from 0 over the first turn so the very first
+# segment is a short, gentle step rather than an abrupt full-radius jump.
+_SPIRAL_TURNS = 2
+_SPIRAL_SEGMENTS_PER_TURN = 16
+_SPIRAL_RADIUS_MM = 1.5
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -122,6 +131,7 @@ def build_profile_spiral(
     fan_already_on: bool = False,
     width_callback: Callable[[float], float] | None = None,
     resume: bool = False,
+    z_hop_type: str = "auto",
 ) -> dict:
     """Emit a complete profile-spiral and return a report dict.
 
@@ -178,6 +188,39 @@ def build_profile_spiral(
         writer.unretract() that follow are kept unconditionally: they
         already move generically from wherever the toolhead currently is to
         this wall's true start point, through the normal bounds check.
+    z_hop_type : str
+        Shape of the travel to the wall's start. ONLY takes effect when
+        ``resume`` is True: that is the one call site guaranteed to already
+        have a real toolhead position to shape a lift FROM (the just-
+        finished planar base) -- a fresh, non-resumed print's first travel
+        has no such position (the writer has not moved yet: ``safe_lift()``
+        is a pure-Z primitive precisely so it never needs one), so every
+        value below is silently treated as "auto" outside ``resume``.
+
+        * "auto" (default) reproduces today's exact travel byte-for-byte: a
+          diagonal rise-and-approach to
+          (start_xy, start_z + travel_z_clearance), then a pure vertical
+          descent to start_z.
+        * "normal" lifts straight up IN PLACE at the current position
+          first, then travels horizontally to the start point at that
+          height, then descends -- the same three-step style this app's own
+          fresh-print start already uses unconditionally elsewhere (via
+          ``GcodeWriter.safe_lift()``), just applied here for a resumed
+          wall too.
+        * "slope" ramps smoothly instead of either sharp corner above --
+          rise while traveling to the horizontal midpoint between the
+          current position and the start point, then descend while
+          traveling the rest of the way.
+        * "spiral" rises via a small in-place helix at the current position
+          (``_SPIRAL_TURNS`` turns, radius ramping 0 -> ``_SPIRAL_RADIUS_MM``
+          over the first turn) instead of an instant vertical jump, then
+          travels horizontally to the start point at height, then descends.
+          A simplification, not a claim of matching any particular slicer's
+          own interpolation -- this app never emits G2/G3 arcs (see
+          orca_gcode_parser.py), so the helix is a polyline of short G1
+          segments.
+
+        Unrecognised values fall back to "auto".
     """
     if len(contours) != len(heights):
         raise ValueError(
@@ -306,8 +349,41 @@ def build_profile_spiral(
     writer.comment("move to profile spiral start")
     if not resume:
         writer.safe_lift(sz + travel_z_clearance)
-    writer.travel(s0x, s0y, sz + travel_z_clearance)
-    writer.travel(s0x, s0y, sz)
+        writer.travel(s0x, s0y, sz + travel_z_clearance)
+        writer.travel(s0x, s0y, sz)
+    elif z_hop_type == "normal":
+        # Straight up in place, across, straight down -- see this
+        # function's own z_hop_type docstring.
+        cx0, cy0, cz0 = writer.position
+        writer.travel(cx0, cy0, sz + travel_z_clearance)
+        writer.travel(s0x, s0y, sz + travel_z_clearance)
+        writer.travel(s0x, s0y, sz)
+    elif z_hop_type == "slope":
+        # Smooth ramp instead of a sharp corner -- see this function's own
+        # z_hop_type docstring.
+        cx0, cy0, _cz0 = writer.position
+        mid_x, mid_y = (cx0 + s0x) / 2.0, (cy0 + s0y) / 2.0
+        writer.travel(mid_x, mid_y, sz + travel_z_clearance)
+        writer.travel(s0x, s0y, sz)
+    elif z_hop_type == "spiral":
+        # Small in-place helical rise instead of an instant vertical jump --
+        # see this function's own z_hop_type docstring.
+        cx0, cy0, cz0 = writer.position
+        apex = sz + travel_z_clearance
+        n_pts = _SPIRAL_TURNS * _SPIRAL_SEGMENTS_PER_TURN
+        for k in range(1, n_pts + 1):
+            frac = k / n_pts
+            ang = 2.0 * math.pi * _SPIRAL_TURNS * frac
+            r = _SPIRAL_RADIUS_MM * min(frac * _SPIRAL_TURNS, 1.0)
+            writer.travel(cx0 + r * math.cos(ang), cy0 + r * math.sin(ang),
+                         cz0 + (apex - cz0) * frac)
+        writer.travel(s0x, s0y, apex)
+        writer.travel(s0x, s0y, sz)
+    else:
+        # "auto" (default), and any unrecognised value -- today's exact
+        # original behaviour.
+        writer.travel(s0x, s0y, sz + travel_z_clearance)
+        writer.travel(s0x, s0y, sz)
     writer.unretract()
 
     # ---- base / brim emission ----------------------------------------------

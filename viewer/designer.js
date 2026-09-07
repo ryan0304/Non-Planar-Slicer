@@ -272,6 +272,9 @@
     mesh_base_skirt_loops: null, mesh_base_brim_gap: null,
     star_points: 5, star_depth: 0.35,
     print_speed: 40, filament: "", line_width: null, nozzle_temp: null, bed_temp: null,
+    retraction_length: null, retraction_speed: null, unretract_speed: null, travel_clearance: null,
+    wipe_enabled: false, wipe_distance: 0, retract_before_wipe: 100,
+    z_hop_type: 'auto', planar_fan_speed: null,
     pattern: "", pattern_amp: 1.0, pattern_waves: 12,
     pattern_bands: 6, pattern_twist: 0, pattern_phase: 0,
     pattern_fade_in: 0.10, pattern_fade_out: 0, pattern_alternate: false,
@@ -2872,11 +2875,20 @@
 
   // ---- Filament defaults --------------------------------------------------
   // Default nozzle temp, bed temp, fan min/max for each built-in material key.
+  // retract: mirrors trident_gcode/orca.py's BASIC_FILAMENTS retraction_length
+  // per material -- this is the one field here the SERVER also varies by
+  // filament (FilamentSettings.writer_kwargs()), so the client default is
+  // kept in sync with it for display purposes only (sent to the server ONLY
+  // when the user actually overrides it -- see buildGenerateBody()).
+  // retractSpeed/unretractSpeed/zHop are NOT filament-derived on the server
+  // (GcodeWriter's plain class defaults apply regardless of material: 60/40/
+  // 5mm) -- deliberately the SAME across every material below rather than
+  // inventing per-filament numbers this app has never measured.
   var FILAMENT_DEFAULTS = {
-    pla: { label: 'PLA', nozzle: 205, bed: 60, fanMin: 100, fanMax: 100 },
-    petg: { label: 'PETG', nozzle: 240, bed: 70, fanMin: 50, fanMax: 80 },
-    abs: { label: 'ABS', nozzle: 245, bed: 100, fanMin: 20, fanMax: 40 },
-    tpu: { label: 'TPU', nozzle: 220, bed: 45, fanMin: 30, fanMax: 60 },
+    pla: { label: 'PLA', nozzle: 205, bed: 60, fanMin: 100, fanMax: 100, retract: 1.0, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
+    petg: { label: 'PETG', nozzle: 240, bed: 70, fanMin: 50, fanMax: 80, retract: 1.2, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
+    abs: { label: 'ABS', nozzle: 245, bed: 100, fanMin: 20, fanMax: 40, retract: 0.8, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
+    tpu: { label: 'TPU', nozzle: 220, bed: 45, fanMin: 30, fanMax: 60, retract: 0.0, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
   };
   var CUSTOM_FILAMENTS_KEY = 'trident_custom_filaments';
 
@@ -3157,74 +3169,96 @@
     var tooltip = document.getElementById('fm-tooltip');
     if (!fModal || !fOpenBtn) return;
 
-    // Track whether the user has overridden temps from the filament's defaults.
-    var nozzleOverridden = (design.nozzle_temp !== null);
-    var bedOverridden = (design.bed_temp !== null);
+    // Every filament-modal override field, in one table -- the same shape
+    // the Planar base panel's MESH_BASE_OPTIONAL uses, generalized here to
+    // ALSO track a "since the filament's own default" overridden flag per
+    // row (nozzle/bed temp always needed one; retraction/Z-hop need the
+    // exact same behaviour, so a per-row `overridden` state replaces the old
+    // nozzleOverridden/bedOverridden pair of booleans that couldn't scale
+    // past two fields without an isNozzle-style flag per new field).
+    var OVERRIDE_FIELDS = [
+      { field: 'nozzle_temp', el: nozzleEl, reset: resetNozzle, defKey: 'nozzle', overridden: false },
+      { field: 'bed_temp', el: bedEl, reset: resetBed, defKey: 'bed', overridden: false },
+      { field: 'retraction_length', el: document.getElementById('d-retract-length'),
+        reset: document.getElementById('fm-reset-retract'), defKey: 'retract', overridden: false },
+      { field: 'travel_clearance', el: document.getElementById('d-zhop'),
+        reset: document.getElementById('fm-reset-zhop'), defKey: 'zHop', overridden: false },
+      { field: 'retraction_speed', el: document.getElementById('d-retract-speed'),
+        reset: document.getElementById('fm-reset-retractspeed'), defKey: 'retractSpeed', overridden: false },
+      { field: 'unretract_speed', el: document.getElementById('d-unretract-speed'),
+        reset: document.getElementById('fm-reset-unretractspeed'), defKey: 'unretractSpeed', overridden: false }
+    ];
+    OVERRIDE_FIELDS.forEach(function(row){ row.overridden = (design[row.field] !== null); });
 
-    // Fill temp inputs with the current filament's defaults (not as placeholder).
+    // parseFloat(v) || fallback treats a legitimate 0 (0 mm retraction, 0 mm
+    // Z-hop, a 0C bed) as falsy and silently substitutes the fallback --
+    // exactly the value this feature exists to let a user set deliberately.
+    function numOr(v, fallback) {
+      var n = parseFloat(v);
+      return isNaN(n) ? fallback : n;
+    }
+
+    // Fill each input with the current filament's defaults (not as placeholder).
     function applyFilamentDefaults(key, keepOverrides) {
       var defs = getFilamentDefaults(key);
-      if (!keepOverrides || !nozzleOverridden) {
-        nozzleEl.value = defs.nozzle;
-        if (!keepOverrides) { design.nozzle_temp = null; nozzleOverridden = false; }
-      }
-      if (!keepOverrides || !bedOverridden) {
-        bedEl.value = defs.bed;
-        if (!keepOverrides) { design.bed_temp = null; bedOverridden = false; }
-      }
+      OVERRIDE_FIELDS.forEach(function(row){
+        if (!row.el) return;
+        if (!keepOverrides || !row.overridden) {
+          row.el.value = defs[row.defKey];
+          if (!keepOverrides) { design[row.field] = null; row.overridden = false; }
+        }
+      });
       updateOverrideUI();
     }
 
     function updateOverrideUI() {
-      if (resetNozzle) resetNozzle.style.display = nozzleOverridden ? '' : 'none';
-      if (resetBed) resetBed.style.display = bedOverridden ? '' : 'none';
-      if (nozzleEl) nozzleEl.classList.toggle('fm-overridden', nozzleOverridden);
-      if (bedEl) bedEl.classList.toggle('fm-overridden', bedOverridden);
+      OVERRIDE_FIELDS.forEach(function(row){
+        if (row.reset) row.reset.style.display = row.overridden ? '' : 'none';
+        if (row.el) row.el.classList.toggle('fm-overridden', row.overridden);
+      });
       if (delBtn) delBtn.style.display = (famSel.value || '').indexOf('custom_') === 0 ? '' : 'none';
     }
 
-    // When user types in a temp field, mark it overridden and persist.
-    function watchTempOverride(el, field, isNozzle) {
-      if (!el) return;
+    // When the user types into an override field, mark it overridden and persist.
+    function watchOverride(row) {
+      if (!row.el) return;
       // Seed value on modal open (handled in openFModal).
-      el.addEventListener('input', function () {
-        var raw = parseFloat(el.value);
+      row.el.addEventListener('input', function () {
+        var raw = parseFloat(row.el.value);
         var isOverride = !isNaN(raw);
-        if (isNozzle) { nozzleOverridden = isOverride; }
-        else { bedOverridden = isOverride; }
+        row.overridden = isOverride;
         if (isOverride) {
           // Clamp to [min, max].
-          var lo = parseFloat(el.min), hi = parseFloat(el.max);
+          var lo = parseFloat(row.el.min), hi = parseFloat(row.el.max);
           var v = raw;
           if (isFinite(lo)) v = Math.max(lo, v);
           if (isFinite(hi)) v = Math.min(hi, v);
-          design[field] = v;
+          design[row.field] = v;
         } else {
-          design[field] = null;
+          design[row.field] = null;
         }
-        persistDesign('num:' + el.id);
+        persistDesign('num:' + row.el.id);
         updateOverrideUI();
         if (saveStatus) { saveStatus.style.display = 'none'; saveStatus.textContent = ''; }
       });
-      el.addEventListener('change', function () { if (typeof endHistRun === 'function') endHistRun(); });
+      row.el.addEventListener('change', function () { if (typeof endHistRun === 'function') endHistRun(); });
     }
-    watchTempOverride(nozzleEl, 'nozzle_temp', true);
-    watchTempOverride(bedEl, 'bed_temp', false);
+    OVERRIDE_FIELDS.forEach(watchOverride);
 
-    // Reset buttons restore the filament default.
-    function makeReset(btn, el, field, isNozzle) {
-      if (!btn || !el) return;
-      btn.addEventListener('click', function () {
+    // Reset buttons restore the filament (or, for retract speed/Z-hop, the
+    // shared) default.
+    function makeReset(row) {
+      if (!row.reset || !row.el) return;
+      row.reset.addEventListener('click', function () {
         var defs = getFilamentDefaults(famSel.value);
-        el.value = isNozzle ? defs.nozzle : defs.bed;
-        design[field] = null;
-        if (isNozzle) nozzleOverridden = false; else bedOverridden = false;
+        row.el.value = defs[row.defKey];
+        design[row.field] = null;
+        row.overridden = false;
         persistDesign();
         updateOverrideUI();
       });
     }
-    makeReset(resetNozzle, nozzleEl, 'nozzle_temp', true);
-    makeReset(resetBed, bedEl, 'bed_temp', false);
+    OVERRIDE_FIELDS.forEach(makeReset);
 
     // Filament selector change: load defaults (keep user overrides if any).
     famSel.addEventListener('change', function () {
@@ -3251,9 +3285,13 @@
         var defs = getFilamentDefaults(famSel.value);
         var profile = {
           key: key, label: name,
-          nozzle: parseFloat(nozzleEl.value) || defs.nozzle,
-          bed: parseFloat(bedEl.value) || defs.bed,
-          fanMin: defs.fanMin, fanMax: defs.fanMax
+          nozzle: numOr(nozzleEl.value, defs.nozzle),
+          bed: numOr(bedEl.value, defs.bed),
+          fanMin: defs.fanMin, fanMax: defs.fanMax,
+          retract: numOr(document.getElementById('d-retract-length').value, defs.retract),
+          zHop: numOr(document.getElementById('d-zhop').value, defs.zHop),
+          retractSpeed: numOr(document.getElementById('d-retract-speed').value, defs.retractSpeed),
+          unretractSpeed: numOr(document.getElementById('d-unretract-speed').value, defs.unretractSpeed)
         };
         var customs = loadCustomFilaments().filter(function (c) { return c.key !== key; });
         customs.push(profile);
@@ -3262,12 +3300,10 @@
         var prevKey = famSel.value;
         populateFilamentSelect(key);
         design.filament = key;
-        design.nozzle_temp = null;
-        design.bed_temp = null;
+        OVERRIDE_FIELDS.forEach(function(row){ design[row.field] = null; row.overridden = false; });
         syncFilamentTitle();
         syncFilamentBarLabel();
         persistDesign();
-        nozzleOverridden = false; bedOverridden = false;
         updateOverrideUI();
         if (saveStatus) {
           saveStatus.textContent = 'Saved as "' + name + '"';
@@ -3301,7 +3337,6 @@
         syncFilamentTitle();
         syncFilamentBarLabel();
         persistDesign();
-        nozzleOverridden = false; bedOverridden = false;
         applyFilamentDefaults('pla', false);
         resetDelConfirm();
       });
@@ -3345,12 +3380,12 @@
 
     function openFModal() {
       if (typeof resetDelConfirm === 'function') resetDelConfirm();
-      // Sync temp inputs to current design state or filament defaults.
-      nozzleOverridden = (design.nozzle_temp !== null);
-      bedOverridden = (design.bed_temp !== null);
+      // Sync every override input to current design state or filament defaults.
       var defs = getFilamentDefaults(famSel.value);
-      nozzleEl.value = nozzleOverridden ? design.nozzle_temp : defs.nozzle;
-      bedEl.value = bedOverridden ? design.bed_temp : defs.bed;
+      OVERRIDE_FIELDS.forEach(function(row){
+        row.overridden = (design[row.field] !== null);
+        if (row.el) row.el.value = row.overridden ? design[row.field] : defs[row.defKey];
+      });
       if (customName) {
         if (String(famSel.value).indexOf('custom_') === 0) {
           customName.value = defs.label;
@@ -4496,6 +4531,11 @@
   bindNumber('d-hybrid-walls', 'hybrid_wall_count', true);
   bindNumber('d-hybrid-infill', 'hybrid_infill_density');
   bindSelect('d-hybrid-pattern', 'hybrid_infill_pattern');
+  // Independent planar-base fan speed -- shared by BOTH hybrid bases
+  // (parametric hybrid_base_height and mesh-hybrid mesh_base_id): only one
+  // is ever active at a time (server-enforced), so one control/one design
+  // field covers both; see buildGenerateBody()'s two send-sites.
+  bindOptionalNumber('d-hybrid-fan', 'planar_fan_speed');
   bindNumber('d-meshbase-blend', 'mesh_base_blend_height');
   bindSelect('d-meshbase-seam-style', 'mesh_base_seam_style');
   // Seam intensity slider (UI label; design field stays mesh_base_seam_coverage,
@@ -5036,6 +5076,62 @@
     }
     bindFanSlider('d-fan-min', 'fan-min-read', 'fan_overhang_min');
     bindFanSlider('d-fan-max', 'fan-max-read', 'fan_overhang_max');
+  })();
+
+  // Z-hop type (Filament settings modal, Retraction group) -- only takes
+  // effect at the hybrid/mesh-hybrid seam (build_profile_spiral's
+  // resume=True path); see the field's own tooltip and serve.py's
+  // _parse_z_hop_type. bindSelect already exists for exactly this shape of
+  // control.
+  bindSelect('d-zhop-type', 'z_hop_type');
+
+  // Wipe on retract (Filament settings modal, Retraction group). Distance
+  // and Retract-before-wipe are dimmed (not hidden), same convention as
+  // syncPlanarSeamBlendRows()'s row-inert class, so a saved value stays
+  // visible while the checkbox is off rather than disappearing.
+  // Declared as a plain function (not inside an IIFE, unlike bindFanSlider
+  // above) so the design-load restore block further down can call it after
+  // restoring design.wipe_enabled, exactly like syncPlanarSeamBlendRows().
+  function syncWipeRows(){
+    var on = !!design.wipe_enabled;
+    ['row-wipe-distance', 'row-wipe-before'].forEach(function(id){
+      var row = document.getElementById(id);
+      if(row) row.classList.toggle('row-inert', !on);
+    });
+  }
+  (function(){
+    var enableEl = document.getElementById('d-wipe-enable');
+    if(enableEl){
+      enableEl.checked = !!design.wipe_enabled;
+      enableEl.addEventListener('change', function(){
+        design.wipe_enabled = enableEl.checked;
+        persistDesign();
+        syncWipeRows();
+      });
+    }
+    var distEl = document.getElementById('d-wipe-distance');
+    if(distEl){
+      distEl.value = design.wipe_distance;
+      distEl.addEventListener('input', function(){
+        var v = parseFloat(distEl.value);
+        design.wipe_distance = isNaN(v) ? 0 : Math.max(0, Math.min(v, 20));
+        persistDesign('num:d-wipe-distance');
+      });
+      distEl.addEventListener('change', endHistRun);
+    }
+    var beforeSlider = document.getElementById('d-wipe-before');
+    var beforeRead = document.getElementById('wipe-before-read');
+    if(beforeSlider){
+      beforeSlider.value = design.retract_before_wipe != null ? design.retract_before_wipe : 100;
+      if(beforeRead) beforeRead.textContent = beforeSlider.value + '%';
+      beforeSlider.addEventListener('input', function(){
+        design.retract_before_wipe = parseFloat(beforeSlider.value);
+        if(beforeRead) beforeRead.textContent = beforeSlider.value + '%';
+        persistDesign('num:d-wipe-before');
+      });
+      beforeSlider.addEventListener('change', endHistRun);
+    }
+    syncWipeRows();
   })();
 
   // Fan-off-layers numeric input.
@@ -6910,6 +7006,7 @@
     _set('d-hybrid-walls', design.hybrid_wall_count || 3);
     _set('d-hybrid-infill', design.hybrid_infill_density != null ? design.hybrid_infill_density : 0.15);
     _set('d-hybrid-pattern', design.hybrid_infill_pattern || 'grid');
+    _set('d-hybrid-fan', design.planar_fan_speed != null ? design.planar_fan_speed : '');
     _set('d-meshbase-blend', design.mesh_base_blend_height || 0);
     _set('d-meshbase-seam-style', design.mesh_base_seam_style || 'fillet');
     var mbSeamCovSlider = document.getElementById('d-meshbase-seam-coverage');
@@ -6969,6 +7066,24 @@
     if(nozzleTempEl) nozzleTempEl.value = design.nozzle_temp != null ? design.nozzle_temp : '';
     var bedTempEl = document.getElementById('d-bedtemp');
     if(bedTempEl) bedTempEl.value = design.bed_temp != null ? design.bed_temp : '';
+    // Retraction / Z-hop overrides (Filament settings modal) -- same "blank
+    // means unset" restore as nozzle/bed temp above.
+    [['d-retract-length', 'retraction_length'], ['d-zhop', 'travel_clearance'],
+     ['d-retract-speed', 'retraction_speed'], ['d-unretract-speed', 'unretract_speed']
+    ].forEach(function(pair){
+      var el = document.getElementById(pair[0]);
+      if(el) el.value = design[pair[1]] != null ? design[pair[1]] : '';
+    });
+    var wipeEnableEl = document.getElementById('d-wipe-enable');
+    if(wipeEnableEl) wipeEnableEl.checked = !!design.wipe_enabled;
+    var wipeDistEl = document.getElementById('d-wipe-distance');
+    if(wipeDistEl) wipeDistEl.value = design.wipe_distance || 0;
+    var wipeBeforeEl = document.getElementById('d-wipe-before');
+    if(wipeBeforeEl) wipeBeforeEl.value = design.retract_before_wipe != null ? design.retract_before_wipe : 100;
+    var wipeBeforeReadEl = document.getElementById('wipe-before-read');
+    if(wipeBeforeReadEl) wipeBeforeReadEl.textContent = (design.retract_before_wipe != null ? design.retract_before_wipe : 100) + '%';
+    if(typeof syncWipeRows === 'function') syncWipeRows();
+    _set('d-zhop-type', design.z_hop_type || 'auto');
     var bottomRadios = document.querySelectorAll('input[name="d-bottom"]');
     bottomRadios.forEach(function(r){ r.checked = r.value === design.bottom; });
     var meshUsageRadios = document.querySelectorAll('input[name="mesh-usage"]');
@@ -7543,6 +7658,33 @@
     if(design.bed_temp != null && design.bed_temp !== ''){
       body.bed_temp = design.bed_temp;
     }
+    // Retraction / Z-hop overrides (Filament settings modal): same "only
+    // sent when the user actually set an override" contract as nozzle/bed
+    // temp above -- absent means "use the writer/filament default", and 0
+    // is a real, meaningful override (0mm retraction, 0mm Z-hop) that must
+    // be sent, not treated as unset, so every check below is "!= null", not
+    // truthy -- see serve.py's _parse_retraction_length/_parse_travel_clearance.
+    if(design.retraction_length != null && design.retraction_length !== ''){
+      body.retraction_length = design.retraction_length;
+    }
+    if(design.retraction_speed != null && design.retraction_speed !== ''){
+      body.retraction_speed = design.retraction_speed;
+    }
+    if(design.unretract_speed != null && design.unretract_speed !== ''){
+      body.unretract_speed = design.unretract_speed;
+    }
+    if(design.travel_clearance != null && design.travel_clearance !== ''){
+      body.travel_clearance = design.travel_clearance;
+    }
+    // Wipe on retract: only sent when the checkbox is actually on (a real
+    // boolean default-OFF control, same "presence is the switch" contract
+    // as mesh_base_enable_support) -- distance/before-wipe are meaningless
+    // and therefore not sent while wipe itself is off.
+    if(design.wipe_enabled){
+      body.wipe_enabled = true;
+      body.wipe_distance = design.wipe_distance || 0;
+      body.retract_before_wipe = design.retract_before_wipe != null ? design.retract_before_wipe : 100;
+    }
     // Point Edit Modifiers: each block is only sent when its modifier is
     // enabled AND would actually do something (server tolerates malformed/
     // no-op input gracefully either way, but there's no reason to send inert
@@ -7621,6 +7763,15 @@
       body.hybrid_wall_count = Math.round(design.hybrid_wall_count || 3);
       body.hybrid_infill_density = design.hybrid_infill_density != null ? design.hybrid_infill_density : 0.15;
       body.hybrid_infill_pattern = design.hybrid_infill_pattern || 'grid';
+      // Only meaningful at this seam (build_profile_spiral's resume=True
+      // path) -- see the field's own tooltip and serve.py's _parse_z_hop_type.
+      body.z_hop_type = design.z_hop_type || 'auto';
+      // Independent planar-base fan speed -- only sent when the user
+      // actually set an override (blank means "use the wall's own Fan
+      // off/Fan min setting instead", same as before this control existed).
+      if(design.planar_fan_speed != null && design.planar_fan_speed !== ''){
+        body.planar_fan_speed = design.planar_fan_speed;
+      }
     }
     // Route texture params by the pattern dropdown: loops are a site-based
     // texture (server pattern stays null), wave patterns send the pattern_*
@@ -7708,6 +7859,14 @@
         // exclusive with meshBaseActive, same as the fields just above).
         body.mesh_base_top_layers = Math.round(design.mesh_base_top_layers != null ? design.mesh_base_top_layers : 3);
         body.mesh_base_bottom_layers = Math.round(design.mesh_base_bottom_layers != null ? design.mesh_base_bottom_layers : 3);
+        // Only meaningful at this seam (build_profile_spiral's resume=True
+        // path) -- see the field's own tooltip and serve.py's _parse_z_hop_type.
+        body.z_hop_type = design.z_hop_type || 'auto';
+        // Independent planar-base fan speed -- same "only sent when
+        // overridden" contract as the parametric hybrid branch above.
+        if(design.planar_fan_speed != null && design.planar_fan_speed !== ''){
+          body.planar_fan_speed = design.planar_fan_speed;
+        }
         // Speed/Adhesion/Support: every one of these is OPTIONAL server-side
         // (_parse_mesh_hybrid_params reads absence as "keep the derived
         // default") -- sent ONLY when the design actually holds a value, so

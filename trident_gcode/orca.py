@@ -115,7 +115,6 @@ class FilamentSettings:
     flow_ratio: float | None = None
     max_volumetric_speed: float | None = None   # mm^3/s
     retraction_length: float | None = None
-    z_hop: float | None = None
 
     fan_min_speed: float | None = None           # 0..1
     fan_max_speed: float | None = None           # 0..1
@@ -174,7 +173,7 @@ class FilamentSettings:
             f"  bed         : {f(self.bed_temp,'C')}\n"
             f"  flow ratio  : {f(self.flow_ratio)}\n"
             f"  max vol.    : {f(self.max_volumetric_speed,' mm^3/s')}\n"
-            f"  retraction  : {f(self.retraction_length,' mm')}  z-hop {f(self.z_hop,' mm')}\n"
+            f"  retraction  : {f(self.retraction_length,' mm')}\n"
             f"  fan         : {f(self.fan_min_speed)}..{f(self.fan_max_speed)}  "
             f"PA {f(self.pressure_advance)}"
         )

@@ -66,6 +66,29 @@ _PLACEMENT_TOLERANCE_MM = 2.0
 _SEAM_Z_TOLERANCE_LAYERS = 0.5
 
 
+def _nearest_ring_index(ring, target: tuple[float, float]) -> int:
+    """Index into ``ring`` (a list of (x, y) points, both in the SAME local
+    frame as ``target``) whose point sits nearest ``target``.
+
+    Brute-force distance scan -- ``ring`` is at most a few hundred points
+    (``points_per_turn``), which costs nothing next to the OrcaSlicer
+    subprocess call that always precedes every use of this function. Mirrors
+    ``trident_gcode/mesh.py``'s ``align_start()``, generalized to return the
+    index rather than rotating the list in place: a caller here needs the
+    SAME index reused as a ``theta0`` offset for a SEPARATE ring
+    (``stack_from_shape``'s parametric layers) that must stay index-aligned
+    with whichever ring this was computed against.
+    """
+    tx, ty = target
+    best_i, best_d2 = 0, None
+    for i, (x, y) in enumerate(ring):
+        d2 = (x - tx) ** 2 + (y - ty) ** 2
+        if best_d2 is None or d2 < best_d2:
+            best_d2 = d2
+            best_i = i
+    return best_i
+
+
 def _slice_replay_and_seam(
     writer: GcodeWriter,
     *,
@@ -82,6 +105,7 @@ def _slice_replay_and_seam(
     cx: float,
     cy: float,
     seam_z: float,
+    planar_fan_speed: float | None = None,
 ) -> tuple[dict, list]:
     """The one trust boundary between OrcaSlicer and this app's own output.
 
@@ -100,6 +124,24 @@ def _slice_replay_and_seam(
 
     Raises OrcaSliceError (from orca_slice.py), OrcaGcodeParseError (from
     orca_gcode_parser.py) or ValueError. Never falls back to anything.
+
+    planar_fan_speed : float | None
+        Independent part-cooling fan fraction (0..1) for the planar base
+        ONLY, set the instant the base's own G-code starts (before any of
+        its moves) so the whole base prints at one explicit speed -- never
+        derived from Orca's own sliced-in fan curve, which is silently
+        discarded on replay regardless (orca_gcode_parser.py's own
+        _IGNORED_COMMANDS drops every M106/M107 Orca emits; see
+        orca_replay.py's docstring: "fan speed... never read from Orca's
+        text at all"). None (default) leaves the base fan to whatever the
+        caller's own fan_off_layers-driven logic decides (today's exact
+        behaviour, unchanged) -- see build_hybrid_print's/
+        build_mesh_hybrid_print's own "5b. Fan" step for how the two knobs
+        divide the print: this one covers only the base, the non-planar
+        wall's own fan_overhang_min/max/fan_off_layers cover only the wall,
+        and setting this one makes the wall's own cold-start logic moot
+        (the wall's overhang-adaptive fan takes over immediately at the
+        seam, ramping from whatever this value left the fan at).
     """
     profile = writer.profile
 
@@ -137,6 +179,12 @@ def _slice_replay_and_seam(
     # 4. The ONE header call for the whole hybrid print -- the wall above
     #    resumes rather than emitting its own.
     writer.header()
+    if planar_fan_speed is not None:
+        # Set BEFORE any base move is replayed, so the base prints at this
+        # speed from its very first layer -- see this function's own
+        # planar_fan_speed docstring for why this is the only place the
+        # base's fan can meaningfully be controlled at all.
+        writer.set_fan(planar_fan_speed)
 
     # 5. Replay onto the writer -- every move still passes through
     #    GcodeWriter's own _check_bounds()/non-finite guards.
@@ -201,6 +249,7 @@ def build_hybrid_print(
     radius_envelope: Callable[[float], float] | None = None,
     amp_envelope: Callable[[float], float] | None = None,
     center: tuple[float, float] | None = None,
+    planar_fan_speed: float | None = None,
     **profile_spiral_kwargs,
 ) -> dict:
     """Emit a hybrid print: an OrcaSlicer-sliced planar base up to
@@ -269,7 +318,7 @@ def build_hybrid_print(
         wall_count=wall_count, infill_density=infill_density,
         infill_pattern=infill_pattern, orca_path=orca_path,
         filament_name=filament_name, cx=cx, cy=cy,
-        seam_z=achieved_base_height,
+        seam_z=achieved_base_height, planar_fan_speed=planar_fan_speed,
     )
 
     # 5b. Fan: fan_off_layers is a TOTAL count from the absolute start of the
@@ -291,21 +340,55 @@ def build_hybrid_print(
     #     request for MORE layers off than the base alone provides should
     #     make the wall wait any additional turns, and only for the
     #     REMAINDER -- the base's own layers already count toward the total.
+    #
+    #     When planar_fan_speed was given, none of the above applies: the
+    #     base's fan was already set to that explicit value BEFORE its first
+    #     move (see _slice_replay_and_seam), so it is unconditionally
+    #     "already on" by the time the wall starts, and calling set_fan()
+    #     again here with the WALL's own default would incorrectly overwrite
+    #     the user's planar setting before the wall even begins. The wall's
+    #     own overhang-adaptive fan (build_profile_spiral's per-point
+    #     set_fan_if_changed) still takes over cleanly from there, ramping
+    #     away from whatever planar_fan_speed left the fan at.
     fan_off_layers = profile_spiral_kwargs.pop("fan_off_layers", 0)
     fan_overhang_min = profile_spiral_kwargs.get("fan_overhang_min")
     fan_overhang_max = profile_spiral_kwargs.get("fan_overhang_max")
     fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
-    fan_already_on = fan_off_layers <= n_base_layers
-    wall_fan_off_layers = 0 if fan_already_on else fan_off_layers - n_base_layers
-    if fan_already_on:
-        writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
+    if planar_fan_speed is not None:
+        fan_already_on = True
+        wall_fan_off_layers = 0
+    else:
+        fan_already_on = fan_off_layers <= n_base_layers
+        wall_fan_off_layers = 0 if fan_already_on else fan_off_layers - n_base_layers
+        if fan_already_on:
+            writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
 
     # 6. Upper (non-planar) contour stack + wall, resuming from wherever
     #     the replay left the toolhead.
+    #
+    #     Seam alignment: without this, the wall's own first point always
+    #     sat at shape_fn's fixed theta=0 -- unrelated to wherever Orca's own
+    #     seam algorithm happened to finish the base -- so the "move to
+    #     profile spiral start" travel right after resume=True could cross
+    #     most of the part's diameter for no reason. Probe the wall's own
+    #     t=0 ring (a single-layer stack_from_shape call, cheap) at theta0=0,
+    #     find the point nearest wherever the replay actually left the
+    #     toolhead, and re-anchor the whole upper stack's angle grid there --
+    #     stack_from_shape's theta0 rotates every layer by the same constant,
+    #     so this only relabels which physical point is index 0, it does not
+    #     change the ring's shape or any per-index effect (cage/texture/twist).
     upper_height = height - achieved_base_height
+    wall_radius_envelope = _wall_radius_env if radius_envelope is not None else None
+    wx, wy, _wz = writer.position
+    probe_ring = stack_from_shape(
+        shape_fn, radius, layer_height, layer_height, points_per_turn,
+        radius_envelope=wall_radius_envelope,
+    )[0]
+    seam_k = _nearest_ring_index(probe_ring, (wx - cx, wy - cy))
+    theta0 = 2.0 * math.pi * seam_k / points_per_turn
     upper_contours = stack_from_shape(
         shape_fn, radius, upper_height, layer_height, points_per_turn,
-        radius_envelope=(_wall_radius_env if radius_envelope is not None else None),
+        radius_envelope=wall_radius_envelope, theta0=theta0,
     )
     upper_heights = [i * layer_height for i in range(len(upper_contours))]
     wall_report = build_profile_spiral(
@@ -364,6 +447,7 @@ def build_mesh_hybrid_print(
     filament_name: str | None = None,
     seam_style: str = "fillet",
     seam_coverage: float = 1.0,
+    planar_fan_speed: float | None = None,
     **profile_spiral_kwargs,
 ) -> dict:
     """Emit a hybrid print whose planar base is the user's OWN solid STL.
@@ -590,7 +674,7 @@ def build_mesh_hybrid_print(
         top_shell_layers=top_shell_layers, bottom_shell_layers=bottom_shell_layers,
         process_overrides=process_overrides,
         filament_name=filament_name, cx=cx, cy=cy,
-        seam_z=achieved_base_height,
+        seam_z=achieved_base_height, planar_fan_speed=planar_fan_speed,
     )
 
     # 7. Did Orca agree with the prediction? Same idiom as the placement
@@ -617,17 +701,40 @@ def build_mesh_hybrid_print(
                 orca_top_z, achieved_base_height, tolerance))
 
     # 7b. Fan: same absolute-layer-count fix as build_hybrid_print() above --
-    #     see that function's own step 5b for the full rationale. n_base_layers
-    #     here is Orca's own achieved layer count (informational, step 2
-    #     above), not a value this module chose.
+    #     see that function's own step 5b for the full rationale (including
+    #     the planar_fan_speed override below). n_base_layers here is Orca's
+    #     own achieved layer count (informational, step 2 above), not a
+    #     value this module chose.
     fan_off_layers = profile_spiral_kwargs.pop("fan_off_layers", 0)
     fan_overhang_min = profile_spiral_kwargs.get("fan_overhang_min")
     fan_overhang_max = profile_spiral_kwargs.get("fan_overhang_max")
     fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
-    fan_already_on = fan_off_layers <= n_base_layers
-    wall_fan_off_layers = 0 if fan_already_on else fan_off_layers - n_base_layers
-    if fan_already_on:
-        writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
+    if planar_fan_speed is not None:
+        fan_already_on = True
+        wall_fan_off_layers = 0
+    else:
+        fan_already_on = fan_off_layers <= n_base_layers
+        wall_fan_off_layers = 0 if fan_already_on else fan_off_layers - n_base_layers
+        if fan_already_on:
+            writer.set_fan(fan_overhang_min if fan_overhang_active else writer.fan_speed)
+
+    # 7c. Seam alignment: same fix as build_hybrid_print's step 6 -- without
+    #     it, index 0 of mesh_ring is wherever top_contour_from_mesh's fixed
+    #     theta=0 ray happens to land on the mesh outline, unrelated to
+    #     wherever Orca's own seam algorithm actually finished the base, so
+    #     the "move to profile spiral start" travel right after resume=True
+    #     could cross most of the part for no reason. Re-anchor index 0 on
+    #     whichever point of mesh_ring sits nearest the replay's true ending
+    #     position: roll the ALREADY-SAMPLED mesh_ring array by that index
+    #     (exact and cheap -- no second ray-cast needed) and forward the SAME
+    #     index, as theta0, into blend_stack's own stack_from_shape call, so
+    #     ring 0 (mesh_ring, assigned exactly by blend_stack) and every
+    #     parametric ring above it stay index-aligned under one rotation.
+    wx, wy, _wz = writer.position
+    seam_k = _nearest_ring_index(mesh_ring, (wx - cx, wy - cy))
+    if seam_k:
+        mesh_ring = mesh_ring[seam_k:] + mesh_ring[:seam_k]
+    theta0 = 2.0 * math.pi * seam_k / points_per_turn
 
     # 8. The wall: starts as the mesh's own top outline and eases into the
     #    parametric shape. radius_envelope/amp_envelope map over THIS segment
@@ -637,6 +744,7 @@ def build_mesh_hybrid_print(
         mesh_ring, shape_fn, radius, height, layer_height, points_per_turn,
         blend_height, radius_envelope=radius_envelope,
         seam_style=seam_style, seam_coverage=seam_coverage,
+        theta0=theta0,
     )
     wall_report = build_profile_spiral(
         writer, contours, heights,
