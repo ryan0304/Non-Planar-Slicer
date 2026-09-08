@@ -261,12 +261,13 @@
                       <option value="rectilinear">Rectilinear</option>
                     </select>
                   </div>
-                  <div class="drow" id="row-hybrid-fan"><span>Planar base fan
-                      <button type="button" class="fm-info-btn"
-                        data-tip-html="Independent part-cooling fan speed for the solid planar base, separate from the non-planar wall's own Fan min/Fan max (Filament settings). Set here to run the base at a different speed than the wall -- OrcaSlicer's own fan curve for the base is never used (this app always replays the base through its own fan control). Blank = the base follows the wall's Fan off/Fan min setting instead, same as today.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>planar_fan_speed</code> (sent as a 0-1 fraction)<br>Default: auto (same as the wall's own cold-start setting)</span>">&#9432;</button>
-                    </span><input type="number" id="d-hybrid-fan" min="0" max="100" step="5" placeholder="auto"><span
-                      style="font-size:11px;margin-left:4px">%</span>
-                  </div>
+                  <!-- "Planar base fan" (#row-hybrid-fan / #d-hybrid-fan,
+                       planar_fan_speed) used to sit here. It is a part-cooling
+                       fan speed, not a base-geometry setting, and it applies to
+                       the mesh-base hybrid too (so it never shared this block's
+                       mesh-base hide rule -- see designer.js refreshShapeRows).
+                       It now lives beside the wall's own Fan min/Fan max in the
+                       Filament settings modal's Part Cooling Fan group. -->
                   <div class="hint tight-top" id="hybrid-orca-hint" style="display:none">Hybrid planar
                     base requires a working OrcaSlicer install on the server; this one does not have it
                     available right now.</div>
@@ -535,6 +536,15 @@
                 </div>
                 <div class="drow"><span>Print speed (mm/s)</span><input type="number" id="d-speed" min="20" max="90"
                     step="1"></div>
+                <div class="drow"><span>Variable speed by radius</span><input type="checkbox" id="d-radius-speed"></div>
+                <div class="hint" id="radius-speed-hint" style="display:none;margin-top:2px">Slows the wall down where
+                  its radius is small, so a narrow section takes closer to the same time per turn as a wide one and the
+                  fresh bead gets a more even amount of time to cool. Only ever slows down &#8212; never above your
+                  Print speed. <b>Unvalidated first pass:</b> the model is a plain radius ratio, not a measured cooling
+                  curve, and nobody has printed it yet.</div>
+                <div class="hint" id="radius-speed-scope-note" style="display:none;margin-top:2px">Variable speed by
+                  radius only applies to the parametric wall (not loop fabric or STL texture mode) &#8212; ignored for
+                  this design.</div>
                 <div class="drow"><span>Line width override</span><input type="number" id="d-lwoverride" min="0.1"
                     max="1.2" step="0.05" placeholder="auto"></div>
 
@@ -1482,14 +1492,25 @@ Range: [0%, 100%]">Seam intensity (%)</span>
           </span>
         </div>
 
-        <div class="pm-group-head" style="margin-top:12px">Part Cooling Fan
+        <!-- Part cooling fan. A hybrid print has TWO separately-implemented
+             fan controls, and they cover disjoint parts of the print: the
+             non-planar wall's lean-driven ramp (fan_min -> fan_max, applied
+             per wall point by build_profile_spiral) and the planar base's one
+             flat speed (planar_fan_speed, set once before the base's first
+             replayed move -- hybrid.py's _slice_replay_and_seam). Neither
+             affects the other's layers. They previously lived in two different
+             screens with the same bare word "Fan" on the labels, which read as
+             one setting covering the whole print; each now gets its own
+             heading and its own "wall"/"base" wording so the split is visible
+             without opening a tooltip. -->
+        <div class="pm-group-head" style="margin-top:12px">Non-planar wall fan
           <button type="button" class="fm-info-btn"
-            data-tip-html="The part-cooling fan runs between these two speeds, picked by how far the wall leans: min on a vertical wall, rising to max where it leans 45&deg; outward or more (less material sits below an overhang to carry heat away). Set both to the same value for a constant fan speed.<br>Note: the lean comes from the Silhouette curve. A straight (cylindrical) silhouette never leans, so the print stays at min the whole way and max has nothing to act on &#8212; flare the silhouette to see the fan ramp up.">&#9432;</button>
+            data-tip-html="Applies to the non-planar spiral wall only, not to a planar base. The part-cooling fan runs between these two speeds, picked by how far the wall leans: min on a vertical wall, rising to max where it leans 45&deg; outward or more (less material sits below an overhang to carry heat away). Set both to the same value for a constant fan speed.<br>Note: the lean comes from the Silhouette curve. A straight (cylindrical) silhouette never leans, so the print stays at min the whole way and max has nothing to act on &#8212; flare the silhouette to see the fan ramp up.">&#9432;</button>
         </div>
         <div class="pm-field-row">
           <span class="pm-field-label fm-hover-target" style="cursor:help;"
-            data-tip-html="Part-cooling fan speed on a vertical wall. The fan ramps from this toward Fan max as the wall leans further outward.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_min</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Fan
-            min</span>
+            data-tip-html="Part-cooling fan speed on a vertical section of the non-planar wall. The fan ramps from this toward Wall fan max as the wall leans further outward. Does not apply to a planar base -- that has its own speed below.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_min</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Wall
+            fan min</span>
           <span class="pm-field-control">
             <input type="range" id="d-fan-min" min="0" max="100" step="5" style="width:100px">
             <span id="fan-min-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
@@ -1497,13 +1518,110 @@ Range: [0%, 100%]">Seam intensity (%)</span>
         </div>
         <div class="pm-field-row">
           <span class="pm-field-label fm-hover-target" style="cursor:help;"
-            data-tip-html="Part-cooling fan speed where the wall leans 45 degrees or more outward. Set equal to Fan min for a constant fan speed.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_max</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Fan
-            max</span>
+            data-tip-html="Part-cooling fan speed where the non-planar wall leans 45 degrees or more outward. Set equal to Wall fan min for a constant fan speed. Does not apply to a planar base -- that has its own speed below.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>fan_max</code> (sent as a 0-1 fraction)<br>Default: 100%</span>">Wall
+            fan max</span>
           <span class="pm-field-control">
             <input type="range" id="d-fan-max" min="0" max="100" step="5" style="width:100px">
             <span id="fan-max-read" style="font-size:11px;min-width:32px;text-align:right">100%</span>
           </span>
         </div>
+
+        <div class="pm-group-head">Planar base fan
+          <button type="button" class="fm-info-btn"
+            data-tip-html="Applies to the solid planar base of a hybrid print only, not to the non-planar wall above it. One flat speed for the whole base, held until the seam, where the wall's own Wall fan min/max ramp takes over.">&#9432;</button>
+        </div>
+        <div class="pm-field-row" id="row-hybrid-fan">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="Independent part-cooling fan speed for the solid planar base, separate from the non-planar wall's own Wall fan min/Wall fan max above. Set it to run the base at a different speed than the wall -- OrcaSlicer's own fan curve for the base is never used (this app always replays the base through its own fan control). Blank = the base gets no fan command of its own and the wall's Fan off/Wall fan min logic decides when the fan first turns on, same as today.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>planar_fan_speed</code> (sent as a 0-1 fraction)<br>Default: auto (same as the wall's own cold-start setting)</span>">Base
+            fan speed</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-hybrid-fan" class="pm-field-input" min="0" max="100" step="5"
+              placeholder="auto" style="width:60px">
+            <span style="font-size:11px;margin-left:4px">%</span>
+          </span>
+        </div>
+        <!-- Static, always-shown, and deliberately NOT hidden when the current
+             design has no base: this modal holds per-filament-profile settings,
+             not per-model-shape ones (Fan min/max are shown the same way even
+             on a design whose wall never leans). Not a .hint either -- the
+             hint-density toggle hides those, and this sentence is the only
+             thing on screen that says when the control above does anything. -->
+        <div class="pm-field-note">Only takes effect when a hybrid/planar base is
+          enabled (Model tab: Hybrid base height, or a mesh base).</div>
+
+        <!-- Base cooling curve (advanced). Everything below is inert unless
+             the checkbox is on: the server reads NONE of these fields without
+             base_fan_curve_enabled (serve.py's _parse_base_fan_curve), so an
+             untouched sub-section cannot change a single byte of output.
+             Grouped the way OrcaSlicer's own Material settings > Cooling page
+             groups the same knobs (a "specific layer" block, then a
+             part-cooling min/max block), but built out of this modal's own
+             pm-field-row/pm-field-note conventions rather than Orca's look.
+             Rows dim rather than disappear when the gate is off -- the same
+             row-inert convention the Wipe rows above already use, so a saved
+             value stays visible instead of vanishing. -->
+        <div class="pm-group-head" style="margin-top:12px">Base cooling curve (advanced)
+          <button type="button" class="fm-info-btn"
+            data-tip-html="Varies the planar BASE's fan speed layer by layer from each layer's estimated print time, in place of one flat speed. Applies to the solid planar base ONLY -- the non-planar wall keeps its own Wall fan min/max lean-driven ramp above, which this never touches.<br><br><b>Superseded by Base fan speed:</b> if the Base fan speed box above has a value, that flat speed wins outright and this whole curve is ignored. Clear it to use the curve.<br><br><b>Accuracy:</b> each layer's time is an APPROXIMATION computed from OrcaSlicer's own path geometry and requested feedrates -- it ignores acceleration and this app's own speed clamps, so it runs a little optimistic. The curve model itself is a best-effort reproduction of OrcaSlicer's documented cooling behaviour and has NOT been verified against Orca's source; treat the resulting speeds as a starting point to tune, not a match to what Orca would emit.">&#9432;</button>
+        </div>
+        <div class="pm-field-row">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="Turn on the layer-time-driven cooling curve for the planar base. Off (default) = the base behaves exactly as it does today: one flat Base fan speed if set, otherwise the wall's own Fan off/Wall fan min logic. While this is off none of the settings below are sent to the server at all.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>base_fan_curve_enabled</code><br>Default: off</span>">Use
+            cooling curve</span>
+          <span class="pm-field-control">
+            <input type="checkbox" id="d-base-fan-curve">
+          </span>
+        </div>
+        <div class="pm-field-note" id="note-base-fan-layer">Cooling for specific layers</div>
+        <div class="pm-field-row" id="row-base-fan-off-layers">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="Number of the base's own first layers printed with no cooling at all (fan fully off), counted from the base's first layer. Bed adhesion suffers if the first layers are cooled. Planar base only -- the non-planar wall above is unaffected.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>base_fan_off_layers</code><br>Default: 0</span>">No cooling
+            for first</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-base-fan-off-layers" class="pm-field-input" min="0" max="1000"
+              step="1" style="width:60px">
+            <span style="font-size:11px;margin-left:4px">layers</span>
+          </span>
+        </div>
+        <div class="pm-field-note" id="note-base-fan-part">Part cooling fan (by layer time)</div>
+        <div class="pm-field-row" id="row-base-fan-min">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="Fan speed for a SLOW base layer, and the layer time at or above which it is used. A layer that takes a long time has already had time to cool on its own, so it needs the least help. Layer times between this and the fast threshold below interpolate linearly between the two speeds. Planar base only.<br><span style=&quot;color:var(--ink-muted)&quot;>parameters: <code>base_fan_min_speed</code> (0-1 fraction), <code>base_fan_min_layer_time_s</code><br>Default: 0% at 10 s</span>">Min fan
+            speed / at</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-base-fan-min-speed" class="pm-field-input" min="0" max="100"
+              step="5" style="width:52px">
+            <span style="font-size:11px;margin:0 4px">%</span>
+            <input type="number" id="d-base-fan-min-time" class="pm-field-input" min="0.1" max="600"
+              step="1" style="width:52px">
+            <span style="font-size:11px;margin-left:4px">s</span>
+          </span>
+        </div>
+        <div class="pm-field-row" id="row-base-fan-max">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="Fan speed for a FAST base layer, and the layer time at or below which it is used. A layer that prints quickly has had no time to cool, so it needs the most. This time must be strictly SHORTER than the slow-layer time above -- the server rejects the request otherwise rather than guessing what was meant. Planar base only.<br><span style=&quot;color:var(--ink-muted)&quot;>parameters: <code>base_fan_max_speed</code> (0-1 fraction), <code>base_fan_max_layer_time_s</code><br>Default: 100% at 3 s</span>">Max fan
+            speed / at</span>
+          <span class="pm-field-control">
+            <input type="number" id="d-base-fan-max-speed" class="pm-field-input" min="0" max="100"
+              step="5" style="width:52px">
+            <span style="font-size:11px;margin:0 4px">%</span>
+            <input type="number" id="d-base-fan-max-time" class="pm-field-input" min="0.1" max="600"
+              step="1" style="width:52px">
+            <span style="font-size:11px;margin-left:4px">s</span>
+          </span>
+        </div>
+        <div class="pm-field-row" id="row-base-fan-always-on">
+          <span class="pm-field-label fm-hover-target" style="cursor:help;"
+            data-tip-html="During the no-cooling layers above, hold the fan at Min fan speed instead of switching it fully off. NOTE: this app's own reading of OrcaSlicer's &quot;keep fan always on&quot; -- a floor rather than a true off -- and it has not been verified against Orca's source. Planar base only.<br><span style=&quot;color:var(--ink-muted)&quot;>parameter: <code>base_fan_always_on</code><br>Default: off</span>">Keep fan
+            always on</span>
+          <span class="pm-field-control">
+            <input type="checkbox" id="d-base-fan-always-on">
+          </span>
+        </div>
+        <div class="pm-field-note">Curve applies to the planar base only, never the
+          non-planar wall. Ignored while Base fan speed above has a value. Layer
+          times are estimated, and the curve model is a best-effort, unverified
+          reproduction of OrcaSlicer's own.</div>
       </div>
 
     <!-- Tooltip popup (shared, repositioned by JS) -->

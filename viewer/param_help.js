@@ -236,17 +236,62 @@ window.PARAM_HELP = {
     desc: "Boosts extrusion on outward-leaning walls to compensate for under-extrusion on overhangs. 0 = off, higher = more extra flow.",
     param: "overhang_flow_k", def: "0"
   },
+  // The Part Cooling Fan group in the Filament settings modal holds TWO
+  // separate fans covering disjoint parts of a hybrid print -- the non-planar
+  // wall's lean-driven ramp (below) and the planar base's flat speed
+  // (d-hybrid-fan). Labelled "Wall fan .." / "Base fan .." on screen so the
+  // split is readable without a tooltip; keep these descriptions saying which.
   "d-fan-min": {
-    desc: "Part-cooling fan speed on a vertical wall. The fan ramps from this toward Fan max as the wall leans further outward.",
+    desc: "Part-cooling fan speed on a vertical section of the non-planar wall. The fan ramps from this toward Wall fan max as the wall leans further outward. Does not apply to a planar base, which has its own Base fan speed.",
     param: "fan_min (sent as a 0-1 fraction)", def: "100%"
   },
   "d-fan-max": {
-    desc: "Part-cooling fan speed where the wall leans 45 degrees or more outward. Set equal to Fan min for a constant fan speed.",
+    desc: "Part-cooling fan speed where the non-planar wall leans 45 degrees or more outward. Set equal to Wall fan min for a constant fan speed. Does not apply to a planar base, which has its own Base fan speed.",
     param: "fan_max (sent as a 0-1 fraction)", def: "100%"
+  },
+  "d-hybrid-fan": {
+    desc: "Independent part-cooling fan speed for the solid planar base of a hybrid print, separate from the non-planar wall's own Wall fan min/Wall fan max. Blank = the base gets no fan command of its own and the wall's Fan off/Wall fan min logic decides when the fan first turns on.",
+    param: "planar_fan_speed (sent as a 0-1 fraction)", def: "auto (same as the wall's own cold-start setting)"
   },
   "d-fan-off-layers": {
     desc: "Total layers (base + wall) to keep the part-cooling fan off, counted from the very start of the print. 0 = today's default (off through any base, or the wall's first turn if there is no base).",
     param: "fan_off_layers", def: "0"
+  },
+  // Base cooling curve (advanced). Every one of these applies to the PLANAR
+  // BASE ONLY (never the non-planar wall, which keeps its own d-fan-min/
+  // d-fan-max lean ramp), every one is superseded by d-hybrid-fan when that
+  // has a value, and the whole model is a best-effort reproduction of
+  // OrcaSlicer's documented cooling behaviour that has NOT been verified
+  // against Orca's source. Say all three in the descriptions -- these are the
+  // strings the hint panel shows, and a user reading only these must not come
+  // away thinking the numbers match what Orca itself would emit.
+  "d-base-fan-curve": {
+    desc: "Vary the planar base's fan speed layer by layer from each layer's estimated print time, instead of one flat speed. Planar base only -- the non-planar wall keeps its own Wall fan min/max ramp. Ignored while Base fan speed has a value. Layer times are approximate and the curve model is a best-effort, unverified reproduction of OrcaSlicer's own.",
+    param: "base_fan_curve_enabled", def: "off"
+  },
+  "d-base-fan-off-layers": {
+    desc: "Base layers printed with no cooling at all, counted from the base's own first layer. Planar base only; part of the Base cooling curve, so it does nothing while that is off.",
+    param: "base_fan_off_layers", def: "0"
+  },
+  "d-base-fan-min-speed": {
+    desc: "Fan speed for a SLOW base layer -- one that took at least the min layer time, and so has already had time to cool on its own. Planar base only.",
+    param: "base_fan_min_speed (sent as a 0-1 fraction)", def: "0%"
+  },
+  "d-base-fan-min-time": {
+    desc: "Layer time at or above which a base layer counts as slow and gets Min fan speed. Must be strictly longer than the max-fan layer time; the server rejects the request otherwise.",
+    param: "base_fan_min_layer_time_s", def: "10 s"
+  },
+  "d-base-fan-max-speed": {
+    desc: "Fan speed for a FAST base layer -- one that took at most the max layer time, and so has had no time to cool. Planar base only.",
+    param: "base_fan_max_speed (sent as a 0-1 fraction)", def: "100%"
+  },
+  "d-base-fan-max-time": {
+    desc: "Layer time at or below which a base layer counts as fast and gets Max fan speed. Must be strictly shorter than the min-fan layer time.",
+    param: "base_fan_max_layer_time_s", def: "3 s"
+  },
+  "d-base-fan-always-on": {
+    desc: "During the no-cooling layers, hold the fan at Min fan speed instead of switching it fully off. This app's own reading of OrcaSlicer's \"keep fan always on\", not verified against Orca's source. Planar base only.",
+    param: "base_fan_always_on", def: "off"
   },
   "sil-smooth": {
     desc: "Smooths the silhouette curve into a rounder profile instead of straight segments between its control points.",
@@ -261,6 +306,10 @@ window.PARAM_HELP = {
   "d-speed": {
     desc: "Print speed for the main wall. Capped by your printer profile's maximum travel speed.",
     param: "print_speed", def: "40 mm/s"
+  },
+  "d-radius-speed": {
+    desc: "Scales the wall's feedrate down where its local radius is small, so a narrow section takes closer to the same time per turn as a wide one and each spot gets a more even amount of time to cool before the next turn lands on it. Only ever slows the print down, never past the Print speed above. Unvalidated first pass: a plain radius ratio, not a measured cooling curve, and not yet print-tested. Applies to the parametric wall only (not loop fabric or STL texture mode).",
+    param: "radius_speed_comp", def: "off"
   },
   "d-filament": {
     desc: "Filament profile to pull temperature and flow settings from, when an Orca filament library is available on the server. (generic PLA) uses this app's built-in conservative defaults.",
@@ -288,10 +337,8 @@ window.PARAM_HELP = {
     desc: "How high the nozzle lifts above the print before a travel move -- the initial approach, any skirt, and the seam between a hybrid print's planar base and its non-planar wall all use this. 0 disables the lift.",
     param: "travel_clearance", def: "5 mm"
   },
-  "d-hybrid-fan": {
-    desc: "Independent part-cooling fan speed for the solid planar base, separate from the non-planar wall's own Fan min/Fan max. Blank = the base follows the wall's own Fan off/Fan min setting instead.",
-    param: "planar_fan_speed (sent as a 0-1 fraction)", def: "auto (same as the wall's own cold-start setting)"
-  },
+  // d-hybrid-fan moved up into the Cooling & flow block above, next to the two
+  // wall-fan entries it is now displayed beside in the Part Cooling Fan group.
   "d-zhop-type": {
     desc: "Shape of that lift-and-travel. Only takes effect at the hybrid/mesh-hybrid seam (the one travel guaranteed to already have a real toolhead position to shape a lift from). Auto: today's default, a diagonal rise-and-approach then a straight drop. Normal: straight up in place, across, straight down. Slope: one smooth ramp instead of a sharp corner. Spiral: a small in-place helical rise instead of an instant vertical jump.",
     param: "z_hop_type", def: "Auto"
@@ -419,7 +466,7 @@ window.PARAM_HELP = {
     param: "zone_overrides[].blend (sent as a fraction of height)", def: "small (about 2% of height)"
   },
   "zo-pattern": {
-    desc: "Texture pattern used inside this band. \"(use global)\" inherits the Texture pattern step's own setting; \"none\" explicitly smooths this band even if a global pattern is set elsewhere.",
+    desc: "Texture pattern used inside this band. \"(use global)\" inherits the Texture pattern step's own setting; \"none\" explicitly smooths this band even if a global pattern is set elsewhere. The list is the seven radial-displacement patterns only -- \"loops (hanging strands)\" from the global dropdown is not a surface displacement but a different wall generator (stitched rows in place of the spiral wall), so it can only be set globally, never for a single band.",
     param: "zone_overrides[].pattern", def: "(use global)"
   },
   "zo-depth": {

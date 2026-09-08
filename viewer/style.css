@@ -682,6 +682,18 @@ canvas {
   opacity: 0.45;
 }
 
+/* Same token, same meaning, in the Filament settings modal -- the Wipe rows
+   under "Wipe while retracting" and the Base cooling curve rows under "Use
+   cooling curve" both already ask for .row-inert from designer.js
+   (syncWipeRows / syncBaseFanCurveRows), but the rule above is scoped to
+   .planar-panel, so in the modal the class landed on the element and painted
+   nothing. Scoped rather than made global for the same reason the original
+   was: this is a panel-local presentation choice, not a site-wide state.
+   Still plain opacity on the neutral surface -- no reserved token. */
+.pm-modal .row-inert {
+  opacity: 0.45;
+}
+
 .panel-scroll {
   padding: 8px 10px;
   overflow-y: auto;
@@ -3304,6 +3316,15 @@ input[type=radio]:active:not(:disabled) {
   margin-top: var(--sp-2);
 }
 
+/* .zo-row is a wrapping flex row; a caution is a sentence about the fields
+   above it, not another field beside them, so it claims a whole line of its
+   own instead of being squeezed between two inputs. Scoped to the always-on
+   Texture note -- the twist caution appears last in the row and already
+   wraps on its own. */
+.zo-row>.zo-pattern-note {
+  flex-basis: 100%;
+}
+
 .zo-modal {
   position: fixed;
   inset: 0;
@@ -3978,6 +3999,21 @@ button.pm-issue-msg:hover {
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+}
+
+/* A standing caption under a .pm-field-row, for the one case a field's scope
+   cannot be read off its own label: "Base fan speed" is shown even on a design
+   with no planar base, because this modal is per-filament-profile, not
+   per-current-model (see its comment in index.html). Deliberately NOT a .hint,
+   for the same reason as .sel-count and .limit-note above -- the hint-density
+   toggle hides .hint, and this sentence is the only thing on screen saying when
+   the control above it does anything. Sits directly under the row it belongs
+   to: no top margin, and the row's own bottom border already separates them. */
+.pm-field-note {
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  line-height: 1.45;
+  margin: 4px 0 0;
 }
 
 .pm-field-input {

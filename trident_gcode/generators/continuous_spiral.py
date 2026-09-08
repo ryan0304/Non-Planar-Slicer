@@ -460,6 +460,18 @@ def build_continuous_spiral(
                 continue          # wall replaced by a loop strand here
             x, y, z = cx + p.x, cy + p.y, base_z + p.z
             speed = writer.first_layer_speed if i <= ppt else writer.print_speed
+            # Radius-based speed compensation (SpiralSpec.radius_speed_comp,
+            # see paths.py's radius_speed_scale). None when off -- the default
+            # -- so `speed` is untouched and output stays byte-identical.
+            # Deliberately NOT applied to the first turn: that bead sits on the
+            # bed with nothing under it to cool, so the whole time-per-turn
+            # argument does not apply there, and first_layer_speed is already
+            # the slowest speed in the print (an adhesion setting, not a
+            # cooling one). Never raises a speed -- the scale is <= 1.0 -- and
+            # the machine ceiling is still applied downstream by extrude_to ->
+            # clamp_feedrate_for_z against the selected PrinterProfile.
+            if i > ppt and p.speed_scale is not None:
+                speed *= p.speed_scale
             if i == fan_on_i:
                 writer.set_fan(_overhang_fan(p.tilt, fan_overhang_min, fan_overhang_max)
                                if fan_overhang_active else writer.fan_speed)
@@ -549,6 +561,12 @@ def build_continuous_spiral(
                 lh_over, flow_over = lh, first_layer_flow
             else:
                 speed = writer.print_speed
+                # Radius-based speed compensation -- same contract as the
+                # plain-spiral branch above (None when off => untouched). This
+                # branch IS "not first_turn", so the first-turn exclusion is
+                # already handled by the if/else itself.
+                if p.speed_scale is not None:
+                    speed *= p.speed_scale
                 lh_over, flow_over = p.gap, 1.0
             t_frac = i / max(total_pts - 1, 1)
             cb_flow = flow_callback(t_frac) if (flow_callback is not None and not first_turn) else 1.0

@@ -68,7 +68,11 @@ from trident_gcode.orca_slice import (OrcaSliceError, _ALLOWED_BRIM_TYPES,
                                       _ALLOWED_SUPPORT_TYPES,
                                       _ALLOWED_WALL_GENERATORS,
                                       _ALLOWED_WALL_SEQUENCES)
-from trident_gcode.hybrid import build_hybrid_print, build_mesh_hybrid_print
+from trident_gcode.hybrid import (
+    BaseFanCurve,
+    build_hybrid_print,
+    build_mesh_hybrid_print,
+)
 
 DEFAULT_PRINTER_KEY = "trident"
 
@@ -1455,6 +1459,104 @@ def _parse_planar_fan_speed(body):
     return max(0.0, min(val, 100.0)) / 100.0
 
 
+def _parse_base_fan_curve(body):
+    """Parse the hybrid planar base's layer-time-driven cooling curve into a
+    ``BaseFanCurve``, or None when the master gate is off.
+
+    ``base_fan_curve_enabled`` is a real boolean gate (default OFF), not a
+    "0 means off" numeric like hybrid_base_height: when it is false NONE of
+    the other fields are read at all, so there is no question of what counts
+    as an untouched default for the five numeric/boolean knobs, and today's
+    output stays byte-identical by construction. Same "absence is a real
+    value" contract as wipe_enabled / mesh_base_enable_support.
+
+    Scope, and the precedence rule -- both worth stating here because this is
+    the only place a client can see them: the curve applies to the PLANAR
+    BASE ONLY (the non-planar wall keeps its own separate tilt-driven
+    fan_overhang_min/fan_overhang_max ramp), and the flat
+    ``planar_fan_speed`` override WINS OUTRIGHT over it. If a request sets
+    both, the base prints at the flat speed and this curve is ignored --
+    hybrid.py's _slice_replay_and_seam is where that is enforced, and its
+    base_fan_curve docstring says why.
+
+    The curve model itself is a BEST-EFFORT REPRODUCTION of OrcaSlicer's
+    documented cooling behaviour, NOT verified against Orca's own source --
+    see trident_gcode/hybrid.py's base_fan_fraction() for the exact formula
+    and for which parts of it are this app's own interpretation.
+
+    Clamps and rejections, at least as strict as the UI's (CLAUDE.md: a buggy
+    or malicious client must not be able to get past this):
+
+    * every numeric field goes through _finite (rejected, never clamped, on
+      NaN/Infinity -- json.loads accepts those bare tokens),
+    * speeds arrive as 0-100 percentages (planar_fan_speed's own wire
+      convention) and are clamped into 0..1,
+    * layer times must be > 0 -- a threshold of 0 s or a negative one is not
+      a slow/fast boundary, it is a malformed request,
+    * layer counts are clamped to >= 0 and to a sane ceiling, and
+    * the two layer-time thresholds must be strictly ordered
+      (max_layer_time_s < min_layer_time_s). base_fan_fraction() has its own
+      degenerate-threshold guard so a direct Python caller cannot divide by
+      zero either, but a REQUEST that inverts them is rejected here rather
+      than silently reinterpreted as a step function the user did not ask
+      for.
+    """
+    if not body.get("base_fan_curve_enabled"):
+        return None
+
+    def _finite(name, raw, default):
+        if raw is None or raw == "":
+            raw = default
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError("%s must be a finite number, got %r" % (name, raw))
+        if not math.isfinite(val):
+            raise ValueError(
+                "%s must be a finite number, got %r -- a non-finite value "
+                "passes every comparison downstream instead of tripping "
+                "it, so it is rejected here rather than clamped."
+                % (name, raw))
+        return val
+
+    off_layers = int(max(0.0, min(
+        _finite("base_fan_off_layers", body.get("base_fan_off_layers"), 0), 1000.0)))
+
+    min_speed = max(0.0, min(
+        _finite("base_fan_min_speed", body.get("base_fan_min_speed"), 0.0),
+        100.0)) / 100.0
+    max_speed = max(0.0, min(
+        _finite("base_fan_max_speed", body.get("base_fan_max_speed"), 100.0),
+        100.0)) / 100.0
+
+    min_layer_time_s = _finite(
+        "base_fan_min_layer_time_s", body.get("base_fan_min_layer_time_s"), 10.0)
+    max_layer_time_s = _finite(
+        "base_fan_max_layer_time_s", body.get("base_fan_max_layer_time_s"), 3.0)
+    for name, val in (("base_fan_min_layer_time_s", min_layer_time_s),
+                      ("base_fan_max_layer_time_s", max_layer_time_s)):
+        if not (val > 0.0):
+            raise ValueError(
+                "%s must be greater than 0 seconds, got %r" % (name, val))
+    if not (max_layer_time_s < min_layer_time_s):
+        raise ValueError(
+            "base_fan_max_layer_time_s (%r) must be strictly less than "
+            "base_fan_min_layer_time_s (%r): the fast-layer threshold is the "
+            "SHORTER time (a layer that prints quickly gets more cooling) and "
+            "the slow-layer threshold the longer one. Equal or inverted "
+            "values leave no range to interpolate across."
+            % (max_layer_time_s, min_layer_time_s))
+
+    return BaseFanCurve(
+        off_layers=off_layers,
+        min_speed=min_speed,
+        min_layer_time_s=min_layer_time_s,
+        max_speed=max_speed,
+        max_layer_time_s=max_layer_time_s,
+        always_on=bool(body.get("base_fan_always_on")),
+    )
+
+
 def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | None:
     """Extract hanging-loop parameters from the request body.
 
@@ -1581,6 +1683,17 @@ def generate_design(body):
     pattern_fade_out = max(0.0, min(float(body.get("pattern_fade_out", 0.0)), 0.5))
     pattern_alternate = bool(body.get("pattern_alternate", False))
 
+    # Radius-based speed compensation: slow the wall down where its local
+    # radius is small so each spot gets closer to the same time to cool
+    # before the next turn lands on it (paths.py's radius_speed_scale).
+    # A plain bool over the wire, same convention as pattern_alternate above
+    # -- no millimetre figure crosses this boundary, so there is no
+    # non-finite float to reject and no machine limit to clamp: the ceiling
+    # stays clamp_feedrate_for_z()'s, from the selected PrinterProfile. The
+    # scale itself can only ever be <= 1.0, so a hostile client cannot use
+    # this field to request a print FASTER than it already asked for.
+    radius_speed_comp = bool(body.get("radius_speed_comp", False))
+
     amp_profile = body.get("amp_profile") or [[0, 0.0], [1, 0.0]]
     radius_profile = body.get("radius_profile") or [[0, 1.0], [1, 1.0]]
     radius_profile_smooth = bool(body.get("radius_profile_smooth", False))
@@ -1673,6 +1786,11 @@ def generate_design(body):
     # Only meaningful for a hybrid/mesh-hybrid planar base -- see
     # _parse_planar_fan_speed's own docstring.
     planar_fan_speed = _parse_planar_fan_speed(body)
+    # Layer-time-driven cooling curve for that same planar base. None unless
+    # the client explicitly turned base_fan_curve_enabled on, and superseded
+    # outright by planar_fan_speed when both are set -- see
+    # _parse_base_fan_curve's own docstring.
+    base_fan_curve = _parse_base_fan_curve(body)
 
     # Fail fast on a height that cannot fit whatever the waves do.
     #
@@ -1745,6 +1863,7 @@ def generate_design(body):
         ovality=ovality,
         cage=cage,
         zones=zone_specs or None,
+        radius_speed_comp=radius_speed_comp,
     )
     shape = _make_shape(shape_name, radius, star_points, star_depth)
 
@@ -1869,6 +1988,7 @@ def generate_design(body):
     fan_overhang_issue = None
     loop_base_issue = None
     zone_scope_issue = None
+    radius_speed_scope_issue = None
     zone_empty_issue = None
     hybrid_scope_issue = None
     mesh_hybrid_scope_issue = None
@@ -1909,6 +2029,16 @@ def generate_design(body):
             zone_scope_issue = (
                 "zone overrides only apply to the parametric wall (not loop "
                 "fabric) - ignored for this design.")
+        if radius_speed_comp:
+            # Loop fabric is a different point generator entirely
+            # (loop_fabric.py: knitted rows of stitches, not a spiral of
+            # wall points), so there is no per-point speed of the wall kind
+            # for the radius scale to multiply -- exactly the same reason
+            # Zone Overrides do not reach it. Say so rather than accepting a
+            # switch that silently does nothing.
+            radius_speed_scope_issue = (
+                "variable speed by radius only applies to the parametric wall "
+                "(not loop fabric) - ignored for this design.")
         if fan_overhang_min != fan_overhang_max:
             fan_overhang_issue = (
                 "fan min/max only ramp on the parametric wall (loop fabric has "
@@ -1974,11 +2104,13 @@ def generate_design(body):
             xy_twist_turns=xy_twist, cage=cage, ovality=ovality,
             spine_offset=spine_offset,
             zones=zone_specs or None,
+            radius_speed_comp=radius_speed_comp,
             overhang_flow_k=overhang_flow_k,
             fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
             fan_off_layers=fan_off_layers, width_callback=width_fn,
             travel_z_clearance=travel_clearance, z_hop_type=z_hop_type,
             planar_fan_speed=planar_fan_speed,
+            base_fan_curve=base_fan_curve,
         )
     elif mesh_hybrid_params is not None:
         # Same scope as the parametric hybrid branch above: Zone Overrides now
@@ -2013,11 +2145,13 @@ def generate_design(body):
             xy_twist_turns=xy_twist, cage=cage, ovality=ovality,
             spine_offset=spine_offset,
             zones=zone_specs or None,
+            radius_speed_comp=radius_speed_comp,
             overhang_flow_k=overhang_flow_k,
             fan_overhang_min=fan_overhang_min, fan_overhang_max=fan_overhang_max,
             fan_off_layers=fan_off_layers, width_callback=width_fn,
             travel_z_clearance=travel_clearance, z_hop_type=z_hop_type,
             planar_fan_speed=planar_fan_speed,
+            base_fan_curve=base_fan_curve,
         )
         # The printable-overhang check blend_stack() deliberately does NOT
         # apply itself (CLAUDE.md: no machine limit may be a module constant
@@ -2105,6 +2239,8 @@ def generate_design(body):
         issues_extra.append(loop_base_issue)
     if zone_scope_issue:
         issues_extra.append(zone_scope_issue)
+    if radius_speed_scope_issue:
+        issues_extra.append(radius_speed_scope_issue)
     if zone_empty_issue:
         issues_extra.append(zone_empty_issue)
     if hybrid_scope_issue:
@@ -2802,6 +2938,18 @@ def generate_mesh_texture_design(body):
         issues_extra.append(
             "zone overrides only apply to the parametric wall (not an "
             "uploaded mesh) - ignored for this design.")
+    # Radius-based speed compensation normalizes each point's local radius
+    # against the design's NOMINAL radius (paths.py's radius_speed_scale).
+    # A mesh-derived contour stack has no such number -- only a peak radius,
+    # which would need a second full pass to compute and would still be the
+    # wrong reference (see radius_speed_scale's own docstring). Rather than
+    # invent one, decline it here and say so, the same way zone overrides
+    # are declined just above.
+    if body.get("radius_speed_comp"):
+        issues_extra.append(
+            "variable speed by radius only applies to the parametric wall "
+            "(an uploaded mesh has no nominal radius to scale against) - "
+            "ignored for this design.")
 
     stats = {
         "wave_slope": round(peak_slope, 3),

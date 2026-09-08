@@ -271,10 +271,19 @@
     mesh_base_support_first_layer_gap: null,
     mesh_base_skirt_loops: null, mesh_base_brim_gap: null,
     star_points: 5, star_depth: 0.35,
-    print_speed: 40, filament: "", line_width: null, nozzle_temp: null, bed_temp: null,
+    print_speed: 40, radius_speed_comp: false,
+    filament: "", line_width: null, nozzle_temp: null, bed_temp: null,
     retraction_length: null, retraction_speed: null, unretract_speed: null, travel_clearance: null,
     wipe_enabled: false, wipe_distance: 0, retract_before_wipe: 100,
     z_hop_type: 'auto', planar_fan_speed: null,
+    // Base cooling curve (Filament settings > Planar base fan). Planar base
+    // only, superseded by planar_fan_speed, and none of the five numeric/bool
+    // fields is sent unless base_fan_curve_enabled is true -- see
+    // buildGenerateBody's sendBaseFanCurve().
+    base_fan_curve_enabled: false, base_fan_off_layers: 0,
+    base_fan_min_speed: 0, base_fan_min_layer_time_s: 10,
+    base_fan_max_speed: 100, base_fan_max_layer_time_s: 3,
+    base_fan_always_on: false,
     pattern: "", pattern_amp: 1.0, pattern_waves: 12,
     pattern_bands: 6, pattern_twist: 0, pattern_phase: 0,
     pattern_fade_in: 0.10, pattern_fade_out: 0, pattern_alternate: false,
@@ -4527,15 +4536,14 @@
   document.getElementById('d-hybrid-height').addEventListener('input', function(){
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
     if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+    if(typeof updateRadiusSpeedScopeNote === 'function') updateRadiusSpeedScopeNote();
   });
   bindNumber('d-hybrid-walls', 'hybrid_wall_count', true);
   bindNumber('d-hybrid-infill', 'hybrid_infill_density');
   bindSelect('d-hybrid-pattern', 'hybrid_infill_pattern');
-  // Independent planar-base fan speed -- shared by BOTH hybrid bases
-  // (parametric hybrid_base_height and mesh-hybrid mesh_base_id): only one
-  // is ever active at a time (server-enforced), so one control/one design
-  // field covers both; see buildGenerateBody()'s two send-sites.
-  bindOptionalNumber('d-hybrid-fan', 'planar_fan_speed');
+  // planar_fan_speed (#d-hybrid-fan) is bound down with the wall fan sliders,
+  // in the Filament settings modal's Part Cooling Fan group where it now
+  // lives -- it is a fan setting, not a base-geometry one.
   bindNumber('d-meshbase-blend', 'mesh_base_blend_height');
   bindSelect('d-meshbase-seam-style', 'mesh_base_seam_style');
   // Seam intensity slider (UI label; design field stays mesh_base_seam_coverage,
@@ -5078,6 +5086,77 @@
     bindFanSlider('d-fan-max', 'fan-max-read', 'fan_overhang_max');
   })();
 
+  // Independent planar-base fan speed (Filament settings modal, Part Cooling
+  // Fan group, under its own "Planar base fan" heading beside the two wall
+  // sliders above). Shared by BOTH hybrid bases (parametric
+  // hybrid_base_height and mesh-hybrid mesh_base_id): only one is ever active
+  // at a time (server-enforced), so one control/one design field covers both;
+  // see buildGenerateBody()'s two send-sites.
+  //
+  // Deliberately NOT one of OVERRIDE_FIELDS in the Filament Edit modal block:
+  // those are fields with a per-filament default to fall back to and a reset
+  // arrow to restore it. This one has no filament default at all -- blank
+  // means "emit no base fan command", which is a real setting, not an unset
+  // one -- so bindOptionalNumber's plain blank-is-null handling is right, and
+  // openFModal has nothing to re-seed here (its DOM value survives the modal's
+  // display:none, and applyDesignToUI restores it on reload).
+  //
+  // Also deliberately never hidden: unlike the Model tab's hybrid geometry
+  // rows (refreshShapeRows below hides those when a mesh base is active), this
+  // is a per-filament-profile setting shown regardless of what the current
+  // design's shape happens to be -- the same convention as the two wall
+  // sliders. #row-hybrid-fan's static .pm-field-note in index.html says when
+  // it takes effect instead.
+  bindOptionalNumber('d-hybrid-fan', 'planar_fan_speed');
+
+  // Base cooling curve (Filament settings modal, Planar base fan group).
+  // Same checkbox-gates-its-own-rows shape as the Wipe block further down:
+  // the dependent rows are DIMMED (row-inert), not hidden, so a saved curve
+  // stays readable while the gate is off. Declared as a plain function, not
+  // inside an IIFE, so applyDesignToUI's restore block can call it after
+  // assigning design.base_fan_curve_enabled -- exactly like syncWipeRows().
+  //
+  // The five numeric/boolean fields are plain bindNumber/checkbox bindings and
+  // always live in `design`; whether they are SENT is decided in one place
+  // (buildGenerateBody's sendBaseFanCurve), keyed off the gate alone. Nothing
+  // here needs to know that the server ignores them when the gate is off.
+  function syncBaseFanCurveRows(){
+    var on = !!design.base_fan_curve_enabled;
+    ['note-base-fan-layer', 'row-base-fan-off-layers',
+     'note-base-fan-part', 'row-base-fan-min', 'row-base-fan-max',
+     'row-base-fan-always-on'].forEach(function(id){
+      var row = document.getElementById(id);
+      if(row) row.classList.toggle('row-inert', !on);
+    });
+  }
+  (function(){
+    var gateEl = document.getElementById('d-base-fan-curve');
+    if(gateEl){
+      gateEl.checked = !!design.base_fan_curve_enabled;
+      gateEl.addEventListener('change', function(){
+        design.base_fan_curve_enabled = gateEl.checked;
+        persistDesign();
+        syncBaseFanCurveRows();
+        schedulePreview();
+      });
+    }
+    var alwaysEl = document.getElementById('d-base-fan-always-on');
+    if(alwaysEl){
+      alwaysEl.checked = !!design.base_fan_always_on;
+      alwaysEl.addEventListener('change', function(){
+        design.base_fan_always_on = alwaysEl.checked;
+        persistDesign();
+        schedulePreview();
+      });
+    }
+    syncBaseFanCurveRows();
+  })();
+  bindNumber('d-base-fan-off-layers', 'base_fan_off_layers', true);
+  bindNumber('d-base-fan-min-speed', 'base_fan_min_speed');
+  bindNumber('d-base-fan-min-time', 'base_fan_min_layer_time_s');
+  bindNumber('d-base-fan-max-speed', 'base_fan_max_speed');
+  bindNumber('d-base-fan-max-time', 'base_fan_max_layer_time_s');
+
   // Z-hop type (Filament settings modal, Retraction group) -- only takes
   // effect at the hybrid/mesh-hybrid seam (build_profile_spiral's
   // resume=True path); see the field's own tooltip and serve.py's
@@ -5527,6 +5606,34 @@
   }
   document.getElementById('d-pattern').addEventListener('change', updateZoneScopeNote);
 
+  // Variable speed by radius (Print tab) has EXACTLY the same scope as Zone
+  // Overrides above, for the same reason and by the same test:
+  //  * loop fabric -- a different point generator entirely (knitted rows of
+  //    stitches, not a spiral of wall points), so there is no per-point wall
+  //    speed to scale; the server says so too (serve.py's loop-fabric
+  //    branch), this just says it before the user generates.
+  //  * STL texture mode -- a mesh-derived contour stack has no nominal
+  //    radius to normalize against, only a peak one (see paths.py's
+  //    radius_speed_scale docstring).
+  //  * A hybrid or mesh-hybrid PLANAR BASE is in scope, exactly like zones:
+  //    the toggle reaches the non-planar wall above the seam and never the
+  //    Orca-sliced base below it, so mesh_base_mode === 'planar_base' is
+  //    deliberately NOT treated as out of scope here.
+  // Unlike the zone button (a note only), the checkbox is also disabled
+  // out of scope, so it cannot be switched on to do nothing.
+  function updateRadiusSpeedScopeNote(){
+    var note = document.getElementById('radius-speed-scope-note');
+    var en = document.getElementById('d-radius-speed');
+    var hint = document.getElementById('radius-speed-hint');
+    var outOfScope = design.pattern === 'loops'
+      || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id
+            && design.mesh_base_mode !== 'planar_base');
+    if(note) note.style.display = outOfScope ? '' : 'none';
+    if(en) en.disabled = outOfScope;
+    if(hint) hint.style.display = (!outOfScope && design.radius_speed_comp) ? 'block' : 'none';
+  }
+  document.getElementById('d-pattern').addEventListener('change', updateRadiusSpeedScopeNote);
+
   function positionZoneAxisEls(idx, band, hLo, hHi, axisH){
     var z = (design.zone_overrides || [])[idx];
     if(!z) return;
@@ -5798,6 +5905,29 @@
       var depthInput = depthField.querySelector('input');
       depthInput.disabled = !z.pattern;
       row.appendChild(depthField);
+      // ZONE_PATTERNS is the 7 RADIAL-displacement patterns (paths.py's
+      // _R_PATTERNS) that spiral_path()'s crossfade can blend between bands.
+      // The global Texture dropdown lists an 8th entry, "loops", which is not
+      // one of them: it swaps the whole wall generator for build_loop_fabric()
+      // (discrete stitched rows, no continuous spiral to displace), so there
+      // is nothing for a height band to blend. Sending it as a zone pattern
+      // would raise ValueError in _r_pattern_fn(). Stated here, always, rather
+      // than leaving the shorter list looking like an oversight -- the same
+      // reasoning as the xy-twist no-op note below. #zo-scope-note covers the
+      // DIFFERENT case (the global pattern already IS loops).
+      // Deliberately NOT a .hint, the same reasoning as .sel-count and
+      // #amp-limit-hint in style.css: the hint-density toggle hides .hint,
+      // and this sentence is not commentary on a control that is present --
+      // it is the only explanation of a control that is ABSENT. Hidden, the
+      // shorter list just looks like a bug again.
+      var loopsNote = document.createElement('div');
+      loopsNote.className = 'zo-caution zo-pattern-note';
+      loopsNote.textContent =
+        'Texture has no "loops (hanging strands)" option: loop fabric ' +
+        'replaces the whole wall with stitched rows instead of displacing ' +
+        'this band\'s surface, so it cannot be confined to one zone. Choose ' +
+        'it as the global Texture pattern instead.';
+      row.appendChild(loopsNote);
       pSel.addEventListener('change', function(){
         z.pattern = pSel.value || '';
         depthInput.disabled = !z.pattern;
@@ -6204,6 +6334,26 @@
   bindSelect('d-nozzle', 'nozzle');
   document.getElementById('d-nozzle').addEventListener('change', function(){ widthEditor.draw(); });
   bindNumber('d-speed', 'print_speed');
+  // Variable speed by radius -- same checkbox pattern as d-palternate (Open
+  // lattice) in the Texture tab: set from state, listen for change, write
+  // design.<field>, persist, re-preview. The explanatory hint follows the
+  // checkbox; the scope note is driven by updateRadiusSpeedScopeNote() below,
+  // which also runs on load and whenever the pattern/mesh state changes.
+  (function(){
+    var en = document.getElementById('d-radius-speed');
+    var hint = document.getElementById('radius-speed-hint');
+    if(!en) return;
+    en.checked = !!design.radius_speed_comp;
+    if(hint) hint.style.display = en.checked ? 'block' : 'none';
+    en.addEventListener('change', function(){
+      design.radius_speed_comp = en.checked;
+      if(hint) hint.style.display = en.checked ? 'block' : 'none';
+      updateRadiusSpeedScopeNote();
+      persistDesign();
+      schedulePreview();
+    });
+    updateRadiusSpeedScopeNote();   // initial state (pattern/mesh may already rule it out)
+  })();
   bindSelect('d-filament', 'filament');
   (function(){
     var el = document.getElementById('d-lwoverride');
@@ -6461,6 +6611,12 @@
     r.addEventListener('change', function(){
       if(!r.checked) return;
       design.mesh_base_mode = r.value;
+      // Switching between "planar base" and "texture" moves the variable-
+      // speed-by-radius toggle in or out of scope (a planar base still has a
+      // parametric wall above the seam; texture mode has no nominal radius),
+      // and that toggle DISABLES its checkbox out of scope -- so it has to be
+      // re-evaluated here or the control is left stale.
+      if(typeof updateRadiusSpeedScopeNote === 'function') updateRadiusSpeedScopeNote();
       persistDesign();
       refreshShapeRows();
       schedulePreview();
@@ -7006,7 +7162,7 @@
     _set('d-hybrid-walls', design.hybrid_wall_count || 3);
     _set('d-hybrid-infill', design.hybrid_infill_density != null ? design.hybrid_infill_density : 0.15);
     _set('d-hybrid-pattern', design.hybrid_infill_pattern || 'grid');
-    _set('d-hybrid-fan', design.planar_fan_speed != null ? design.planar_fan_speed : '');
+    // d-hybrid-fan is restored with the other fan controls further down.
     _set('d-meshbase-blend', design.mesh_base_blend_height || 0);
     _set('d-meshbase-seam-style', design.mesh_base_seam_style || 'fillet');
     var mbSeamCovSlider = document.getElementById('d-meshbase-seam-coverage');
@@ -7060,6 +7216,9 @@
     var latticeHintEl = document.getElementById('lattice-hint');
     if(latticeHintEl) latticeHintEl.style.display = design.pattern_alternate ? 'block' : 'none';
     document.getElementById('d-speed').value = design.print_speed;
+    var radiusSpeedEl = document.getElementById('d-radius-speed');
+    if(radiusSpeedEl) radiusSpeedEl.checked = !!design.radius_speed_comp;
+    if(typeof updateRadiusSpeedScopeNote === 'function') updateRadiusSpeedScopeNote();
     var lwEl = document.getElementById('d-lwoverride');
     if(lwEl) lwEl.value = design.line_width != null ? design.line_width : '';
     var nozzleTempEl = document.getElementById('d-nozzletemp');
@@ -7099,7 +7258,10 @@
     if(ohSlider){ ohSlider.value = design.overhang_flow_k || 0; }
     var ohRead = document.getElementById('overhang-k-read');
     if(ohRead) ohRead.textContent = (design.overhang_flow_k || 0).toFixed(2);
-    // Fan min/max (speed selected by wall lean)
+    // Part Cooling Fan group (Filament settings modal): the non-planar wall's
+    // lean-driven ramp, then the planar base's own flat speed. Blank, not 0,
+    // is "unset" for the base speed -- 0% is a legitimate setting meaning
+    // "hold the base fan off explicitly", which is not the same as auto.
     var fanMinSlider = document.getElementById('d-fan-min');
     if(fanMinSlider){ fanMinSlider.value = design.fan_overhang_min != null ? design.fan_overhang_min : 100; }
     var fanMinRead = document.getElementById('fan-min-read');
@@ -7108,6 +7270,26 @@
     if(fanMaxSlider){ fanMaxSlider.value = design.fan_overhang_max != null ? design.fan_overhang_max : 100; }
     var fanMaxRead = document.getElementById('fan-max-read');
     if(fanMaxRead) fanMaxRead.textContent = (design.fan_overhang_max != null ? design.fan_overhang_max : 100) + '%';
+    _set('d-hybrid-fan', design.planar_fan_speed != null ? design.planar_fan_speed : '');
+    // Base cooling curve: two checkboxes plus six numerics, then re-dim the
+    // dependent rows -- same restore shape as the Wipe block above. Defaults
+    // spelled out here (not `|| 0`) because 0 is a legitimate value for every
+    // one of these, so `||` would silently rewrite a saved 0% fan speed as
+    // 100% and a saved 0-layer count as whatever the fallback happened to be.
+    var baseFanGateEl = document.getElementById('d-base-fan-curve');
+    if(baseFanGateEl) baseFanGateEl.checked = !!design.base_fan_curve_enabled;
+    var baseFanAlwaysEl = document.getElementById('d-base-fan-always-on');
+    if(baseFanAlwaysEl) baseFanAlwaysEl.checked = !!design.base_fan_always_on;
+    [['d-base-fan-off-layers', 'base_fan_off_layers', 0],
+     ['d-base-fan-min-speed', 'base_fan_min_speed', 0],
+     ['d-base-fan-min-time', 'base_fan_min_layer_time_s', 10],
+     ['d-base-fan-max-speed', 'base_fan_max_speed', 100],
+     ['d-base-fan-max-time', 'base_fan_max_layer_time_s', 3]
+    ].forEach(function(row){
+      var el = document.getElementById(row[0]);
+      if(el) el.value = design[row[1]] != null ? design[row[1]] : row[2];
+    });
+    if(typeof syncBaseFanCurveRows === 'function') syncBaseFanCurveRows();
     var fanOffEl = document.getElementById('d-fan-off-layers');
     if(fanOffEl) fanOffEl.value = design.fan_off_layers || 0;
     ampEditor.setProfile(design.amp_profile);
@@ -7132,6 +7314,7 @@
     if(typeof window.__applyZoneUIFromDesign === 'function') window.__applyZoneUIFromDesign();
     if(typeof updateZoneActiveDot === 'function') updateZoneActiveDot();
     if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+    if(typeof updateRadiusSpeedScopeNote === 'function') updateRadiusSpeedScopeNote();
     persistDesign();
     refreshShapeRows();
     refreshPatternRows();
@@ -7469,6 +7652,7 @@
     showMeshCheck(data.vase_check);
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
     if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+    if(typeof updateRadiusSpeedScopeNote === 'function') updateRadiusSpeedScopeNote();
   }
 
   // We keep only the largest contour per layer, so holes and islands are dropped
@@ -7586,6 +7770,7 @@
     if (stlFile) stlFile.value = '';
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
     if(typeof updateZoneScopeNote === 'function') updateZoneScopeNote();
+    if(typeof updateRadiusSpeedScopeNote === 'function') updateRadiusSpeedScopeNote();
     // Clearing the mesh can turn loops back into fabric (loop-fabric hides
     // base/brim/skirt) - re-evaluate those rows.
     refreshShapeRows();
@@ -7601,6 +7786,28 @@
   // Shared by the Generate and Export STL buttons -- both send the same
   // design snapshot to the server, just to different endpoints, so the body
   // assembly lives in one place instead of drifting out of sync.
+  // Base cooling curve -> request body. ONE definition, called from both
+  // planar-base branches of buildGenerateBody below (the parametric hybrid and
+  // the mesh base), exactly like the planar_fan_speed lines beside each call.
+  //
+  // Nothing is sent unless the gate is on: the server reads none of these
+  // fields without base_fan_curve_enabled (serve.py's _parse_base_fan_curve),
+  // so an untouched sub-section cannot change a byte of output, and a design
+  // saved with curve values but the gate off generates exactly as it did
+  // before this control existed. Speeds go out as 0-100 percentages, the same
+  // wire convention planar_fan_speed and the wall's fan_min/fan_max already
+  // use; the server does the /100.
+  function sendBaseFanCurve(body){
+    if(!design.base_fan_curve_enabled) return;
+    body.base_fan_curve_enabled = true;
+    body.base_fan_off_layers = Math.round(design.base_fan_off_layers || 0);
+    body.base_fan_min_speed = design.base_fan_min_speed != null ? design.base_fan_min_speed : 0;
+    body.base_fan_max_speed = design.base_fan_max_speed != null ? design.base_fan_max_speed : 100;
+    body.base_fan_min_layer_time_s = design.base_fan_min_layer_time_s != null ? design.base_fan_min_layer_time_s : 10;
+    body.base_fan_max_layer_time_s = design.base_fan_max_layer_time_s != null ? design.base_fan_max_layer_time_s : 3;
+    if(design.base_fan_always_on) body.base_fan_always_on = true;
+  }
+
   function buildGenerateBody(){
     var baseSpec = effectiveBaseSpec();
     var body = {
@@ -7624,6 +7831,11 @@
       skirt: baseSpec.skirt,
       first_layer_spacing_factor: design.spacing_factor,
       print_speed: design.print_speed,
+      // Variable speed by radius: a plain bool, always sent (the server
+      // defaults it to False anyway). Not gated on the pattern dropdown the
+      // way pattern_* fields are -- it is independent of the texture, and
+      // the server declines it for loop fabric / STL texture mode itself.
+      radius_speed_comp: !!design.radius_speed_comp,
       filament: design.filament || null,
       amp_profile: ampEditor.profile(),
       radius_profile: silEditor.profile(),
@@ -7766,12 +7978,16 @@
       // Only meaningful at this seam (build_profile_spiral's resume=True
       // path) -- see the field's own tooltip and serve.py's _parse_z_hop_type.
       body.z_hop_type = design.z_hop_type || 'auto';
-      // Independent planar-base fan speed -- only sent when the user
-      // actually set an override (blank means "use the wall's own Fan
-      // off/Fan min setting instead", same as before this control existed).
+      // Independent planar-base fan speed (Filament settings modal, Part
+      // Cooling Fan > Planar base fan) -- only sent when the user actually set
+      // an override (blank means "use the wall's own Fan off/Wall fan min
+      // setting instead", same as before this control existed).
       if(design.planar_fan_speed != null && design.planar_fan_speed !== ''){
         body.planar_fan_speed = design.planar_fan_speed;
       }
+      // Layer-time cooling curve for that same base -- superseded server-side
+      // by planar_fan_speed above when both are set.
+      sendBaseFanCurve(body);
     }
     // Route texture params by the pattern dropdown: loops are a site-based
     // texture (server pattern stays null), wave patterns send the pattern_*
@@ -7867,6 +8083,8 @@
         if(design.planar_fan_speed != null && design.planar_fan_speed !== ''){
           body.planar_fan_speed = design.planar_fan_speed;
         }
+        // Same curve, same precedence, on the mesh-base path.
+        sendBaseFanCurve(body);
         // Speed/Adhesion/Support: every one of these is OPTIONAL server-side
         // (_parse_mesh_hybrid_params reads absence as "keep the derived
         // default") -- sent ONLY when the design actually holds a value, so

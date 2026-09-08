@@ -18,7 +18,8 @@ from typing import Callable
 from ..blobs import LoopSpec, compute_loop_sites
 from ..gcode import GcodeWriter
 from ..paths import (_R_PATTERNS, _fade_envelope, _MAX_AMP_STEP, R_PATTERN_NAMES,
-                    cage_scale, ZoneOverride, zone_weight, zone_twist_integral)
+                    cage_scale, radius_speed_scale, ZoneOverride, zone_weight,
+                    zone_twist_integral)
 from ..profile_stack import Contour, contour_normals, interpolate_contours
 from .base_fill import layered_base_and_brim, brim_outer_radius, blend_layer_z
 from .continuous_spiral import emit_loop, _overhang_fan, _fan_on_threshold
@@ -103,6 +104,16 @@ def build_profile_spiral(
     # (default) is byte-identical to before this parameter existed -- every
     # zone-related block below is skipped entirely when zones is falsy.
     zones: list[ZoneOverride] | None = None,
+    # Radius-based speed compensation: the NOMINAL reference radius in mm, or
+    # None (default) to leave every feedrate exactly as chosen -- byte-
+    # identical to before this parameter existed. A contour stack has no
+    # base_radius of its own (SpiralSpec's counterpart flag is a plain bool
+    # because the spec carries one), so the caller that DOES know the design's
+    # nominal radius passes it here; a mesh-derived stack has no such number
+    # and must pass None. See paths.radius_speed_scale for the formula, the
+    # <= 1.0 (slow-down-only) safety property and the "first-pass heuristic,
+    # not print-validated" caveat.
+    radius_speed_ref: float | None = None,
     # XY twist
     xy_twist_turns: float = 0.0,
     # Asymmetric control cage (N rows x M cols radius-scale grid, see
@@ -586,6 +597,15 @@ def build_profile_spiral(
                 px *= (1.0 + ovality)
                 py *= (1.0 - ovality)
 
+            # ---- radius-based speed compensation ---------------------------
+            # Measured BEFORE the spine offset below, so it is the radius from
+            # this point's own cross-section centre, exactly as spiral_path()
+            # measures it (paths.py). None when the feature is off (the
+            # default): no float op runs and the feedrate is untouched.
+            speed_scale = (radius_speed_scale(math.hypot(px, py),
+                                              radius_speed_ref)
+                           if radius_speed_ref is not None else None)
+
             # ---- spine offset: translate the cross-section centre in XY ---
             if spine_offset is not None:
                 sdx, sdy = spine_offset(t)
@@ -659,6 +679,15 @@ def build_profile_spiral(
                     writer.set_fan_if_changed(_overhang_fan(tilt, fan_overhang_min, fan_overhang_max))
                 flow = 1.0
                 speed = writer.print_speed
+                # Radius-based speed compensation. This branch is already
+                # "not the very first bead on the bed" (the if above owns
+                # that), matching continuous_spiral.py's first-turn
+                # exclusion: the first bead has nothing under it to cool, and
+                # first_layer_speed is an adhesion setting. Scale is <= 1.0,
+                # so this only ever slows a move; the machine ceiling stays
+                # extrude_to -> clamp_feedrate_for_z's job (extrusion.py).
+                if speed_scale is not None:
+                    speed *= speed_scale
                 if overhang_flow_k > 0.0 and tilt is not None and tilt > 0.0:
                     oh_flow = min(max(1.0 + overhang_flow_k * math.tan(max(tilt, 0.0)), 0.7), 1.6)
                 else:

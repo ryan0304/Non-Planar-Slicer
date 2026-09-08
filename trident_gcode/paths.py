@@ -111,6 +111,20 @@ class SpiralSpec:
     # or an empty list = today's behaviour exactly, byte-identical.
     zones: "list[ZoneOverride] | None" = None
 
+    # Radius-based speed compensation (opt-in, default OFF = byte-identical).
+    # On an asymmetric cross-section (star, lobes, deep texture) a point at a
+    # small local radius travels a shorter arc per turn, so LESS time passes
+    # before the nozzle lays the next turn on top of it -- that spot gets less
+    # cooling than a wide one. When True, spiral_path() attaches a per-point
+    # ``speed_scale`` (see radius_speed_scale()) that the generators multiply
+    # into the already-selected feedrate, evening out the time-per-turn.
+    # Safety: the scale is only ever <= 1.0, so this can only SLOW the print
+    # relative to the speed already asked for -- it can never raise a
+    # feedrate, and the machine ceiling stays clamp_feedrate_for_z()'s job
+    # (extrusion.py), taken from the selected PrinterProfile.
+    # FIRST-PASS HEURISTIC: not validated on real hardware.
+    radius_speed_comp: bool = False
+
 
 @dataclass
 class ZoneOverride:
@@ -155,6 +169,60 @@ class ZoneOverride:
 # (worst case gap = (1 - _MAX_AMP_STEP) * layer_height at aligned crests), so
 # the nozzle can never dive into the previous turn when the amplitude changes.
 _MAX_AMP_STEP = 0.6
+
+
+# --------------------------------------------------- radius speed compensation
+# Floor on the per-point feedrate scale (SpiralSpec.radius_speed_comp). 0.5 =
+# a point at half the reference radius or less prints at half the requested
+# speed and no slower. Below this the head would crawl to a near-stop on a
+# sharp star point (a deep 5-point star dips close to r=0), which oozes and
+# strings where it dwells and inflates print time without bound. Named and
+# tunable, in the style of _MAX_AMP_STEP above, deliberately conservative.
+_MIN_SPEED_SCALE = 0.5
+
+# Smallest reference radius the scale will divide by (mm). Guards the
+# DENOMINATOR only -- never the result -- so a pathological spec (base_radius
+# 0, or a spine offset that puts the wall on its own centre) yields a finite
+# ratio instead of inf/NaN, which would then survive every min()/max() below
+# it silently (CLAUDE.md: non-finite floats defeat guards rather than trip
+# them). Not a machine limit: it is a divide-by-zero guard, and no ceiling of
+# any kind is derived from it.
+_MIN_SPEED_REF_MM = 1.0
+
+
+def radius_speed_scale(local_radius: float, ref_radius: float) -> float:
+    """Per-point feedrate SCALE in (0, 1] for radius-based cooling evening.
+
+    ``local_radius`` is the point's distance from its own cross-section
+    centre; ``ref_radius`` is the design's nominal radius (SpiralSpec.
+    base_radius) -- a stable, always-present reference, deliberately NOT the
+    shape's own peak/min radius, which would need a second full pass over the
+    path to compute honestly.
+
+    Returns ``min(max(local/ref, _MIN_SPEED_SCALE), 1.0)``: at or beyond the
+    nominal radius the speed is untouched, and inside it the feedrate is
+    scaled DOWN so a narrow section takes closer to the same time per turn as
+    a wide one, giving the fresh bead a more even amount of time to cool
+    before the next turn lands on it. Never above 1.0 -- this only ever slows
+    a move down relative to the speed the caller already chose, so it can
+    never ask the machine for more than it was going to get.
+
+    Non-finite inputs would be an internal geometry bug, not user input
+    (serve.py rejects non-finite request fields at the boundary): fall back to
+    1.0, i.e. exactly the pre-feature speed. Returning the unchanged nominal
+    speed is the conservative answer -- it cannot produce Fnan, cannot stall
+    the head at scale 0, and cannot exceed what was requested.
+
+    FIRST-PASS HEURISTIC. The linear radius ratio is a plausible model of
+    time-per-turn, not a measured cooling curve; nobody has printed it. Treat
+    the numbers here as a starting point pending a real print test.
+    """
+    if not (math.isfinite(local_radius) and math.isfinite(ref_radius)):
+        return 1.0
+    scale = abs(local_radius) / max(abs(ref_radius), _MIN_SPEED_REF_MM)
+    if not math.isfinite(scale):
+        return 1.0
+    return min(max(scale, _MIN_SPEED_SCALE), 1.0)
 
 
 def _tri(x: float) -> float:
@@ -315,6 +383,11 @@ class PathPoint:
     # Wall tilt angle (radians). Positive = leaning outward (overhang).
     # Computed from the radial change vs one turn below. None on the first turn.
     tilt: float | None = None
+    # Radius-based speed scale in (0, 1], or None when
+    # SpiralSpec.radius_speed_comp is off (the default). Generators multiply
+    # it into the feedrate they already selected; None means "leave the speed
+    # alone", which is what keeps the default output byte-identical.
+    speed_scale: float | None = None
 
 
 def spiral_path(
@@ -432,6 +505,15 @@ def spiral_path(
             x *= (1.0 + ov)
             y *= (1.0 - ov)
 
+        # Radius-based speed compensation: measured HERE, after ovality and
+        # texture but BEFORE the spine offset, so it is the radius from this
+        # point's own cross-section centre -- identical by construction to the
+        # hypot(p.x - ox, p.y - oy) the tilt pass below uses (the spine offset
+        # is a pure translation added to both terms). Off by default: no float
+        # op at all runs, and speed_scale stays None.
+        speed_scale = (radius_speed_scale(math.hypot(x, y), spec.base_radius)
+                       if spec.radius_speed_comp else None)
+
         # Spine offset: translate the whole cross-section centre in XY.
         if spec.spine_offset is not None:
             dx, dy = spec.spine_offset(t)
@@ -471,7 +553,7 @@ def spiral_path(
         else:
             _amps.append(0.0)
 
-        pts.append(PathPoint(x, y, z))
+        pts.append(PathPoint(x, y, z, speed_scale=speed_scale))
 
     # Compute the true local layer height per point: the vertical gap to the
     # point exactly one turn below. Analytically exact for this spiral (the

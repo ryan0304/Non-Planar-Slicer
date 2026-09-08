@@ -30,6 +30,7 @@ non-planar-only print anywhere in this module -- every failure raises.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Callable
 
 from .gcode import GcodeWriter
@@ -89,6 +90,294 @@ def _nearest_ring_index(ring, target: tuple[float, float]) -> int:
     return best_i
 
 
+# ---------------------------------------------------------------------------
+# Planar-base cooling curve (layer-time driven).
+# ---------------------------------------------------------------------------
+#
+# WHAT THIS IS -- AND WHAT IT IS NOT
+# ----------------------------------
+# This reproduces the SHAPE of the cooling model OrcaSlicer/PrusaSlicer expose
+# in "Material settings > Cooling" (min/max fan speed with a layer-time
+# threshold each, "keep fan always on", "no cooling for the first N layers").
+# It is a BEST-EFFORT REPRODUCTION WRITTEN FROM MEMORY OF THE DOCUMENTED
+# BEHAVIOUR. It has NOT been verified against OrcaSlicer's actual source, and
+# it is NOT a confirmed spec. Deliberately NOT reproduced: Orca's "full fan
+# speed at layer N" ramp -- a second, rarely-needed axis (a linear 0->100%
+# ramp between the no-cooling phase and the layer-time curve) that added a
+# third region to reason about for a case the no-cooling-layers + min-speed
+# combination already covers well enough. One specific point below is this
+# module's own reasonable-but-unconfirmed reading:
+#
+#   * "keep fan always on" is implemented as a FLOOR at *min_speed* during the
+#     no-cooling-for-first-N-layers phase (instead of a true 0), because that
+#     is the only interpretation of "always on" that does anything at all in
+#     that phase. Orca's exact internal behaviour here is not confirmed.
+#
+# Orca's OWN fan output is never consulted for any of this: M106/M107 are in
+# orca_gcode_parser.py's _IGNORED_COMMANDS and never reach a move. The layer
+# TIMES fed to this model are computed by this module from Orca's already-
+# trusted geometry/feedrate data (the same OrcaMove fields orca_replay.py
+# already derives line width and speed from), never from Orca's text fan
+# commands. That keeps orca_replay.py's invariant intact: "fan speed... never
+# read from Orca's text at all".
+
+
+@dataclass(frozen=True)
+class BaseFanCurve:
+    """Layer-time-driven part-cooling curve for a hybrid print's PLANAR BASE.
+
+    Bundled as one object rather than seven loose keyword arguments so the
+    whole feature is one parameter to thread through, and so "the curve is
+    off" is a single ``None`` rather than seven values that each have to be
+    checked for an untouched default -- see :func:`_slice_replay_and_seam`.
+    The server builds it in ``serve.py::_parse_base_fan_curve``; when the
+    master gate is off, that function returns ``None`` and NOTHING here is
+    ever consulted, which is what makes the existing regression references
+    trivially byte-identical.
+
+    Scope: the planar base ONLY. The non-planar wall has its own, entirely
+    separate tilt-driven fan_overhang_min/fan_overhang_max ramp
+    (build_profile_spiral), untouched by this.
+
+    off_layers
+        Layer count (0-based, from the base's own first layer) printed with
+        no cooling. 0 = none.
+    min_speed / min_layer_time_s
+        Fan fraction (0..1) for a SLOW layer, and the layer time at or above
+        which it applies. A slow layer has had longer to cool on its own.
+    max_speed / max_layer_time_s
+        Fan fraction (0..1) for a FAST layer, and the layer time at or below
+        which it applies. Normally max_layer_time_s < min_layer_time_s.
+    always_on
+        Floor the fan at *min_speed* during the *off_layers* phase instead of
+        turning it fully off.
+    """
+
+    off_layers: int = 0
+    min_speed: float = 0.0
+    min_layer_time_s: float = 10.0
+    max_speed: float = 1.0
+    max_layer_time_s: float = 3.0
+    always_on: bool = False
+
+    def fraction_for(self, layer_index: int, layer_time_s: float) -> float:
+        """Fan fraction (0..1) for a base layer, from its APPROXIMATE print
+        time. See :func:`base_fan_fraction` -- this is a thin bound form of
+        it so callers cannot pass the six knobs in the wrong order.
+        """
+        return base_fan_fraction(
+            layer_index, layer_time_s,
+            off_layers=self.off_layers,
+            min_speed=self.min_speed,
+            min_layer_time_s=self.min_layer_time_s,
+            max_speed=self.max_speed,
+            max_layer_time_s=self.max_layer_time_s,
+            always_on=self.always_on,
+        )
+
+
+def base_fan_fraction(
+    layer_index: int,
+    layer_time_s: float,
+    *,
+    off_layers: int = 0,
+    min_speed: float = 0.0,
+    min_layer_time_s: float = 10.0,
+    max_speed: float = 1.0,
+    max_layer_time_s: float = 3.0,
+    always_on: bool = False,
+) -> float:
+    """The whole cooling model, as one pure function of (layer index, layer
+    time). Returns a fraction in 0..1.
+
+    Two regions, tested in this order:
+
+    1. ``layer_index < off_layers`` -- no cooling. Returns 0.0, or
+       *min_speed* when *always_on* (this module's own unconfirmed reading of
+       "keep fan always on"; see this section's header comment).
+    2. Otherwise -- linear interpolation on LAYER TIME between *min_speed*
+       (at or above *min_layer_time_s*: a slow layer needs less help) and
+       *max_speed* (at or below *max_layer_time_s*: a fast layer needs more).
+
+    DEGENERATE-THRESHOLD GUARD: region 2 divides by
+    ``min_layer_time_s - max_layer_time_s``. If the caller hands over
+    thresholds that are equal or in the WRONG order (min <= max), there is no
+    interval to interpolate across, so this collapses to a clean STEP at
+    *max_layer_time_s* (max_speed at or below it, min_speed above it) rather
+    than dividing by zero or returning a negative/over-unity interpolation
+    fraction. serve.py rejects that ordering at the request boundary anyway;
+    this guard exists so a direct Python caller cannot reach a ZeroDivision
+    or an out-of-range fan value either.
+
+    Non-finite inputs are REJECTED, not clamped -- CLAUDE.md's standing rule.
+    A NaN layer time would compare False against every threshold below and
+    slip out as a NaN fan fraction, which set_fan() would then pass to
+    int(round(...)) as a hard crash at best and a wrong M106 at worst.
+    """
+    if not isinstance(layer_time_s, (int, float)) or isinstance(layer_time_s, bool) \
+            or not math.isfinite(float(layer_time_s)):
+        raise ValueError(
+            "layer_time_s must be a finite number, got %r -- a non-finite "
+            "value passes every comparison below instead of tripping it, so "
+            "it is rejected here rather than clamped" % (layer_time_s,))
+    for name, val in (("min_speed", min_speed), ("max_speed", max_speed),
+                      ("min_layer_time_s", min_layer_time_s),
+                      ("max_layer_time_s", max_layer_time_s)):
+        if not isinstance(val, (int, float)) or isinstance(val, bool) \
+                or not math.isfinite(float(val)):
+            raise ValueError(
+                "%s must be a finite number, got %r" % (name, val))
+
+    lo = min(max(float(min_speed), 0.0), 1.0)
+    hi = min(max(float(max_speed), 0.0), 1.0)
+
+    # 1. No-cooling phase.
+    if layer_index < off_layers:
+        return lo if always_on else 0.0
+
+    # 2. Layer-time interpolation.
+    interval = float(min_layer_time_s) - float(max_layer_time_s)
+    if interval <= 0.0:
+        # Degenerate/inverted thresholds -- step, do not divide. See docstring.
+        return hi if layer_time_s <= max_layer_time_s else lo
+    if layer_time_s >= min_layer_time_s:
+        return lo
+    if layer_time_s <= max_layer_time_s:
+        return hi
+    f = (float(min_layer_time_s) - float(layer_time_s)) / interval
+    return min(max(lo + f * (hi - lo), 0.0), 1.0)
+
+
+@dataclass(frozen=True)
+class _LayerRun:
+    """One contiguous run of Orca moves belonging to a single base layer."""
+
+    layer_index: int | None   # None only for a leading run with no extrusion yet
+    moves: list
+    time_s: float
+
+
+def _layer_runs(moves: list, *, layer_height: float, initial_feed: float) -> list[_LayerRun]:
+    """Split a parsed Orca move list into per-layer runs, each carrying an
+    APPROXIMATE print time in seconds.
+
+    A new layer starts at the first EXTRUDING move whose Z differs from the
+    Z the current layer is being printed at, and layers are then numbered
+    sequentially from 0 for the base's own first printed layer -- which is
+    what every field on BaseFanCurve means by "layer".
+
+    NOT ``round(move.z / layer_height)``, which was the obvious first choice
+    and is wrong in a way that only shows up on real output. Measured against
+    a live OrcaSlicer 0.3 mm slice of this app's own parametric base, Orca
+    printed its layers at z = 0.2, 0.5, 0.8, 1.1 ... -- a 0.2 mm FIRST layer
+    with 0.3 mm steps on top, not the uniform 0.3 mm grid the process JSON
+    asked for. That makes z/layer_height a sequence of 0.667, 1.667, 2.667...
+    which rounds fine here but sits half a step away from the .5 boundaries
+    where Python's round() switches to banker's rounding: a different
+    first-layer height (0.15 on 0.3, say) puts every layer exactly on .5, and
+    round() would then map two adjacent layers onto the SAME index, silently
+    merging them into one fan step. Comparing Z directly cannot do that, and
+    needs no assumption about Orca's layer grid at all. *layer_height* is
+    still taken as an argument because it sets the "is this a different
+    layer" tolerance below.
+
+    Numbering from the base's first printed layer (rather than from z=0) is
+    also what makes "no cooling for the first 2 layers" mean two layers:
+    Orca's first layer prints at a positive Z, so any absolute-Z-derived
+    index starts at 1 and would leave only one layer uncooled.
+
+    Taking the index from extruding moves only means a Z-hop travel cannot
+    invent a spurious layer: travels simply join whichever layer is currently
+    open, so a run always begins at the first extrusion of its layer, which is
+    exactly where a fan change wants to land.
+
+    TIME IS AN APPROXIMATION, deliberately. It sums
+    ``3d_segment_length / requested_feed`` over the layer's extruding moves,
+    using Orca's OWN requested feedrate -- not the post-clamp speed the real
+    replay will actually use after GcodeWriter's clamp_feedrate_for_z() and
+    volumetric-flow cap, and with no acceleration/jerk model at all. It is a
+    FIRST-PASS HEURISTIC, not a validated print-time estimate: on a small,
+    fast layer where the writer clamps hard, the real layer takes longer than
+    this says, so the computed fan runs slightly hotter (faster) than a true
+    time would ask for. Getting the exact figure would mean replaying the
+    whole base a second time just to measure it, which doubles the work done
+    at this app's one trust boundary with Orca for a marginal accuracy gain --
+    not worth it.
+
+    ``feed_mm_s is None`` means "F unchanged from the previous move" (Orca's
+    own convention, normalized by orca_gcode_parser.py), so the last non-None
+    value carries forward. *initial_feed* seeds it for the moves before Orca's
+    first F word -- pass ``writer.print_speed``, matching the exact fallback
+    ``GcodeWriter.extrude_to`` itself applies for a speed of None.
+    """
+    # "Different layer" tolerance. A fraction of the layer height rather than
+    # a fixed millimetre figure so it scales with whatever the caller asked
+    # for, and small enough that even a very fine adaptive layer still reads
+    # as a new layer -- planar layers hold Z exactly constant while extruding,
+    # so anything above float noise is a real change.
+    eps_z = max(layer_height * 0.01, 1e-6)
+
+    runs: list[_LayerRun] = []
+    prev = (0.0, 0.0, 0.0)   # the parser's own starting position default
+    feed = float(initial_feed)
+    cur_index: int | None = None
+    cur_z: float | None = None
+    cur_moves: list = []
+    cur_time = 0.0
+
+    for move in moves:
+        if move.feed_mm_s is not None:
+            feed = move.feed_mm_s
+        extruding = move.e_delta is not None and move.e_delta > 0
+        if extruding:
+            if cur_index is None:
+                cur_index, cur_z = 0, move.z
+            elif abs(move.z - cur_z) > eps_z:
+                runs.append(_LayerRun(cur_index, cur_moves, cur_time))
+                cur_moves, cur_time = [], 0.0
+                cur_index, cur_z = cur_index + 1, move.z
+        cur_moves.append(move)
+        if extruding and feed > 0.0:
+            cur_time += math.dist((move.x, move.y, move.z), prev) / feed
+        prev = (move.x, move.y, move.z)
+
+    if cur_moves:
+        runs.append(_LayerRun(cur_index, cur_moves, cur_time))
+    return runs
+
+
+_REPLAY_COUNTERS = (
+    "extrude_count", "travel_count", "retract_count", "unretract_count",
+    "filament_mm",
+)
+
+
+def _merge_replay_reports(reports: list[dict]) -> dict:
+    """Combine the per-layer replay reports into the single dict the one-call
+    path returns, so callers downstream cannot tell the two paths apart.
+
+    Every counter sums. ``ends_retracted`` takes the last report that
+    actually SAW a retract/unretract/extrude -- not simply the last report.
+    replay_moves_onto_writer's local ``retracted`` flag starts False on every
+    call, so a trailing run made only of travels would report False even
+    though the extruder is still retracted, and _slice_replay_and_seam would
+    then emit a SECOND retract on top of the first (GcodeWriter.retract() has
+    no double-retract guard). Carrying the flag across silent runs reproduces
+    the single-call semantics exactly.
+    """
+    merged = {name: 0 for name in _REPLAY_COUNTERS}
+    merged["filament_mm"] = 0.0
+    ends_retracted = False
+    for report in reports:
+        for name in _REPLAY_COUNTERS:
+            merged[name] += report.get(name, 0)
+        if (report.get("retract_count", 0) or report.get("unretract_count", 0)
+                or report.get("extrude_count", 0)):
+            ends_retracted = report.get("ends_retracted", False)
+    merged["ends_retracted"] = ends_retracted
+    return merged
+
+
 def _slice_replay_and_seam(
     writer: GcodeWriter,
     *,
@@ -106,6 +395,7 @@ def _slice_replay_and_seam(
     cy: float,
     seam_z: float,
     planar_fan_speed: float | None = None,
+    base_fan_curve: "BaseFanCurve | None" = None,
 ) -> tuple[dict, list]:
     """The one trust boundary between OrcaSlicer and this app's own output.
 
@@ -142,6 +432,17 @@ def _slice_replay_and_seam(
         and setting this one makes the wall's own cold-start logic moot
         (the wall's overhang-adaptive fan takes over immediately at the
         seam, ramping from whatever this value left the fan at).
+    base_fan_curve : BaseFanCurve | None
+        Layer-time-driven cooling curve for the base (see BaseFanCurve and
+        base_fan_fraction above). None (default) -- and it is None unless the
+        client explicitly turned the master gate on -- takes the ORIGINAL
+        single-call replay path below, byte-for-byte unchanged.
+
+        PRECEDENCE: *planar_fan_speed* WINS OUTRIGHT. If the caller set both,
+        the base gets the one flat speed and this curve is not consulted at
+        all. An explicit constant beating an automatic curve is the least
+        surprising of the two possible rules, and it means the two controls
+        can never half-apply and leave the base at a speed neither asked for.
     """
     profile = writer.profile
 
@@ -188,7 +489,41 @@ def _slice_replay_and_seam(
 
     # 5. Replay onto the writer -- every move still passes through
     #    GcodeWriter's own _check_bounds()/non-finite guards.
-    replay_report = replay_moves_onto_writer(writer, moves, profile=profile)
+    #
+    #    Two branches, kept deliberately separate rather than folded into one
+    #    "loop over N buckets" (which for N==1 would be equivalent in theory
+    #    but is exactly the kind of rewrite that perturbs byte-identical
+    #    output in practice). The first branch is the ORIGINAL, untouched code
+    #    path and is what every existing regression reference was generated
+    #    through; it is taken whenever the curve is off, and also whenever the
+    #    flat planar_fan_speed override is set (that override wins outright --
+    #    see this function's own base_fan_curve docstring).
+    if base_fan_curve is None or planar_fan_speed is not None:
+        replay_report = replay_moves_onto_writer(writer, moves, profile=profile)
+    else:
+        # Per-layer replay so a fan change can be inserted BETWEEN layers.
+        # Safe because replay_moves_onto_writer holds no cross-move state of
+        # its own: the toolhead position and the real retraction state live on
+        # the GcodeWriter instance (writer.position, writer.retract()/
+        # unretract()), and its local `retracted` variable only feeds the
+        # returned ends_retracted flag -- which _merge_replay_reports carries
+        # across runs for exactly that reason. So N ordered calls over disjoint
+        # slices emit the same G-code as one call over their concatenation,
+        # plus the M106 lines added here.
+        runs = _layer_runs(
+            moves, layer_height=layer_height, initial_feed=writer.print_speed)
+        reports = []
+        for run in runs:
+            if run.layer_index is not None:
+                # set_fan_if_changed (not set_fan): same convention the
+                # non-planar wall's own per-point fan already uses, so a run
+                # of layers that resolve to the same speed costs one M106,
+                # not one per layer.
+                writer.set_fan_if_changed(
+                    base_fan_curve.fraction_for(run.layer_index, run.time_s))
+            reports.append(
+                replay_moves_onto_writer(writer, run.moves, profile=profile))
+        replay_report = _merge_replay_reports(reports)
 
     # 6. Placement sanity check: refuse to continue a hybrid print with a
     #    base Orca placed off-target, rather than silently printing it in
@@ -250,6 +585,8 @@ def build_hybrid_print(
     amp_envelope: Callable[[float], float] | None = None,
     center: tuple[float, float] | None = None,
     planar_fan_speed: float | None = None,
+    base_fan_curve: "BaseFanCurve | None" = None,
+    radius_speed_comp: bool = False,
     **profile_spiral_kwargs,
 ) -> dict:
     """Emit a hybrid print: an OrcaSlicer-sliced planar base up to
@@ -269,6 +606,15 @@ def build_hybrid_print(
     *profile_spiral_kwargs* must NOT include `z_amp_envelope` -- pass the
     whole-object curve via *amp_envelope* instead, so it gets the same
     rescaling treatment.
+
+    *radius_speed_comp* (default False) is a plain bool here rather than
+    build_profile_spiral's `radius_speed_ref` millimetre value, so the
+    reference radius can only ever be THIS call's own *radius* -- the same
+    number the wall is generated from. A caller cannot accidentally
+    normalize the wall's feedrate against a radius the wall was not built
+    with. It applies to the non-planar WALL only: the planar base below the
+    seam is an Orca-sliced solid replayed move-for-move and has no per-point
+    speed of ours to scale (identical scope to Zone Overrides).
 
     Raises OrcaSliceError (from orca_slice.py) or ValueError on any
     failure -- there is never a silent fallback to a non-planar-only print.
@@ -319,6 +665,7 @@ def build_hybrid_print(
         infill_pattern=infill_pattern, orca_path=orca_path,
         filament_name=filament_name, cx=cx, cy=cy,
         seam_z=achieved_base_height, planar_fan_speed=planar_fan_speed,
+        base_fan_curve=base_fan_curve,
     )
 
     # 5b. Fan: fan_off_layers is a TOTAL count from the absolute start of the
@@ -350,11 +697,20 @@ def build_hybrid_print(
     #     own overhang-adaptive fan (build_profile_spiral's per-point
     #     set_fan_if_changed) still takes over cleanly from there, ramping
     #     away from whatever planar_fan_speed left the fan at.
+    #
+    #     base_fan_curve counts the same way for the same reason: when it is
+    #     active the base has already been getting real M106 calls, layer by
+    #     layer, so the fan is unconditionally "already on" at the seam and
+    #     the wall's cold-start layer count has nothing left to do. (It cannot
+    #     be active at the same time as planar_fan_speed in any way that
+    #     matters -- planar_fan_speed wins outright inside
+    #     _slice_replay_and_seam -- so either being set gives the same answer
+    #     here.)
     fan_off_layers = profile_spiral_kwargs.pop("fan_off_layers", 0)
     fan_overhang_min = profile_spiral_kwargs.get("fan_overhang_min")
     fan_overhang_max = profile_spiral_kwargs.get("fan_overhang_max")
     fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
-    if planar_fan_speed is not None:
+    if planar_fan_speed is not None or base_fan_curve is not None:
         fan_already_on = True
         wall_fan_off_layers = 0
     else:
@@ -398,6 +754,7 @@ def build_hybrid_print(
         center=(cx, cy),
         z_amp_envelope=(_wall_amp_env if amp_envelope is not None else None),
         fan_off_layers=wall_fan_off_layers, fan_already_on=fan_already_on,
+        radius_speed_ref=(radius if radius_speed_comp else None),
         **profile_spiral_kwargs,
     )
 
@@ -448,6 +805,8 @@ def build_mesh_hybrid_print(
     seam_style: str = "fillet",
     seam_coverage: float = 1.0,
     planar_fan_speed: float | None = None,
+    base_fan_curve: "BaseFanCurve | None" = None,
+    radius_speed_comp: bool = False,
     **profile_spiral_kwargs,
 ) -> dict:
     """Emit a hybrid print whose planar base is the user's OWN solid STL.
@@ -675,6 +1034,7 @@ def build_mesh_hybrid_print(
         process_overrides=process_overrides,
         filament_name=filament_name, cx=cx, cy=cy,
         seam_z=achieved_base_height, planar_fan_speed=planar_fan_speed,
+        base_fan_curve=base_fan_curve,
     )
 
     # 7. Did Orca agree with the prediction? Same idiom as the placement
@@ -702,14 +1062,14 @@ def build_mesh_hybrid_print(
 
     # 7b. Fan: same absolute-layer-count fix as build_hybrid_print() above --
     #     see that function's own step 5b for the full rationale (including
-    #     the planar_fan_speed override below). n_base_layers here is Orca's
-    #     own achieved layer count (informational, step 2 above), not a
-    #     value this module chose.
+    #     the planar_fan_speed / base_fan_curve overrides below).
+    #     n_base_layers here is Orca's own achieved layer count
+    #     (informational, step 2 above), not a value this module chose.
     fan_off_layers = profile_spiral_kwargs.pop("fan_off_layers", 0)
     fan_overhang_min = profile_spiral_kwargs.get("fan_overhang_min")
     fan_overhang_max = profile_spiral_kwargs.get("fan_overhang_max")
     fan_overhang_active = fan_overhang_min is not None and fan_overhang_max is not None
-    if planar_fan_speed is not None:
+    if planar_fan_speed is not None or base_fan_curve is not None:
         fan_already_on = True
         wall_fan_off_layers = 0
     else:
@@ -753,6 +1113,11 @@ def build_mesh_hybrid_print(
         center=(cx, cy),
         z_amp_envelope=amp_envelope,
         fan_off_layers=wall_fan_off_layers, fan_already_on=fan_already_on,
+        # Radius-based speed compensation: same bool-not-millimetres contract
+        # as build_hybrid_print (see its docstring) -- the reference can only
+        # be THIS call's own parametric wall radius, and it reaches the
+        # non-planar wall only, never the Orca-sliced mesh base below it.
+        radius_speed_ref=(radius if radius_speed_comp else None),
         **profile_spiral_kwargs,
     )
 
