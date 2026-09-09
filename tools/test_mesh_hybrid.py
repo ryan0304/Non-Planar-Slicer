@@ -25,11 +25,13 @@ MESH_FIXTURE = ROOT / "tools" / "fixtures" / "meshes" / "hex_mount.stl"
 sys.path.insert(0, str(ROOT))
 
 import trident_gcode.hybrid as hybrid
+from trident_gcode.blobs import LoopSpec
 from trident_gcode.gcode import GcodeWriter
 from trident_gcode.mesh import load_stl
 from trident_gcode.paths import circle, ZoneOverride
 from trident_gcode.profile import PrinterProfile
-from trident_gcode.profile_stack import stack_from_shape, top_contour_from_mesh
+from trident_gcode.profile_stack import (
+    mesh_ring_radius_at, stack_from_shape, top_contour_from_mesh)
 
 
 _FAILURES: list[str] = []
@@ -68,13 +70,19 @@ class FakeOrca:
 
 
 class CapturedWall:
-    """Wraps build_profile_spiral to record the contour stack it was handed."""
+    """Wraps build_profile_spiral to record the contour stack it was handed,
+    and (via _run's own _nearest_ring_index trace, not this class) the seam
+    angle build_mesh_hybrid_print re-anchored the wall to -- see seam_k's own
+    docstring in _run below for why any test that independently recomputes a
+    "what the wall SHOULD look like" reference needs that same rotation.
+    """
 
     def __init__(self, real):
         self.real = real
         self.contours = None
         self.heights = None
         self.kwargs = None
+        self.seam_k = None
 
     def __call__(self, writer, contours, heights, **kwargs):
         self.contours = contours
@@ -102,6 +110,22 @@ def _run(fake, *, tris=None, capture_wall=False, **overrides):
     satisfied by construction rather than by luck.
     center=(102.5, 102.5) is load-bearing: it must match the Orca fixture's own
     footprint or the placement sanity check raises.
+
+    ``wall.seam_k`` (always populated, regardless of ``capture_wall``): the
+    index build_mesh_hybrid_print's own seam-alignment step (hybrid.py's
+    "7c. Seam alignment", added by the "Fix hybrid seam alignment" commit)
+    rotated the mesh ring and the parametric theta0 grid by, so that the wall
+    resumes from wherever the base replay's toolhead actually ended up rather
+    than always the mesh ring's fixed index 0. It depends only on the fixed
+    Orca fixture text, scale and center -- never on wall-side args like
+    blend_height/seam_style -- so it is the SAME value across every _run()
+    call in a given test that shares those three. A test that independently
+    recomputes a "what the wall SHOULD look like" reference (via
+    top_contour_from_mesh/stack_from_shape, both theta0=0 by default) MUST
+    rotate that reference by this same index/angle first, or it is comparing
+    the correct, intentionally-rotated real output against a stale,
+    unrotated guess -- see test_ring0_is_mesh_top_contour's and
+    test_blend_height_edges's own comments for exactly this fix.
     """
     profile = PrinterProfile()
     writer = _new_writer(profile, overrides.get("layer_height", 0.2))
@@ -116,8 +140,16 @@ def _run(fake, *, tris=None, capture_wall=False, **overrides):
     args.update(overrides)
     real_slice = hybrid.slice_stl_to_gcode
     real_wall = hybrid.build_profile_spiral
+    real_nri = hybrid._nearest_ring_index
     wall = CapturedWall(real_wall)
+
+    def _traced_nri(ring, target):
+        k = real_nri(ring, target)
+        wall.seam_k = k
+        return k
+
     hybrid.slice_stl_to_gcode = fake
+    hybrid._nearest_ring_index = _traced_nri
     if capture_wall:
         hybrid.build_profile_spiral = wall
     try:
@@ -125,7 +157,39 @@ def _run(fake, *, tris=None, capture_wall=False, **overrides):
     finally:
         hybrid.slice_stl_to_gcode = real_slice
         hybrid.build_profile_spiral = real_wall
+        hybrid._nearest_ring_index = real_nri
     return report, writer, wall
+
+
+_DEFAULT_LOOP_SPEC = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8,
+                              stitch_mode="dip")
+
+
+def _run_loop(fake, *, tris=None, loop_spec=None, **overrides):
+    """Call build_mesh_loop_hybrid_print (Phase 2) with the same standard
+    fixture arguments as _run(), plus a LoopSpec for the wall instead of
+    z_amp/z_waves -- mirrors _run()'s own docstring/rationale exactly (same
+    mesh fixture, same scale/seam-height-agreement arithmetic, same
+    load-bearing center)."""
+    profile = PrinterProfile()
+    writer = _new_writer(profile, overrides.get("layer_height", 0.2))
+    args = dict(
+        tris=(tris if tris is not None else load_stl(str(MESH_FIXTURE))),
+        scale=0.1, layer_height=0.2, points_per_turn=60,
+        shape_fn=circle(2.5), radius=2.5, height=3.0, blend_height=1.0,
+        loop_spec=(loop_spec if loop_spec is not None else _DEFAULT_LOOP_SPEC),
+        wall_count=2, infill_density=0.2, infill_pattern="grid",
+        orca_path="unused-because-monkeypatched",
+        center=(102.5, 102.5),
+    )
+    args.update(overrides)
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = fake
+    try:
+        report = hybrid.build_mesh_loop_hybrid_print(writer, **args)
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+    return report, writer
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +327,15 @@ def test_ring0_is_mesh_top_contour():
     expected = top_contour_from_mesh(scaled, 60, z=0.45 - 0.45 * 0.5)
 
     _report, _writer, wall = _run(FakeOrca(), capture_wall=True)
+    # top_contour_from_mesh always samples index 0 at its own fixed theta=0
+    # ray. The real wall re-anchors index 0 to wherever the base replay's
+    # seam-alignment step (hybrid.py's "7c. Seam alignment") actually left
+    # the toolhead -- rolling the array by wall.seam_k, exactly as
+    # build_mesh_hybrid_print itself does to mesh_ring before handing it to
+    # blend_stack. Without this roll, "expected" is a real ring compared
+    # against itself at the wrong starting index -- see _run's own
+    # docstring for why this must be the SAME seam_k on both sides.
+    expected = expected[wall.seam_k:] + expected[:wall.seam_k]
     got = wall.contours[0]
     worst = max(math.hypot(a[0] - b[0], a[1] - b[1])
                 for a, b in zip(got, expected))
@@ -290,11 +363,17 @@ def test_ring0_is_mesh_top_contour():
 #    through verbatim -- see build_mesh_hybrid_print's docstring).
 # ---------------------------------------------------------------------------
 def test_blend_height_edges():
-    parametric = stack_from_shape(circle(2.5), 2.5, 3.0, 0.2, 60)
-
     # blend_height == 0: hard seam. Ring 0 is still the mesh ring; ring 1
     # onward is fully parametric.
     report, _w, wall = _run(FakeOrca(), blend_height=0.0, capture_wall=True)
+    # theta0 must match the SAME seam-alignment rotation build_mesh_hybrid_
+    # print applied internally (wall.seam_k, constant across every _run()
+    # call below -- it depends only on the fixed Orca fixture/scale/center,
+    # never on blend_height/seam_style -- see _run's own docstring), or this
+    # "parametric" reference is comparing the correctly-rotated real output
+    # against a stale, unrotated guess.
+    theta0 = 2.0 * math.pi * wall.seam_k / 60
+    parametric = stack_from_shape(circle(2.5), 2.5, 3.0, 0.2, 60, theta0=theta0)
     hard = max(math.hypot(a[0] - b[0], a[1] - b[1])
                for a, b in zip(wall.contours[1], parametric[1]))
     check(hard == 0.0,
@@ -353,13 +432,16 @@ def test_blend_height_edges():
 #     becomes pure parametric.
 # ---------------------------------------------------------------------------
 def test_seam_style_coverage_edges():
-    parametric = stack_from_shape(circle(2.5), 2.5, 3.0, 0.2, 60)
-
     # Omitting seam_style/seam_coverage must reproduce EXACTLY what explicit
     # seam_style="fillet", seam_coverage=1.0 produces -- this is the whole
     # safety net for check_regression.py's ref_mesh_hybrid_print.gcode staying
     # byte-identical.
     _r1, _w1, wall_default = _run(FakeOrca(), blend_height=1.0, capture_wall=True)
+    # Same seam-alignment rotation build_mesh_hybrid_print applied internally
+    # (wall_default.seam_k, constant across every _run() call in this test --
+    # see _run's own docstring and test_blend_height_edges's identical fix).
+    theta0 = 2.0 * math.pi * wall_default.seam_k / 60
+    parametric = stack_from_shape(circle(2.5), 2.5, 3.0, 0.2, 60, theta0=theta0)
     _r2, _w2, wall_explicit = _run(
         FakeOrca(), blend_height=1.0, seam_style="fillet", seam_coverage=1.0,
         capture_wall=True)
@@ -661,6 +743,260 @@ def test_fan_off_layers_counts_from_the_base():
           "fan-on call of its own")
 
 
+# ---------------------------------------------------------------------------
+# Phase 2: build_mesh_loop_hybrid_print -- a real Orca-sliced MESH planar
+# base RESUMED into a Loop Fabric wall, blended in from the mesh's own seam
+# outline (loop_fabric.py's new blend_ring/blend_height/seam_style/
+# seam_coverage kwargs). Mirrors tools/test_hybrid.py's own Loop Fabric
+# hybrid tests (test_loop_hybrid_*), adapted to this file's mesh-fixture
+# harness.
+# ---------------------------------------------------------------------------
+def test_mesh_loop_happy_path():
+    fake = FakeOrca()
+    report, writer = _run_loop(fake)
+
+    check(report["hybrid"] is True and report["loop_hybrid"] is True
+          and report["mesh_base"] is True,
+          "mesh loop happy path: report marks hybrid=True, loop_hybrid=True, "
+          "mesh_base=True", str(report))
+    check(abs(report["achieved_base_height_mm"] - 0.45) < 1e-12,
+          "mesh loop happy path: achieved_base_height_mm is the mesh's own "
+          "top (NOT layer-snapped)", str(report["achieved_base_height_mm"]))
+    check(report["orca_base_layers"] == 2,
+          "mesh loop happy path: orca_base_layers == 2",
+          str(report["orca_base_layers"]))
+    check(report["extrude_count"] > 0,
+          "mesh loop happy path: base replay extruded something",
+          str(report["extrude_count"]))
+    check("fabric_rows" in report and report["fabric_rows"] > 0,
+          "mesh loop happy path: wall report merged in (fabric_rows > 0)",
+          str(report.get("fabric_rows")))
+    check(report["points"] > 0,
+          "mesh loop happy path: wall's own points field is honest and "
+          "positive (no cuff points counted -- resume=True skips the cuff)",
+          str(report["points"]))
+    check(abs(report["total_height_mm"]
+              - (report["achieved_base_height_mm"] + report["wall_height_mm"])) < 1e-12,
+          "mesh loop happy path: total == mesh base height + wall height "
+          "(the mesh-hybrid height convention, not build_loop_hybrid_print's)",
+          str((report["total_height_mm"], report["achieved_base_height_mm"],
+               report["wall_height_mm"])))
+
+    text = writer.text()
+    check(text.count("PRINT_START") == 1,
+          "mesh loop happy path: exactly one PRINT_START in the whole print",
+          str(text.count("PRINT_START")))
+    check(text.count("PRINT_END") == 1,
+          "mesh loop happy path: exactly one PRINT_END in the whole print",
+          str(text.count("PRINT_END")))
+    check("anchor cuff" not in text,
+          "mesh loop happy path: no solid cuff is printed (the mesh planar "
+          "base anchors row 0 instead)")
+    seam_marker = "; hybrid: non-planar wall begins here"
+    check(seam_marker in text,
+          "mesh loop happy path: seam marker present in the output")
+    check("; loop fabric (" in text.split(seam_marker, 1)[1],
+          "mesh loop happy path: real loop-fabric stitch content follows "
+          "the seam marker")
+
+    n_stl_tris = struct.unpack_from("<I", fake.stl_bytes, 80)[0]
+    tris = load_stl(str(MESH_FIXTURE))
+    check(n_stl_tris == len(tris),
+          "mesh loop happy path: the STL handed to Orca is the user's own "
+          "triangles (no contours_to_mesh round trip)",
+          f"{n_stl_tris} vs {len(tris)}")
+
+
+# ---------------------------------------------------------------------------
+# Placement mismatch still refuses -- shared _slice_replay_and_seam, same
+# check as the parametric mesh-hybrid wall's own.
+# ---------------------------------------------------------------------------
+def test_mesh_loop_placement_mismatch_is_refused():
+    fake = FakeOrca()
+    profile = PrinterProfile()
+    try:
+        _run_loop(fake, center=profile.bed_center)  # far from the fixture's ~(102.5, 102.5)
+        check(False, "mesh loop placement mismatch: raises ValueError",
+              "no exception raised")
+    except ValueError as e:
+        check("off-target" in str(e),
+              "mesh loop placement mismatch: raises ValueError", str(e)[:160])
+
+
+# ---------------------------------------------------------------------------
+# Orca disagreeing with the predicted seam height RAISES -- same check as
+# test_orca_z_drift_raises() above, exercised through the loop-fabric entry
+# point instead of the parametric one.
+# ---------------------------------------------------------------------------
+def test_mesh_loop_seam_drift_raises():
+    fake = FakeOrca()
+    try:
+        _run_loop(fake, scale=1.0, radius=25.0, shape_fn=circle(25.0))
+        check(False, "mesh loop Orca Z drift: raises ValueError",
+              "no exception raised")
+    except ValueError as e:
+        check("tops out" in str(e) and "4.5" in str(e),
+              "mesh loop Orca Z drift: raises ValueError naming both heights",
+              str(e)[:200])
+    check(fake.calls == 1,
+          "mesh loop Orca Z drift: detected AFTER slicing (the slice did run)",
+          f"slicer called {fake.calls} time(s)")
+
+
+# ---------------------------------------------------------------------------
+# The fan turns on immediately at the seam -- same rationale as
+# build_loop_hybrid_print's own "5b. Fan" step (Loop Fabric has no
+# fan_off_layers ramp of its own), reused verbatim by build_mesh_loop_
+# hybrid_print.
+# ---------------------------------------------------------------------------
+def test_mesh_loop_fan_turns_on_at_the_seam():
+    fake = FakeOrca()
+    _report, writer = _run_loop(fake)
+    text = writer.text()
+    seam_marker = "; hybrid: non-planar wall begins here"
+    after_seam = text.split(seam_marker, 1)[1]
+    m_idx = after_seam.find("M106")
+    fabric_idx = after_seam.find("; loop fabric (")
+    check(m_idx != -1 and (fabric_idx == -1 or m_idx < fabric_idx),
+          "mesh loop hybrid: fan (M106) turns on at the seam, before the "
+          "fabric rows begin")
+
+
+# ---------------------------------------------------------------------------
+# The wall's shape function really blends the mesh ring in at the seam: row
+# 0's own points (out_mm=0, so the emitted radius is EXACTLY _radius(theta,
+# line_z) with no outward-lean term to subtract first -- see loop_fabric.py's
+# _emit) must match mesh_r + w*(para_r - mesh_r) for a SINGLE weight w shared
+# by the whole row -- _emit always calls _radius with the ROW's own nominal
+# line height (loop_fabric.py's `line0`), not the per-sample dipped Z, so
+# every stitch in row 0 blends at the SAME height and therefore the SAME w.
+# w is computed independently here from the same _blend_weight/corner_extent
+# formula loop_fabric.py itself uses, so this checks the actual geometry
+# against the documented formula, not against itself.
+# ---------------------------------------------------------------------------
+def test_mesh_loop_blend_matches_weighted_interpolation():
+    fake = FakeOrca()
+    tris = load_stl(str(MESH_FIXTURE))
+    scaled = [tuple((x * 0.1, y * 0.1, z * 0.1) for (x, y, z) in t) for t in tris]
+    mesh_ring = top_contour_from_mesh(scaled, 60, z=0.45 - 0.45 * 0.5)
+
+    clean_spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8,
+                          stitch_mode="dip", out_mm=0.0)
+    report, writer = _run_loop(fake, loop_spec=clean_spec)
+    base_z = report["achieved_base_height_mm"]
+    # loop_fabric.py's own dip-mode line0 formula, substituting base_z for
+    # cuff_top (see build_loop_fabric's own "vertical layout" comments):
+    # line0 = base_z + loop_h - cuff_hook, with wave_amp=0 (this spec's
+    # default) and cuff_hook = min(_CUFF_HOOK_MM, 0.4 * loop_h).
+    loop_h = clean_spec.up_mm
+    cuff_hook = min(0.8, 0.4 * loop_h)
+    line0 = base_z + loop_h - cuff_hook
+    from trident_gcode.profile_stack import _blend_weight
+    corner_extent = 1.0 * 1.0  # blend_height=1.0, seam_coverage=1.0 (defaults)
+    t_blend = min(1.0, max(0.0, (line0 - base_z) / corner_extent))
+    w = _blend_weight(t_blend, 1.0)  # seam_style="fillet" (default) -> intensity 1.0
+    check(0.0 < w < 1.0,
+          "mesh loop blend: row 0's own line height sits mid-blend (not "
+          "clamped to 0 or 1), so this is a genuine test of the formula",
+          str(w))
+
+    text = writer.text()
+    seam_marker = "; hybrid: non-planar wall begins here"
+    fabric_marker = "; loop fabric ("
+    after_fabric = text.split(seam_marker, 1)[1].split(fabric_marker, 1)[1]
+    row_text = after_fabric.split("; row 1/", 1)[0]
+    cx = cy = 102.5
+
+    worst = 0.0
+    n_checked = 0
+    for line in row_text.splitlines():
+        if not line.startswith("G1 X"):
+            continue
+        parts = line.split()
+        x = float(parts[1][1:])
+        y = float(parts[2][1:])
+        theta = math.atan2(y - cy, x - cx)
+        r_actual = math.hypot(x - cx, y - cy)
+        r_mesh = mesh_ring_radius_at(mesh_ring, theta)
+        r_expected = r_mesh + w * (2.5 - r_mesh)
+        worst = max(worst, abs(r_actual - r_expected))
+        n_checked += 1
+    check(n_checked > 0,
+          "mesh loop blend: found row-0 stitch points to check", str(n_checked))
+    # Tolerance, not exactness: G-code coordinates are text-formatted to 4
+    # decimal places (GcodeWriter's own precision), so reconstructing r from
+    # parsed X/Y loses up to ~1e-4 mm to that rounding alone -- unrelated to
+    # the blend math itself, which is otherwise checked exactly.
+    check(worst < 2e-4,
+          "mesh loop blend: row 0's actual radius matches "
+          "mesh_r + w*(parametric_r - mesh_r) for every stitch sample, "
+          "using the SAME w loop_fabric.py's own formula computes "
+          "(tolerance accounts for G-code text rounding only)",
+          f"worst deviation {worst}")
+
+    # And genuinely a HEXAGON-shaped blend, not a circle-shaped one: mesh_r
+    # varies enough across theta that the blended row is not itself a
+    # perfect circle (a bug that would make the check above vacuous, since a
+    # circle blended with a circle looks like a circle regardless of w).
+    radii = [mesh_ring_radius_at(mesh_ring, 2.0 * math.pi * j / 360)
+             for j in range(360)]
+    check(max(radii) - min(radii) > 0.05,
+          "mesh loop blend: the mesh ring genuinely is not a circle "
+          "(otherwise this test could not distinguish a real blend from a "
+          "bug that ignored blend_ring entirely)",
+          str(max(radii) - min(radii)))
+
+
+# ---------------------------------------------------------------------------
+# EXPLICIT Z-CLAMP (loop_fabric.py's own blend_ring docstring): for any
+# z <= base_z the blend weight clamps to EXACTLY 0 (pure blend_ring), never
+# extrapolated toward the parametric shape. Row/stitch geometry itself never
+# actually samples z below base_z for the RADIUS blend (_emit always blends
+# at the row's own nominal line height, which sits above base_z by
+# construction for every shipped LoopSpec) -- the one place build_loop_fabric
+# really does query z <= base_z is the "move to fabric start" point
+# (`sx = cx + _radius(seam_theta, 0.0)`), which this test exercises directly
+# via a raw build_loop_fabric(resume=True, ...) call (bypassing the whole
+# mesh-hybrid orchestration, since only the blend math is under test here).
+# ---------------------------------------------------------------------------
+def test_loop_fabric_blend_z_clamp_below_seam():
+    import trident_gcode.hybrid as hybrid  # noqa: F401 -- ensures package import order
+    from trident_gcode.generators.loop_fabric import build_loop_fabric
+    from trident_gcode.paths import circle as circle_shape
+
+    tris = load_stl(str(MESH_FIXTURE))
+    scaled = [tuple((x * 0.1, y * 0.1, z * 0.1) for (x, y, z) in t) for t in tris]
+    mesh_ring = top_contour_from_mesh(scaled, 60, z=0.45 - 0.45 * 0.5)
+
+    profile = PrinterProfile()
+    writer = _new_writer(profile, layer_height=0.2)
+    base_z = 0.45
+    build_loop_fabric(
+        writer, shape=circle_shape(2.5), height=3.0,
+        spec=LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8,
+                     stitch_mode="dip", out_mm=0.0),
+        points_per_turn=60, center=(102.5, 102.5),
+        resume=True, base_z=base_z, seam_theta=0.0, fan_already_on=True,
+        blend_ring=mesh_ring, blend_height=1.0,
+        seam_style="fillet", seam_coverage=1.0,
+    )
+    text = writer.text()
+    # "move to fabric start" travels to (sx, cy, ...) BEFORE any extrusion --
+    # sx = cx + _radius(seam_theta=0.0, z=0.0), and z=0.0 < base_z=0.45
+    # unconditionally, so this must be EXACTLY the mesh ring's own radius at
+    # theta=0, never blended toward the parametric circle(2.5).
+    move_line = next(ln for ln in text.splitlines() if "; travel" in ln and "F" in ln
+                     and ln.startswith("G1 X"))
+    sx = float(move_line.split()[1][1:])
+    expected_r = mesh_ring_radius_at(mesh_ring, 0.0)
+    check(abs((sx - 102.5) - expected_r) < 1e-9,
+          "z-clamp: at z=0.0 (below base_z=0.45), _radius returns EXACTLY "
+          "the mesh ring's own radius, not blended toward the parametric "
+          "circle(2.5)",
+          f"sx-cx={sx - 102.5}, expected={expected_r}, "
+          f"parametric would be 2.5")
+
+
 def main() -> int:
     if not MESH_FIXTURE.exists():
         print(f"FAIL  mesh fixture missing: {MESH_FIXTURE}")
@@ -676,6 +1012,12 @@ def main() -> int:
     test_non_finite_inputs_are_rejected()
     test_zone_overrides_reach_the_wall_not_the_mesh_base()
     test_fan_off_layers_counts_from_the_base()
+    test_mesh_loop_happy_path()
+    test_mesh_loop_placement_mismatch_is_refused()
+    test_mesh_loop_seam_drift_raises()
+    test_mesh_loop_fan_turns_on_at_the_seam()
+    test_mesh_loop_blend_matches_weighted_interpolation()
+    test_loop_fabric_blend_z_clamp_below_seam()
 
     if _FAILURES:
         print(f"\n{len(_FAILURES)} FAILURE(S):")

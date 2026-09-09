@@ -470,6 +470,171 @@ def run_mesh_hybrid_print_case(tmpdir: Path) -> tuple[bool, str]:
     return True, "OK"
 
 
+def run_loop_hybrid_print_case(tmpdir: Path) -> tuple[bool, str]:
+    """Locks build_loop_hybrid_print()'s orchestration, byte-for-byte -- the
+    Loop Fabric sibling of run_hybrid_print_case(): a real OrcaSlicer-sliced
+    planar base (stubbed via the same sample_base.gcode fixture) with a Loop
+    Fabric wall RESUMED on top of it (build_loop_fabric's new resume=True/
+    base_z/seam_theta/fan_already_on kwargs, trident_gcode/generators/
+    loop_fabric.py) instead of the non-planar profile-spiral wall
+    run_hybrid_print_case exercises.
+
+    Same one stub as run_hybrid_print_case(): the module-level name
+    trident_gcode.hybrid.slice_stl_to_gcode is monkeypatched to return
+    tools/fixtures/orca_gcode/sample_base.gcode, so no live OrcaSlicer
+    install is needed. Everything else (STL build, JSON build, parse,
+    replay, placement check, retract decision, seam marker, seam-angle
+    probe via _nearest_ring_index, the resumed fabric wall itself) is the
+    real code path.
+
+    Arguments mirror run_hybrid_print_case()'s own base/seam geometry
+    exactly (same shape_fn/radius/height/transition_height/layer_height/
+    points_per_turn/center, so the base half of this print is byte-for-byte
+    the same STL/slice/replay run_hybrid_print_case already locks), with a
+    LoopSpec matching run_loop_fabric_case()'s own non-hybrid spec
+    (loops_per_turn=24, row_mm=0.5, up_mm=0.8, stitch_mode="dip") for the
+    wall. center=(102.5, 102.5) is load-bearing, not arbitrary: it must
+    match the fixture's own footprint or the placement sanity check
+    (shared with build_hybrid_print via _slice_replay_and_seam) raises."""
+    import trident_gcode.hybrid as hybrid
+    from trident_gcode.profile import PrinterProfile
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.blobs import LoopSpec
+    from trident_gcode.paths import circle
+
+    ref_name = "ref_loop_hybrid_print.gcode"
+    ref = REF_DIR / ref_name
+    if not ref.exists():
+        return False, f"reference file missing: {ref}"
+
+    fixture = ROOT / "tools" / "fixtures" / "orca_gcode" / "sample_base.gcode"
+    if not fixture.exists():
+        return False, f"fixture missing: {fixture}"
+
+    def _fake_slice(stl_bytes, *, machine_json, process_json, filament_json,
+                    orca_path, **kw):
+        return fixture.read_text(encoding="utf-8")
+
+    profile = PrinterProfile()
+    writer = GcodeWriter(
+        profile=profile, line_width=0.45, layer_height=0.3,
+        bed_temp=60.0, nozzle_temp=210.0, material="PLA",
+        print_speed=40.0, first_layer_speed=20.0,
+    )
+    spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8,
+                    stitch_mode="dip")
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = _fake_slice
+    try:
+        hybrid.build_loop_hybrid_print(
+            writer,
+            shape_fn=circle(3.0), radius=3.0, height=20.0,
+            transition_height=0.4, layer_height=0.3, points_per_turn=60,
+            loop_spec=spec,
+            wall_count=2, infill_density=0.2, infill_pattern="grid",
+            orca_path="unused-because-monkeypatched",
+            center=(102.5, 102.5),
+        )
+    except Exception as e:  # noqa: BLE001 -- report, don't mask
+        return False, f"build_loop_hybrid_print raised {type(e).__name__}: {e}"
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+
+    out = tmpdir / ref_name
+    writer.save(str(out))
+    generated = out.read_bytes()
+    expected = ref.read_bytes()
+    if generated != expected:
+        return False, f"byte mismatch: generated {len(generated)}b vs reference {len(expected)}b"
+    return True, "OK"
+
+
+def run_mesh_loop_hybrid_print_case(tmpdir: Path) -> tuple[bool, str]:
+    """Locks build_mesh_loop_hybrid_print()'s orchestration, byte-for-byte --
+    Phase 2's mesh sibling of run_loop_hybrid_print_case(): a real
+    OrcaSlicer-sliced MESH planar base (the same hex_mount.stl fixture and
+    stub as run_mesh_hybrid_print_case) with a Loop Fabric wall RESUMED on
+    top of it and blended in from the mesh's own outline near the seam
+    (build_loop_fabric's new blend_ring/blend_height/seam_style/
+    seam_coverage kwargs, trident_gcode/generators/loop_fabric.py) instead
+    of the parametric-wall blend_stack + build_profile_spiral
+    run_mesh_hybrid_print_case exercises.
+
+    Same one stub as run_mesh_hybrid_print_case(): the module-level name
+    trident_gcode.hybrid.slice_stl_to_gcode is monkeypatched to return
+    tools/fixtures/orca_gcode/sample_base.gcode, so no live OrcaSlicer
+    install is needed. Everything else (scale, mesh-height seam, translation,
+    pre-flight checks, top_contour_from_mesh seam-ring extraction, STL build,
+    parse, replay, placement check, Orca-Z-drift check, seam-angle probe via
+    _nearest_ring_index, the resumed and mesh-blended fabric wall itself) is
+    the real code path.
+
+    Arguments mirror run_mesh_hybrid_print_case()'s own base/mesh geometry
+    exactly (same mesh fixture/scale/layer_height/points_per_turn/center/
+    shape_fn/radius/blend_height, so the base half of this print is
+    byte-for-byte the same STL/slice/replay run_mesh_hybrid_print_case
+    already locks), with a LoopSpec matching run_loop_hybrid_print_case()'s
+    own spec for the wall. center=(102.5, 102.5) is load-bearing, not
+    arbitrary: it must match the fixture's own footprint or the placement
+    sanity check raises."""
+    import trident_gcode.hybrid as hybrid
+    from trident_gcode.profile import PrinterProfile
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.mesh import load_stl
+    from trident_gcode.blobs import LoopSpec
+    from trident_gcode.paths import circle
+
+    ref_name = "ref_mesh_loop_hybrid_print.gcode"
+    ref = REF_DIR / ref_name
+    if not ref.exists():
+        return False, f"reference file missing: {ref}"
+
+    fixture = ROOT / "tools" / "fixtures" / "orca_gcode" / "sample_base.gcode"
+    if not fixture.exists():
+        return False, f"fixture missing: {fixture}"
+    mesh_fixture = ROOT / "tools" / "fixtures" / "meshes" / "hex_mount.stl"
+    if not mesh_fixture.exists():
+        return False, f"fixture missing: {mesh_fixture}"
+
+    def _fake_slice(stl_bytes, *, machine_json, process_json, filament_json,
+                    orca_path, **kw):
+        return fixture.read_text(encoding="utf-8")
+
+    profile = PrinterProfile()
+    writer = GcodeWriter(
+        profile=profile, line_width=0.45, layer_height=0.2,
+        bed_temp=60.0, nozzle_temp=210.0, material="PLA",
+        print_speed=40.0, first_layer_speed=20.0,
+    )
+    spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8,
+                    stitch_mode="dip")
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = _fake_slice
+    try:
+        hybrid.build_mesh_loop_hybrid_print(
+            writer,
+            tris=load_stl(str(mesh_fixture)), scale=0.1,
+            layer_height=0.2, points_per_turn=60,
+            shape_fn=circle(2.5), radius=2.5, height=3.0, blend_height=1.0,
+            loop_spec=spec,
+            wall_count=2, infill_density=0.2, infill_pattern="grid",
+            orca_path="unused-because-monkeypatched",
+            center=(102.5, 102.5),
+        )
+    except Exception as e:  # noqa: BLE001 -- report, don't mask
+        return False, f"build_mesh_loop_hybrid_print raised {type(e).__name__}: {e}"
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+
+    out = tmpdir / ref_name
+    writer.save(str(out))
+    generated = out.read_bytes()
+    expected = ref.read_bytes()
+    if generated != expected:
+        return False, f"byte mismatch: generated {len(generated)}b vs reference {len(expected)}b"
+    return True, "OK"
+
+
 def run_orca_replay_case(tmpdir: Path) -> tuple[bool, str]:
     """orca_replay.replay_moves_onto_writer() has no CLI flag either -- same
     direct-construction pattern as the other in-process cases. Feeds a small
@@ -570,6 +735,14 @@ def main() -> int:
 
         ok, msg = run_mesh_hybrid_print_case(tmpdir)
         print(f"{'PASS' if ok else 'FAIL'}  {'ref_mesh_hybrid_print.gcode':28s} {msg if not ok else ''}")
+        all_ok &= ok
+
+        ok, msg = run_loop_hybrid_print_case(tmpdir)
+        print(f"{'PASS' if ok else 'FAIL'}  {'ref_loop_hybrid_print.gcode':28s} {msg if not ok else ''}")
+        all_ok &= ok
+
+        ok, msg = run_mesh_loop_hybrid_print_case(tmpdir)
+        print(f"{'PASS' if ok else 'FAIL'}  {'ref_mesh_loop_hybrid_print.gcode':28s} {msg if not ok else ''}")
         all_ok &= ok
 
     print("ALL PASS" if all_ok else "REGRESSION DETECTED")

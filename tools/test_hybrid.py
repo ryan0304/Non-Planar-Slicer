@@ -26,6 +26,7 @@ import trident_gcode.hybrid as hybrid
 from trident_gcode.profile import PrinterProfile
 from trident_gcode.gcode import GcodeWriter
 from trident_gcode.paths import circle, ZoneOverride
+from trident_gcode.blobs import LoopSpec
 
 
 _FAILURES: list[str] = []
@@ -307,6 +308,156 @@ def test_fan_off_layers_counts_from_the_base():
         hybrid.slice_stl_to_gcode = real_slice
 
 
+# ---------------------------------------------------------------------------
+# 7. Loop Fabric hybrid: build_loop_hybrid_print happy path -- a real Orca-
+#    sliced planar base RESUMED into a Loop Fabric wall (no solid cuff of
+#    its own -- build_loop_fabric's new resume=True skips it entirely).
+# ---------------------------------------------------------------------------
+def test_loop_hybrid_happy_path():
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = _fake_slice
+    try:
+        profile = PrinterProfile()
+        writer = _new_writer(profile)
+        spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8, stitch_mode="dip")
+        report = hybrid.build_loop_hybrid_print(
+            writer,
+            shape_fn=circle(3.0), radius=3.0, height=20.0,
+            transition_height=0.4, layer_height=0.3, points_per_turn=60,
+            loop_spec=spec,
+            wall_count=2, infill_density=0.2, infill_pattern="grid",
+            orca_path="unused-because-monkeypatched",
+            center=(102.5, 102.5),
+        )
+        check(report["hybrid"] is True, "loop hybrid: report marks hybrid=True")
+        check(report["loop_hybrid"] is True,
+              "loop hybrid: report marks loop_hybrid=True")
+        check(report["achieved_base_height_mm"] > 0,
+              "loop hybrid: achieved_base_height_mm is positive",
+              str(report["achieved_base_height_mm"]))
+        check(report["orca_base_layers"] >= 1,
+              "loop hybrid: at least one Orca base layer",
+              str(report["orca_base_layers"]))
+        check(report["extrude_count"] > 0,
+              "loop hybrid: base replay extruded something",
+              str(report["extrude_count"]))
+        check("fabric_rows" in report and report["fabric_rows"] > 0,
+              "loop hybrid: wall report merged in (fabric_rows > 0)",
+              str(report.get("fabric_rows")))
+        check(report["points"] > 0,
+              "loop hybrid: wall's own points field is honest and positive "
+              "(no cuff points counted -- resume=True skips the cuff)",
+              str(report["points"]))
+        text = writer.text()
+        check(text.count("PRINT_START") == 1,
+              "loop hybrid: exactly one PRINT_START in the whole print",
+              str(text.count("PRINT_START")))
+        check(text.count("PRINT_END") == 1,
+              "loop hybrid: exactly one PRINT_END in the whole print",
+              str(text.count("PRINT_END")))
+        check("anchor cuff" not in text,
+              "loop hybrid: no solid cuff is printed (the planar base "
+              "anchors row 0 instead)")
+        seam_marker = "; hybrid: non-planar wall begins here"
+        check(seam_marker in text, "loop hybrid: seam marker present in the output")
+        check("; loop fabric (" in text.split(seam_marker, 1)[1],
+              "loop hybrid: real loop-fabric stitch content follows the "
+              "seam marker")
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+
+
+# ---------------------------------------------------------------------------
+# 8. Loop Fabric hybrid: placement mismatch still refuses -- shared
+#    _slice_replay_and_seam, same check as the parametric wall's own.
+# ---------------------------------------------------------------------------
+def test_loop_hybrid_placement_mismatch_is_refused():
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = _fake_slice
+    try:
+        profile = PrinterProfile()
+        writer = _new_writer(profile)
+        spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8, stitch_mode="dip")
+        try:
+            hybrid.build_loop_hybrid_print(
+                writer,
+                shape_fn=circle(3.0), radius=3.0, height=20.0,
+                transition_height=0.4, layer_height=0.3, points_per_turn=60,
+                loop_spec=spec,
+                wall_count=2, infill_density=0.2, infill_pattern="grid",
+                orca_path="unused-because-monkeypatched",
+                center=profile.bed_center,  # (117.5, 117.5) -- far from the fixture's ~(102.5, 102.5)
+            )
+            check(False, "loop hybrid placement mismatch: raises ValueError",
+                  "no exception raised")
+        except ValueError as e:
+            check("off-target" in str(e),
+                  "loop hybrid placement mismatch: raises ValueError", str(e))
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+
+
+# ---------------------------------------------------------------------------
+# 9. Loop Fabric hybrid: unknown infill pattern fails fast, before any
+#    slicing work starts -- same as build_hybrid_print's own check.
+# ---------------------------------------------------------------------------
+def test_loop_hybrid_unknown_infill_pattern_fails_fast():
+    profile = PrinterProfile()
+    writer = _new_writer(profile)
+    spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8, stitch_mode="dip")
+    try:
+        hybrid.build_loop_hybrid_print(
+            writer,
+            shape_fn=circle(3.0), radius=3.0, height=20.0,
+            transition_height=0.4, layer_height=0.3, points_per_turn=60,
+            loop_spec=spec,
+            wall_count=2, infill_density=0.2, infill_pattern="not_a_real_pattern",
+            orca_path="unused",
+            center=(102.5, 102.5),
+        )
+        check(False,
+              "loop hybrid unknown infill pattern: raises ValueError before slicing",
+              "no exception raised")
+    except ValueError as e:
+        check("not_a_real_pattern" in str(e),
+              "loop hybrid unknown infill pattern: raises ValueError before slicing",
+              str(e))
+
+
+# ---------------------------------------------------------------------------
+# 10. Loop Fabric hybrid: the fan turns on immediately at the seam -- Loop
+#     Fabric has no fan_off_layers ramp of its own (see
+#     build_loop_hybrid_print's own "5b. Fan" comment), so the M106 must
+#     land right after the seam marker, before the fabric rows begin.
+# ---------------------------------------------------------------------------
+def test_loop_hybrid_fan_turns_on_at_the_seam():
+    real_slice = hybrid.slice_stl_to_gcode
+    hybrid.slice_stl_to_gcode = _fake_slice
+    try:
+        profile = PrinterProfile()
+        writer = _new_writer(profile)
+        spec = LoopSpec(loops_per_turn=24, row_mm=0.5, up_mm=0.8, stitch_mode="dip")
+        hybrid.build_loop_hybrid_print(
+            writer,
+            shape_fn=circle(3.0), radius=3.0, height=20.0,
+            transition_height=0.4, layer_height=0.3, points_per_turn=60,
+            loop_spec=spec,
+            wall_count=2, infill_density=0.2, infill_pattern="grid",
+            orca_path="unused-because-monkeypatched",
+            center=(102.5, 102.5),
+        )
+        text = writer.text()
+        seam_marker = "; hybrid: non-planar wall begins here"
+        after_seam = text.split(seam_marker, 1)[1]
+        m_idx = after_seam.find("M106")
+        fabric_idx = after_seam.find("; loop fabric (")
+        check(m_idx != -1 and (fabric_idx == -1 or m_idx < fabric_idx),
+              "loop hybrid: fan (M106) turns on at the seam, before the "
+              "fabric rows begin")
+    finally:
+        hybrid.slice_stl_to_gcode = real_slice
+
+
 def main() -> int:
     test_happy_path()
     test_placement_mismatch_is_refused()
@@ -314,6 +465,10 @@ def main() -> int:
     test_radius_envelope_rescaling_is_consistent()
     test_zone_overrides_reach_the_wall_not_the_base()
     test_fan_off_layers_counts_from_the_base()
+    test_loop_hybrid_happy_path()
+    test_loop_hybrid_placement_mismatch_is_refused()
+    test_loop_hybrid_unknown_infill_pattern_fails_fast()
+    test_loop_hybrid_fan_turns_on_at_the_seam()
 
     if _FAILURES:
         print(f"\n{len(_FAILURES)} FAILURE(S):")

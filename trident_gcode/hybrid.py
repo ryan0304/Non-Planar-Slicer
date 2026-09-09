@@ -33,6 +33,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable
 
+from .blobs import LoopSpec
 from .gcode import GcodeWriter
 from .mesh import Triangle, mesh_bounds, slice_outer_loop
 from .orca import FilamentSettings
@@ -52,6 +53,7 @@ from .profile_stack import (
     top_contour_from_mesh,
 )
 from .stl_export import contours_to_mesh, write_binary_stl
+from .generators.loop_fabric import build_loop_fabric
 from .generators.profile_spiral import build_profile_spiral
 
 _PLACEMENT_TOLERANCE_MM = 2.0
@@ -767,6 +769,188 @@ def build_hybrid_print(
     }
 
 
+def build_loop_hybrid_print(
+    writer: GcodeWriter,
+    *,
+    shape_fn: Callable[[float], float],
+    radius: float,
+    height: float,
+    transition_height: float,
+    layer_height: float,
+    points_per_turn: int,
+    loop_spec: "LoopSpec",
+    wall_count: int,
+    infill_density: float,
+    infill_pattern: str,
+    orca_path: str,
+    filament_name: str | None = None,
+    radius_envelope: Callable[[float], float] | None = None,
+    center: tuple[float, float] | None = None,
+    cage: list | None = None,
+    xy_twist_turns: float = 0.0,
+    first_layer_squish: float = 0.75,
+    cuff_lh: float = 0.3,
+    fan_speed: float | None = None,
+    travel_z_clearance: float = 5.0,
+    planar_fan_speed: float | None = None,
+    base_fan_curve: "BaseFanCurve | None" = None,
+) -> dict:
+    """Emit a hybrid print: an OrcaSlicer-sliced planar base up to
+    *transition_height*, then a LOOP FABRIC (knitted) wall for the rest of
+    *height*. Returns a merged report dict.
+
+    Mirrors :func:`build_hybrid_print`'s own structure -- layer-snapped base,
+    silhouette STL, the same shared :func:`_slice_replay_and_seam` trust
+    boundary, the same seam-angle probe via ``_nearest_ring_index`` -- but
+    calls :func:`trident_gcode.generators.loop_fabric.build_loop_fabric` with
+    ``resume=True`` for the wall above the seam instead of
+    :func:`build_profile_spiral`. See that function's own ``resume``/
+    ``base_z``/``seam_theta``/``fan_already_on`` docstrings for exactly what
+    each does; this is the ONE place in the app that constructs them.
+
+    *shape_fn*/*radius*/*points_per_turn* are shared between the base and the
+    wall so the seam is a per-vertex match (no visible step), exactly as in
+    build_hybrid_print. *height* is the WHOLE object (the base eats into it,
+    same convention as build_hybrid_print -- NOT build_mesh_hybrid_print's
+    "wall only" convention).
+
+    *radius_envelope* is the caller's WHOLE-OBJECT curve (height fraction t
+    in [0,1], 0=bed 1=top). This function rescales it onto the base
+    ([0, seam_t]) and the wall ([seam_t, 1]) the same way build_hybrid_print
+    does for its own radius_envelope, once achieved_base_height is known.
+    There is no amp_envelope/z_pattern equivalent here: Loop Fabric has no
+    z-wave/radial-texture concept at all (same scope restriction the plain,
+    non-hybrid Loop Fabric branch in serve.py already documents).
+
+    *cage*/*xy_twist_turns* reach the WALL only (build_loop_fabric), never
+    the base's own silhouette contour stack -- same convention
+    build_hybrid_print already uses for the parametric wall.
+
+    *first_layer_squish*/*cuff_lh* are accepted and forwarded to
+    build_loop_fabric for interface symmetry with its non-hybrid signature,
+    but have no visible effect here: the cuff they would configure never
+    prints when resume=True.
+
+    UNTESTED ON REAL HARDWARE, like every other Loop Fabric + hybrid-base
+    combination this feature adds -- see CLAUDE.md's print-tested-claims
+    rule; serve.py surfaces a "GUESS, NOT PRINT-TESTED" warning for this
+    combined path.
+
+    Raises OrcaSliceError (from orca_slice.py) or ValueError on any
+    failure -- there is never a silent fallback to a cuff-anchored,
+    non-hybrid Loop Fabric print.
+    """
+    profile = writer.profile
+
+    # 1. Snap to a whole number of Orca layers; the ACHIEVED value (not the
+    #    requested one) drives everything downstream -- identical to
+    #    build_hybrid_print's own step 1.
+    n_base_layers = max(2, round(transition_height / layer_height))
+    achieved_base_height = n_base_layers * layer_height
+    seam_t = achieved_base_height / height if height > 0 else 0.0
+
+    def _base_radius_env(t_local):
+        return radius_envelope(t_local * seam_t)
+
+    def _wall_radius_env(t_local):
+        return radius_envelope(seam_t + t_local * (1.0 - seam_t))
+
+    # 2. Base contour stack: silhouette only, same shape_fn as the wall --
+    #    identical to build_hybrid_print's own step 2.
+    base_contours = stack_from_shape(
+        shape_fn, radius, achieved_base_height, layer_height, points_per_turn,
+        radius_envelope=(_base_radius_env if radius_envelope is not None else None),
+    )
+    base_heights = [i * layer_height for i in range(len(base_contours))]
+
+    # 3. Absolute bed coordinates -- identical to build_hybrid_print's own
+    #    step 3.
+    cx, cy = center if center is not None else profile.bed_center
+    translated = [[(x + cx, y + cy) for (x, y) in ring] for ring in base_contours]
+
+    # 4. Watertight STL for Orca to slice.
+    tris = contours_to_mesh(translated, base_heights, cap_bottom=True, cap_top=True)
+    stl_bytes = write_binary_stl(tris)
+
+    # 5. Slice -> parse -> header -> replay -> placement check -> retract ->
+    #    seam marker. Shared verbatim with build_hybrid_print()/
+    #    build_mesh_hybrid_print() so every hybrid entry point crosses
+    #    Orca's trust boundary through the same code.
+    replay_report, _moves = _slice_replay_and_seam(
+        writer, stl_bytes=stl_bytes, layer_height=layer_height,
+        wall_count=wall_count, infill_density=infill_density,
+        infill_pattern=infill_pattern, orca_path=orca_path,
+        filament_name=filament_name, cx=cx, cy=cy,
+        seam_z=achieved_base_height, planar_fan_speed=planar_fan_speed,
+        base_fan_curve=base_fan_curve,
+    )
+
+    # 5b. Fan: Loop Fabric has no fan_off_layers ramp of its own -- the whole
+    #     generator has exactly ONE fan-on trigger point (right after the
+    #     cuff's first full turn, see loop_fabric.py), and that trigger lives
+    #     inside the solid-cuff block, which never runs at all once
+    #     resume=True. So unlike build_hybrid_print's wall (which can still
+    #     make the caller wait extra turns via wall_fan_off_layers), there is
+    #     nothing left to wait FOR once the seam is reached -- the fan has to
+    #     be turned on HERE, right after the base/seam finishes, at the same
+    #     flat speed the non-hybrid Loop Fabric path already uses (fan_speed
+    #     if given, else writer.fan_speed). The one exception is when the
+    #     base's own planar_fan_speed/base_fan_curve already left the fan on
+    #     (at whichever speed THAT set it to) -- that value simply carries
+    #     forward unchanged, the same precedent build_hybrid_print's own step
+    #     5b sets for its wall. Either way fan_already_on is True by the time
+    #     build_loop_fabric runs below, so its own (structurally unreachable
+    #     once resume=True, but still gated for symmetry) fan trigger never
+    #     fires a redundant second M106.
+    if planar_fan_speed is not None or base_fan_curve is not None:
+        fan_already_on = True
+    else:
+        writer.set_fan(fan_speed if fan_speed is not None else writer.fan_speed)
+        fan_already_on = True
+
+    # 6. Seam alignment: probe the wall's own t=0 ring exactly as
+    #    build_hybrid_print's own step 6 does, and re-anchor Loop Fabric's
+    #    stitch angles there via seam_theta. Unlike build_hybrid_print,
+    #    this is a plain angle offset rather than a ring re-index/roll:
+    #    build_loop_fabric's stitches are evaluated continuously (dtheta
+    #    steps, bezier/cosine sampling in between), never on
+    #    stack_from_shape's discrete points_per_turn grid, so there is no
+    #    ring to roll -- see loop_fabric.py's own seam_theta docstring.
+    upper_height = height - achieved_base_height
+    wall_radius_envelope = _wall_radius_env if radius_envelope is not None else None
+    wx, wy, _wz = writer.position
+    probe_ring = stack_from_shape(
+        shape_fn, radius, layer_height, layer_height, points_per_turn,
+        radius_envelope=wall_radius_envelope,
+    )[0]
+    seam_k = _nearest_ring_index(probe_ring, (wx - cx, wy - cy))
+    seam_theta = 2.0 * math.pi * seam_k / points_per_turn
+
+    wall_report = build_loop_fabric(
+        writer, shape=shape_fn, height=upper_height, spec=loop_spec,
+        radius_envelope=wall_radius_envelope,
+        xy_twist_turns=xy_twist_turns,
+        cage=cage,
+        center=(cx, cy),
+        first_layer_squish=first_layer_squish,
+        cuff_lh=cuff_lh,
+        points_per_turn=points_per_turn,
+        travel_z_clearance=travel_z_clearance,
+        fan_speed=fan_speed,
+        resume=True, base_z=achieved_base_height, seam_theta=seam_theta,
+        fan_already_on=fan_already_on,
+    )
+
+    return {
+        "hybrid": True,
+        "loop_hybrid": True,
+        "achieved_base_height_mm": achieved_base_height,
+        "orca_base_layers": n_base_layers,
+        **replay_report,
+        **wall_report,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Mesh-based hybrid: the user's own STL is the planar base.
 # ---------------------------------------------------------------------------
@@ -1159,6 +1343,292 @@ def build_mesh_hybrid_print(
         "blend_max_step_mm": max_step,
         "blend_max_slope": max_step / layer_height,
         "blend_max_overhang_deg": math.degrees(math.atan2(max_step, layer_height)),
+        **replay_report,
+        **wall_report,
+    }
+
+
+def build_mesh_loop_hybrid_print(
+    writer: GcodeWriter,
+    *,
+    tris: list[Triangle],
+    scale: float,
+    layer_height: float,
+    points_per_turn: int,
+    shape_fn: Callable[[float], float],
+    radius: float,
+    height: float,
+    blend_height: float,
+    loop_spec: "LoopSpec",
+    wall_count: int,
+    infill_density: float,
+    infill_pattern: str,
+    orca_path: str,
+    top_shell_layers: int = 3,
+    bottom_shell_layers: int = 3,
+    process_overrides: dict | None = None,
+    center: tuple[float, float] | None = None,
+    radius_envelope: Callable[[float], float] | None = None,
+    filament_name: str | None = None,
+    seam_style: str = "fillet",
+    seam_coverage: float = 1.0,
+    xy_twist_turns: float = 0.0,
+    cage: list | None = None,
+    first_layer_squish: float = 0.75,
+    cuff_lh: float = 0.3,
+    fan_speed: float | None = None,
+    travel_z_clearance: float = 5.0,
+    planar_fan_speed: float | None = None,
+    base_fan_curve: "BaseFanCurve | None" = None,
+) -> dict:
+    """Emit a hybrid print whose planar base is the user's OWN solid STL,
+    with a LOOP FABRIC (knitted) wall continuing above it instead of the
+    parametric non-planar wall :func:`build_mesh_hybrid_print` builds.
+
+    Mirrors :func:`build_mesh_hybrid_print`'s own structure closely -- mesh
+    scale/placement, the same pre-flight checks (footprint fits the bed,
+    mesh has Z extent, is sliceable, the seam ring is a single star-convex
+    loop), the same :func:`top_contour_from_mesh` seam-ring extraction, the
+    same :func:`_slice_replay_and_seam` trust boundary, the same
+    Orca-agreement-on-seam-height check -- but calls
+    :func:`trident_gcode.generators.loop_fabric.build_loop_fabric` with
+    ``resume=True, blend_ring=mesh_ring, blend_height=..., seam_style=...,
+    seam_coverage=...`` for the wall instead of :func:`blend_stack` +
+    :func:`build_profile_spiral`. See that function's own ``blend_ring``/
+    ``blend_height``/``seam_style``/``seam_coverage`` docstrings for exactly
+    what each does; this is the one place in the app that constructs them
+    for a MESH base (:func:`build_loop_hybrid_print` above is the parametric
+    equivalent).
+
+    HEIGHT SEMANTICS -- same as :func:`build_mesh_hybrid_print`, NOT
+    :func:`build_loop_hybrid_print`
+    -------------------------------------------------------------------
+    *height* here is ONLY the non-planar wall ABOVE the mesh (a 20 mm mount
+    with ``height=200`` is a 220 mm object) -- the mesh-hybrid convention,
+    because the mesh's own height is not known until its bounds are read,
+    unlike the parametric base's caller-supplied ``transition_height``.
+
+    Seam-angle alignment -- deliberately NOT a ring roll
+    ------------------------------------------------------
+    :func:`build_mesh_hybrid_print` rolls its own ``mesh_ring`` array by the
+    matching seam index so ring 0 lines up with ``blend_stack``'s
+    ``theta0``-rotated parametric stack under ONE shared rotation -- a
+    discrete, index-aligned scheme. Loop Fabric's blend is CONTINUOUS
+    (:func:`trident_gcode.profile_stack.mesh_ring_radius_at`, angular
+    interpolation at an arbitrary query angle) and every angle it is queried
+    at -- stitch angles, the plain ``shape()`` call it blends against, the
+    move-to-start point -- is already an ABSOLUTE angle in the mesh's own
+    placement frame (``seam_theta`` is added at the call site, mirroring
+    :func:`build_loop_hybrid_print`'s own seam_theta derivation exactly).
+    So ``mesh_ring`` is passed to :func:`build_loop_fabric` UNROLLED, in
+    exactly the frame :func:`top_contour_from_mesh` returns it in -- rolling
+    it here would shift its own angle grid out from under the absolute
+    angles the blend queries it at, corrupting the blend near the seam. The
+    seam ANGLE itself is still found with :func:`_nearest_ring_index`
+    against this same (unrolled) ``mesh_ring`` -- the identical mechanism
+    :func:`build_mesh_hybrid_print` uses to find its own roll index -- just
+    turned into radians instead of a rotation, because
+    :func:`build_loop_fabric` takes an angle (``seam_theta``), not a ring
+    rotation.
+
+    Pre-flight height check -- deferred, like the parametric hybrid path
+    ----------------------------------------------------------------------
+    Unlike :func:`build_mesh_hybrid_print`'s own ``total_height >
+    profile.z_max`` check, this function does NOT recompute an upfront
+    total-height estimate: Loop Fabric's own top Z
+    (``line0 + (n_rows-1)*row_mm + ...``, see loop_fabric.py) is a
+    genuinely different formula from the parametric wall's, driven by
+    row/loop geometry and this printer's own ``z_amp_max`` clamping rather
+    than a flat ``layer_height`` stack. Duplicating an approximate version
+    of that formula here would risk silently drifting from the real one.
+    Exactly like :func:`build_loop_hybrid_print` (the parametric loop-hybrid
+    entry point) above, this defers to :func:`build_loop_fabric`'s own
+    internal ``top_z > profile.z_max`` check as the real backstop -- the
+    server layer's own conservative lower-bound estimate
+    (``serve.py``'s ``_mesh_lower_bound_top``) still runs before either
+    function does, unconditionally, for any mesh-hybrid request.
+
+    UNTESTED ON REAL HARDWARE, like every other Loop Fabric + hybrid-base
+    combination this feature adds -- see CLAUDE.md's print-tested-claims
+    rule; serve.py surfaces a "GUESS, NOT PRINT-TESTED" warning for this
+    combined path.
+
+    Raises OrcaSliceError (from orca_slice.py, carrying Orca's captured
+    stderr verbatim), OrcaGcodeParseError or ValueError on any failure --
+    there is never a silent fallback to a cuff-anchored, non-hybrid Loop
+    Fabric print.
+    """
+    profile = writer.profile
+
+    for name, val in (("scale", scale), ("layer_height", layer_height),
+                      ("height", height), ("blend_height", blend_height),
+                      ("radius", radius), ("seam_coverage", seam_coverage)):
+        if not isinstance(val, (int, float)) or isinstance(val, bool) \
+                or not math.isfinite(float(val)):
+            raise ValueError(
+                "%s must be a finite number, got %r -- a non-finite value "
+                "passes every comparison downstream instead of tripping it, "
+                "so it is rejected here rather than clamped" % (name, val))
+    if seam_style not in ("fillet", "chamfer"):
+        raise ValueError(
+            "seam_style must be 'fillet' or 'chamfer', got %r" % (seam_style,))
+    if scale <= 0.0:
+        raise ValueError("scale must be positive, got %r" % (scale,))
+    if layer_height <= 0.0:
+        raise ValueError("layer_height must be positive, got %r" % (layer_height,))
+    if height <= 0.0:
+        raise ValueError(
+            "height must be positive, got %r -- for this mesh hybrid it is "
+            "the non-planar wall ABOVE the mesh, not the whole object"
+            % (height,))
+    if blend_height < 0.0:
+        raise ValueError("blend_height must not be negative, got %r" % (blend_height,))
+    if not tris:
+        raise ValueError("no triangles to slice -- the imported mesh is empty")
+
+    # 1. Uniform scale, mirroring serve.py's own mesh-scale step -- identical
+    #    to build_mesh_hybrid_print's own step 1.
+    if scale != 1.0:
+        tris = _scaled(tris, scale)
+
+    (minx, miny, minz), (maxx, maxy, maxz) = mesh_bounds(tris)
+    mesh_height = maxz - minz
+    if not (mesh_height > 0.0):
+        raise ValueError(
+            "the mesh has no Z extent (%.4f mm), so there is nothing to slice "
+            "into a planar base. Export the model Z-up (the print direction is "
+            "+Z) and check the units." % (mesh_height,))
+
+    # 2. The seam height -- the mesh's own top, not a layer-snapped multiple.
+    #    Identical reasoning to build_mesh_hybrid_print's own step 2.
+    achieved_base_height = mesh_height
+    if achieved_base_height < 2.0 * layer_height:
+        raise ValueError(
+            "the mesh is only %.3f mm tall, which is under two %.3f mm layers, "
+            "so there is no solid base to print before the Loop Fabric wall "
+            "starts. Use a taller model or a smaller layer height."
+            % (mesh_height, layer_height))
+    n_base_layers = max(1, int(round(mesh_height / layer_height)))
+
+    # 3. Placement -- identical to build_mesh_hybrid_print's own step 3.
+    mx, my = mesh_xy_midpoint(tris)
+    cx, cy = center if center is not None else profile.bed_center
+    tris = _translated(tris, cx - mx, cy - my, -minz)
+
+    # 4. Pre-flight, all of it before the subprocess. Footprint-fits-bed and
+    #    mesh-sliceable checks are identical to build_mesh_hybrid_print's own
+    #    step 4; the total-height check is deliberately NOT duplicated here
+    #    -- see this function's own docstring section on why.
+    span_x, span_y = maxx - minx, maxy - miny
+    lo_x, hi_x = cx - span_x / 2.0, cx + span_x / 2.0
+    lo_y, hi_y = cy - span_y / 2.0, cy + span_y / 2.0
+    if (lo_x < 0.0 or lo_y < 0.0
+            or hi_x > profile.bed_size_x or hi_y > profile.bed_size_y):
+        raise ValueError(
+            "the mesh footprint %.1f x %.1f mm centered at (%.1f, %.1f) spans "
+            "X[%.1f-%.1f] Y[%.1f-%.1f], outside this printer's %.0f x %.0f mm "
+            "bed. Scale the model down or move it." % (
+                span_x, span_y, cx, cy, lo_x, hi_x, lo_y, hi_y,
+                profile.bed_size_x, profile.bed_size_y))
+
+    mid_loop = slice_outer_loop(tris, mesh_height / 2.0)
+    if mid_loop is None or len(mid_loop) < 4:
+        raise ValueError(
+            "no printable cross-section at the mesh's own mid-height "
+            "(z=%.3f mm) -- is the STL watertight and Z-up? Nothing was sent "
+            "to OrcaSlicer." % (mesh_height / 2.0,))
+
+    # The seam ring -- identical extraction to build_mesh_hybrid_print's own
+    # step (top_contour_from_mesh raises on a degenerate, multi-loop or
+    # non-star-convex section). Sampled at the middle of the last printed
+    # layer for the same reason build_mesh_hybrid_print samples there (see
+    # its own comment): always strictly inside the solid, even when
+    # achieved_base_height lands exactly on maxz.
+    mesh_ring = top_contour_from_mesh(
+        tris, points_per_turn, z=achieved_base_height - layer_height * 0.5)
+
+    # 5. The user's TRUE solid, straight to Orca.
+    stl_bytes = write_binary_stl(tris)
+
+    # 6. Slice -> parse -> header -> replay -> placement check -> retract ->
+    #    seam marker. The same trust boundary every hybrid entry point
+    #    crosses.
+    replay_report, moves = _slice_replay_and_seam(
+        writer, stl_bytes=stl_bytes, layer_height=layer_height,
+        wall_count=wall_count, infill_density=infill_density,
+        infill_pattern=infill_pattern, orca_path=orca_path,
+        top_shell_layers=top_shell_layers, bottom_shell_layers=bottom_shell_layers,
+        process_overrides=process_overrides,
+        filament_name=filament_name, cx=cx, cy=cy,
+        seam_z=achieved_base_height, planar_fan_speed=planar_fan_speed,
+        base_fan_curve=base_fan_curve,
+    )
+
+    # 7. Did Orca agree with the prediction? Identical to
+    #    build_mesh_hybrid_print's own step 7.
+    extruded_z = [m.z for m in moves if m.e_delta is not None and m.e_delta > 0]
+    if not extruded_z:
+        raise ValueError(
+            "OrcaSlicer produced no extruding moves for this mesh, so there "
+            "is no planar base to continue from; refusing to print a "
+            "Loop Fabric wall floating at z=%.3f mm." % (achieved_base_height,))
+    orca_top_z = max(extruded_z)
+    tolerance = _SEAM_Z_TOLERANCE_LAYERS * layer_height
+    if abs(orca_top_z - achieved_base_height) > tolerance:
+        raise ValueError(
+            "OrcaSlicer's base tops out at z=%.4f mm but the seam was planned "
+            "for z=%.4f mm (tolerance %.4f mm, half a layer): Orca added or "
+            "dropped a layer, so the wall's first ring no longer matches the "
+            "surface under it. Refusing to continue." % (
+                orca_top_z, achieved_base_height, tolerance))
+
+    # 7b. Fan: Loop Fabric has no fan_off_layers ramp of its own -- see
+    #     build_loop_hybrid_print's own step 5b for the full rationale.
+    #     Mirrored verbatim here.
+    if planar_fan_speed is not None or base_fan_curve is not None:
+        fan_already_on = True
+    else:
+        writer.set_fan(fan_speed if fan_speed is not None else writer.fan_speed)
+        fan_already_on = True
+
+    # 7c. Seam alignment: find the angle, NOT a ring roll -- see this
+    #     function's own docstring section on why mesh_ring is passed to
+    #     build_loop_fabric UNROLLED, unlike build_mesh_hybrid_print's own
+    #     roll-mesh_ring-for-blend_stack scheme.
+    wx, wy, _wz = writer.position
+    seam_k = _nearest_ring_index(mesh_ring, (wx - cx, wy - cy))
+    seam_theta = 2.0 * math.pi * seam_k / points_per_turn
+
+    wall_report = build_loop_fabric(
+        writer, shape=shape_fn, height=height, spec=loop_spec,
+        radius_envelope=radius_envelope,
+        xy_twist_turns=xy_twist_turns,
+        cage=cage,
+        center=(cx, cy),
+        first_layer_squish=first_layer_squish,
+        cuff_lh=cuff_lh,
+        points_per_turn=points_per_turn,
+        travel_z_clearance=travel_z_clearance,
+        fan_speed=fan_speed,
+        resume=True, base_z=achieved_base_height, seam_theta=seam_theta,
+        fan_already_on=fan_already_on,
+        blend_ring=mesh_ring, blend_height=blend_height,
+        seam_style=seam_style, seam_coverage=seam_coverage,
+    )
+
+    return {
+        "hybrid": True,
+        "loop_hybrid": True,
+        "mesh_base": True,
+        "achieved_base_height_mm": achieved_base_height,
+        "orca_base_layers": n_base_layers,
+        "orca_base_top_z_mm": orca_top_z,
+        "mesh_height_mm": mesh_height,
+        "wall_height_mm": height,
+        "total_height_mm": achieved_base_height + height,
+        "blend_height_mm": blend_height,
+        "seam_style": seam_style,
+        "seam_coverage": seam_coverage,
         **replay_report,
         **wall_report,
     }

@@ -71,7 +71,9 @@ from trident_gcode.orca_slice import (OrcaSliceError, _ALLOWED_BRIM_TYPES,
 from trident_gcode.hybrid import (
     BaseFanCurve,
     build_hybrid_print,
+    build_loop_hybrid_print,
     build_mesh_hybrid_print,
+    build_mesh_loop_hybrid_print,
 )
 
 DEFAULT_PRINTER_KEY = "trident"
@@ -1175,6 +1177,63 @@ def _hybrid_complexity_limits(env=None):
     )
 
 
+def _loop_fabric_wall_point_estimate(profile, loop_spec, base_z, wall_height,
+                                      points_per_turn):
+    """Cheap point-count estimate for a RESUMED Loop Fabric wall (base_z > 0,
+    no cuff -- the only shape build_loop_hybrid_print ever builds), computed
+    the same way build_loop_fabric itself does
+    (trident_gcode/generators/loop_fabric.py) -- WITHOUT emitting any G-code,
+    so the hosting-resource complexity gate below can refuse a request
+    before either the OrcaSlicer subprocess or the (expensive, pure-Python)
+    fabric loop ever runs.
+
+    A parametric hybrid wall's own point count is layer_count * points_per_
+    turn (see the _n_upper_layers_est estimate this function sits next to) --
+    entirely decoupled from Loop Fabric's own n_rows * stitches * segs_per_
+    stitch, which depends on row/loop geometry and this printer's own
+    z_amp_max clamping instead of layer_height/points_per_turn. Reusing the
+    parametric estimate for a loop-fabric wall would be meaningless (the
+    generator that actually runs is a different one entirely), so this
+    reproduces build_loop_fabric's own row/stitch-count math directly,
+    sharing its module constants (imported, not retyped) so the two can
+    never drift apart. Mirrors that generator's z_amp clamping too (it only
+    ever SHRINKS loop_h/row_mm, which INCREASES n_rows) so this can never
+    under-count a design the real build would generate more points for.
+    """
+    from trident_gcode.generators.loop_fabric import (
+        _CUFF_HOOK_MM, _INTERLOCK_MM, _MIN_ROW_MM, _SEGS_PER_STITCH)
+
+    stitches = max(4, loop_spec.loops_per_turn)
+    row_mm = max(_MIN_ROW_MM, loop_spec.row_mm)
+    mode = loop_spec.stitch_mode if loop_spec.stitch_mode in ("dip", "spike") else "dip"
+    loop_h = max(row_mm + _INTERLOCK_MM, loop_spec.up_mm)
+    wave_amp = max(0.0, loop_spec.wave_amp)
+    z_cap = getattr(profile, "z_amp_max", 0.95)
+    if mode == "spike":
+        if profile.has_probe and (loop_h - row_mm) > z_cap:
+            loop_h = row_mm + z_cap
+        if (wave_amp > 0.0 and profile.has_probe
+                and (loop_h - row_mm) + 2.0 * wave_amp > z_cap):
+            wave_amp = max(0.0, (z_cap - (loop_h - row_mm)) / 2.0)
+    else:
+        if loop_h > z_cap:
+            loop_h = z_cap
+            row_mm = min(row_mm, max(loop_h - _INTERLOCK_MM, _MIN_ROW_MM))
+        if (wave_amp > 0.0 and profile.has_probe
+                and loop_h + 2.0 * wave_amp > z_cap):
+            wave_amp = max(0.0, (z_cap - loop_h) / 2.0)
+    strand_h = min(max(profile.nozzle_diameter, 0.3), 0.6)
+    cuff_hook = min(_CUFF_HOOK_MM, 0.4 * loop_h)
+    wall_top = base_z + wall_height
+    if mode == "spike":
+        line0 = base_z + strand_h + wave_amp
+    else:
+        line0 = base_z + loop_h - cuff_hook + wave_amp
+    n_rows = max(1, int((wall_top - line0) / row_mm) + 1)
+    segs = 13 if mode == "spike" else _SEGS_PER_STITCH
+    return n_rows * stitches * segs + 2 * points_per_turn
+
+
 def _parse_overhang_fan(body):
     """Fan min/max bounds (0..1 fractions) -- always concrete, never None. The
     fan runs between these two speeds, selected by wall lean (see
@@ -1632,6 +1691,21 @@ def _parse_loop_spec(body, profile, radius: float | None = None) -> LoopSpec | N
 # --------------------------------------------------------------------------
 # Core: turn a design request dict into (gcode_text, report_text, issues, stats)
 # --------------------------------------------------------------------------
+def _append_extra_issues(report_text, issues_extra):
+    """issues_extra (scope/gate warnings computed after format_report already
+    ran) must reach the same report text the UI's "see report" message points
+    users to -- a warning that exists only in the JSON issues count and never
+    in visible text is functionally no warning at all. See CLAUDE.md's
+    "Presence checks must read commands, not comments" precedent: this is the
+    same class of silently-invisible safety information.
+    """
+    if not issues_extra:
+        return report_text
+    lines = [report_text, "", "  ADDITIONAL WARNINGS:"]
+    lines += ["    - %s" % m for m in issues_extra]
+    return "\n".join(lines)
+
+
 def generate_design(body):
     shape_name = str(body.get("shape", "circle"))
     radius = float(body.get("radius", 32.0))
@@ -1953,24 +2027,65 @@ def generate_design(body):
     if hybrid_params is not None or mesh_hybrid_params is not None:
         _max_wall_points, _max_mesh_tris = _hybrid_complexity_limits()
         if _max_wall_points is not None:
-            if hybrid_params is not None:
-                _n_base = max(2, round(hybrid_params["hybrid_base_height"] / layer_height))
-                _upper_h = max(0.0, height - _n_base * layer_height)
+            if loop_spec is not None and (
+                    hybrid_params is not None or mesh_hybrid_params is not None):
+                # Loop Fabric's own wall generator (build_loop_fabric, via
+                # build_loop_hybrid_print / build_mesh_loop_hybrid_print) has
+                # a point count decoupled from layer_height/points_per_turn
+                # entirely -- n_rows * stitches * segs_per_stitch instead --
+                # so the layer-count estimate below would be meaningless
+                # here. Estimate the SAME cheap way that generator itself
+                # computes its own row count, before either the Orca
+                # subprocess or the (expensive, pure-Python) fabric loop
+                # ever runs. Reused for BOTH the parametric and mesh planar
+                # bases -- one helper, not a second copy of this math.
+                if hybrid_params is not None:
+                    _n_base = max(2, round(hybrid_params["hybrid_base_height"] / layer_height))
+                    _achieved_base_height = _n_base * layer_height
+                    _upper_h = max(0.0, height - _achieved_base_height)
+                else:
+                    # mesh-hybrid: height IS the wall above the mesh already
+                    # (see build_mesh_loop_hybrid_print's own height-
+                    # semantics note), and the base height is the mesh's
+                    # own measured height (_mesh_height_est, computed above)
+                    # -- an ESTIMATE, same caveat as every other pre-slice
+                    # figure here: the real achieved_base_height is Orca's
+                    # own achieved layer top, only known after slicing.
+                    _achieved_base_height = _mesh_height_est
+                    _upper_h = max(0.0, height)
+                _wall_points_est = _loop_fabric_wall_point_estimate(
+                    profile, loop_spec, _achieved_base_height, _upper_h,
+                    _HYBRID_POINTS_PER_TURN)
+                if _wall_points_est > _max_wall_points:
+                    raise ValueError(
+                        "This loop fabric hybrid wall would generate an "
+                        "estimated ~%d points, above this deployment's %d-"
+                        "point limit (TRIDENT_MAX_HYBRID_WALL_POINTS) -- the "
+                        "fabric's own Python geometry math, not OrcaSlicer, "
+                        "is what scales with this and can take minutes on a "
+                        "resource-constrained host. Reduce the wall height "
+                        "or loop density, or run this generator locally "
+                        "instead, where there is no such limit."
+                        % (_wall_points_est, _max_wall_points))
             else:
-                _upper_h = max(0.0, height)  # mesh-hybrid: height IS the wall above the mesh
-            _n_upper_layers_est = math.ceil(_upper_h / layer_height) + 1
-            _wall_points_est = _n_upper_layers_est * _HYBRID_POINTS_PER_TURN
-            if _wall_points_est > _max_wall_points:
-                raise ValueError(
-                    "This hybrid wall would generate an estimated ~%d points "
-                    "(%d layers x %d points/turn), above this deployment's "
-                    "%d-point limit (TRIDENT_MAX_HYBRID_WALL_POINTS) -- the "
-                    "wall's own Python geometry math, not OrcaSlicer, is what "
-                    "scales with this and can take minutes on a resource-"
-                    "constrained host. Reduce height or run this generator "
-                    "locally instead, where there is no such limit."
-                    % (_wall_points_est, _n_upper_layers_est,
-                       _HYBRID_POINTS_PER_TURN, _max_wall_points))
+                if hybrid_params is not None:
+                    _n_base = max(2, round(hybrid_params["hybrid_base_height"] / layer_height))
+                    _upper_h = max(0.0, height - _n_base * layer_height)
+                else:
+                    _upper_h = max(0.0, height)  # mesh-hybrid: height IS the wall above the mesh
+                _n_upper_layers_est = math.ceil(_upper_h / layer_height) + 1
+                _wall_points_est = _n_upper_layers_est * _HYBRID_POINTS_PER_TURN
+                if _wall_points_est > _max_wall_points:
+                    raise ValueError(
+                        "This hybrid wall would generate an estimated ~%d points "
+                        "(%d layers x %d points/turn), above this deployment's "
+                        "%d-point limit (TRIDENT_MAX_HYBRID_WALL_POINTS) -- the "
+                        "wall's own Python geometry math, not OrcaSlicer, is what "
+                        "scales with this and can take minutes on a resource-"
+                        "constrained host. Reduce height or run this generator "
+                        "locally instead, where there is no such limit."
+                        % (_wall_points_est, _n_upper_layers_est,
+                           _HYBRID_POINTS_PER_TURN, _max_wall_points))
         if _max_mesh_tris is not None and mesh_hybrid_params is not None:
             _n_tris = len(mesh_hybrid_entry["tris"])
             if _n_tris > _max_mesh_tris:
@@ -1993,6 +2108,7 @@ def generate_design(body):
     hybrid_scope_issue = None
     mesh_hybrid_scope_issue = None
     mesh_hybrid_overhang_issue = None
+    loop_hybrid_issue = None
     if body.get("zone_overrides") and not zone_specs:
         zone_empty_issue = (
             "zone overrides were requested but none were valid or active - "
@@ -2055,24 +2171,100 @@ def generate_design(body):
             loop_base_issue = (
                 "loop fabric anchors itself with its own solid cuff, so the "
                 "requested " + ", ".join(requested) + " were not printed.")
+        # A PARAMETRIC hybrid_params base or a MESH mesh_hybrid_params base
+        # under an actual loop fabric wall now BOTH have real support
+        # (build_loop_hybrid_print / build_mesh_loop_hybrid_print below), so
+        # neither sets a "your base was ignored" scope issue any more --
+        # that message would no longer be true for either.
         if hybrid_params is not None:
-            hybrid_scope_issue = (
-                "a hybrid planar base only applies to the parametric wall "
-                "(not loop fabric) - ignored for this design.")
-        if mesh_hybrid_params is not None:
-            mesh_hybrid_scope_issue = (
-                "a mesh planar base only applies to the parametric wall "
-                "(not loop fabric) - ignored for this design.")
-        report = build_loop_fabric(
-            writer, shape=shape, height=height, spec=loop_spec,
-            radius_envelope=radius_fn,
-            xy_twist_turns=xy_twist,
-            cage=cage,
-            first_layer_squish=squish,
-            cuff_lh=layer_height,
-            fan_speed=fan_overhang_min,
-            travel_z_clearance=travel_clearance,
-        )
+            # A real Orca-sliced planar base UNDER an actual loop fabric
+            # wall: build_loop_hybrid_print resumes the wall onto the base's
+            # seam (loop_fabric.py's resume/base_z/seam_theta/fan_already_on
+            # kwargs) instead of silently dropping the base. Every number
+            # this combination produces is UNTESTED ON REAL HARDWARE
+            # (CLAUDE.md's print-tested-claims rule) -- the resume plumbing
+            # is new and has not been run on a physical machine.
+            loop_hybrid_issue = (
+                "GUESS, NOT PRINT-TESTED: this loop fabric wall resumes "
+                "onto a real OrcaSlicer-sliced planar base - the seam "
+                "geometry (base anchor height, seam angle, fan handoff) has "
+                "not been verified on a physical print. Treat the first "
+                "print of this combination as a test piece.")
+            report = build_loop_hybrid_print(
+                writer,
+                shape_fn=shape, radius=radius, height=height,
+                transition_height=hybrid_params["hybrid_base_height"],
+                layer_height=layer_height, points_per_turn=_HYBRID_POINTS_PER_TURN,
+                loop_spec=loop_spec,
+                wall_count=hybrid_params["wall_count"],
+                infill_density=hybrid_params["infill_density"],
+                infill_pattern=hybrid_params["infill_pattern"],
+                orca_path=orca_path, filament_name=filament,
+                radius_envelope=radius_fn,
+                xy_twist_turns=xy_twist,
+                cage=cage,
+                first_layer_squish=squish,
+                cuff_lh=layer_height,
+                fan_speed=fan_overhang_min,
+                travel_z_clearance=travel_clearance,
+                planar_fan_speed=planar_fan_speed,
+                base_fan_curve=base_fan_curve,
+            )
+        elif mesh_hybrid_params is not None:
+            # Phase 2: a real Orca-sliced MESH planar base UNDER an actual
+            # loop fabric wall -- build_mesh_loop_hybrid_print resumes the
+            # wall onto the base's seam and blends the wall's own shape in
+            # from the mesh's own outline near the seam (loop_fabric.py's
+            # blend_ring/blend_height/seam_style/seam_coverage kwargs)
+            # instead of silently dropping the base. Every number this
+            # combination produces is UNTESTED ON REAL HARDWARE (CLAUDE.md's
+            # print-tested-claims rule) -- the blend plumbing is new and has
+            # not been run on a physical machine.
+            loop_hybrid_issue = (
+                "GUESS, NOT PRINT-TESTED: this loop fabric wall resumes "
+                "onto a real OrcaSlicer-sliced mesh planar base - the seam "
+                "geometry (base anchor height, seam angle, mesh-outline "
+                "blend, fan handoff) has not been verified on a physical "
+                "print. Treat the first print of this combination as a "
+                "test piece.")
+            report = build_mesh_loop_hybrid_print(
+                writer,
+                tris=mesh_hybrid_entry["tris"],
+                scale=mesh_hybrid_params["scale"],
+                layer_height=layer_height, points_per_turn=_HYBRID_POINTS_PER_TURN,
+                shape_fn=shape, radius=radius, height=height,
+                blend_height=mesh_hybrid_params["blend_height"],
+                loop_spec=loop_spec,
+                wall_count=mesh_hybrid_params["wall_count"],
+                infill_density=mesh_hybrid_params["infill_density"],
+                infill_pattern=mesh_hybrid_params["infill_pattern"],
+                top_shell_layers=mesh_hybrid_params["top_shell_layers"],
+                bottom_shell_layers=mesh_hybrid_params["bottom_shell_layers"],
+                process_overrides=mesh_hybrid_params["process_overrides"],
+                orca_path=orca_path, filament_name=filament,
+                radius_envelope=radius_fn,
+                seam_style=mesh_hybrid_params["seam_style"],
+                seam_coverage=mesh_hybrid_params["seam_coverage"],
+                xy_twist_turns=xy_twist,
+                cage=cage,
+                first_layer_squish=squish,
+                cuff_lh=layer_height,
+                fan_speed=fan_overhang_min,
+                travel_z_clearance=travel_clearance,
+                planar_fan_speed=planar_fan_speed,
+                base_fan_curve=base_fan_curve,
+            )
+        else:
+            report = build_loop_fabric(
+                writer, shape=shape, height=height, spec=loop_spec,
+                radius_envelope=radius_fn,
+                xy_twist_turns=xy_twist,
+                cage=cage,
+                first_layer_squish=squish,
+                cuff_lh=layer_height,
+                fan_speed=fan_overhang_min,
+                travel_z_clearance=travel_clearance,
+            )
     elif hybrid_params is not None:
         # build_profile_spiral (the wall generator hybrid mode uses) now has
         # Zone Override support, applying only within the wall it builds
@@ -2249,8 +2441,11 @@ def generate_design(body):
         issues_extra.append(mesh_hybrid_scope_issue)
     if mesh_hybrid_overhang_issue:
         issues_extra.append(mesh_hybrid_overhang_issue)
+    if loop_hybrid_issue:
+        issues_extra.append(loop_hybrid_issue)
     for note in zone_notes:
         issues_extra.append("zone override: " + note)
+    report_text = _append_extra_issues(report_text, issues_extra)
     stats = {
         "wave_slope": round(peak_slope, 3),
         "moves": analysis.moves,
@@ -2618,6 +2813,7 @@ def generate_surface_design(body):
             % (profile.probe_dx, profile.probe_dy, profile.probe_clearance,
                profile.probe_radius))
 
+    report_text = _append_extra_issues(report_text, issues_extra)
     stats = {
         "moves": analysis.moves,
         "extrude_moves": analysis.extrude_moves,
@@ -2951,6 +3147,7 @@ def generate_mesh_texture_design(body):
             "(an uploaded mesh has no nominal radius to scale against) - "
             "ignored for this design.")
 
+    report_text = _append_extra_issues(report_text, issues_extra)
     stats = {
         "wave_slope": round(peak_slope, 3),
         "moves": analysis.moves,

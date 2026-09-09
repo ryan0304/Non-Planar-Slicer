@@ -28,6 +28,7 @@ from typing import Callable
 from ..blobs import LoopSpec
 from ..gcode import GcodeWriter
 from ..paths import cage_scale
+from ..profile_stack import Contour, _blend_weight, mesh_ring_radius_at
 
 _SEGS_PER_STITCH = 12
 _LOOP_Q = 0.30            # backtrack fraction: >1/(2*pi) guarantees self-crossing
@@ -57,6 +58,14 @@ def build_loop_fabric(
     travel_z_clearance: float = 5.0,
     points_per_turn: int = 240,
     fan_speed: float | None = None,
+    resume: bool = False,
+    base_z: float = 0.0,
+    seam_theta: float = 0.0,
+    fan_already_on: bool = False,
+    blend_ring: "Contour | None" = None,
+    blend_height: float = 0.0,
+    seam_style: str = "fillet",
+    seam_coverage: float = 1.0,
 ) -> dict:
     """Emit a complete loop-fabric print and return a report dict.
 
@@ -70,6 +79,110 @@ def build_loop_fabric(
     the whole height), exactly as spiral_path() does for the parametric wall:
     only the SHAPE angle twists -- the silhouette envelope is a function of
     height alone and the cage stays anchored to the bed.
+
+    ``resume``, ``base_z``, ``seam_theta``, ``fan_already_on`` : the same
+    resume contract build_profile_spiral() already exposes (see
+    trident_gcode/generators/profile_spiral.py), so a Loop Fabric wall can
+    continue an already-started print (a hybrid planar base, see
+    trident_gcode/hybrid.py's build_loop_hybrid_print) instead of always
+    printing its own solid cuff. All four default to values that reproduce
+    today's exact output byte-for-byte when unused.
+
+    resume : bool
+        False (default) reproduces today's output byte-for-byte. True skips
+        ``writer.header()`` and the ENTIRE solid-cuff block (the flat first
+        ring plus the ``cuff_turns`` helix) -- a planar base underneath
+        already anchors the print to the bed, so the cuff's job (anchoring
+        row 0) is now that base's job. The "move to fabric start" travel
+        still runs unconditionally (see ``base_z``), just without the
+        priming ``safe_lift()`` a fresh print needs and this one does not
+        (mirrors build_profile_spiral's own resume-mode travel handling).
+    base_z : float
+        0.0 (default; a no-op when ``resume`` is False, since the cuff's own
+        height then anchors row 0 exactly as before). The seam height
+        row 0 anchors to when resuming, taking over the role the cuff's own
+        top edge (``cuff_top``) used to play: ``line0`` (the first row's
+        line) is computed by substituting ``base_z`` for ``cuff_top`` in the
+        cuff-anchored formulas below -- same "shallow hook onto the top of
+        already-solid material" relationship, just anchored to the planar
+        base's top instead of the cuff's. Also the origin ``_radius()``'s
+        height-fraction ``t`` measures every z against (t=0 at ``base_z``,
+        not bed z=0), so the shape/envelope/cage sampling stays correct once
+        the wall's own z values are seam-absolute rather than starting at 0.
+    seam_theta : float
+        0.0 (default; a no-op). The angular offset re-anchoring stitch 0 to
+        wherever the base replay actually left the toolhead (found via
+        ``_nearest_ring_index`` in hybrid.py, reused there rather than
+        duplicated). Because stitches are evaluated continuously here (not
+        on a discrete points-per-turn grid), this can be an arbitrary real
+        angle; it is added into every place an absolute angle is computed:
+        stitch start angles, every ``_radius()`` theta argument, the closing
+        rim, and the initial move-to-start point.
+    fan_already_on : bool
+        False (default) reproduces today's output byte-for-byte: the fan-on
+        trigger inside the cuff loop fires after its first full turn,
+        exactly as it always has. When ``resume`` is True there IS no cuff
+        loop to hang that trigger on, so nothing in this function would ever
+        turn the fan on during a resumed print -- turning it on is then
+        entirely the CALLER's job (see build_loop_hybrid_print, which calls
+        ``writer.set_fan(...)`` itself right after the resume travel/
+        unretract and passes ``fan_already_on=True`` here so this function's
+        own trigger -- reachable only via the cuff loop this parameter also
+        gates -- never fires a redundant second one).
+
+    ``blend_ring``, ``blend_height``, ``seam_style``, ``seam_coverage`` :
+    Phase 2's mesh-ring blend (see trident_gcode/hybrid.py's
+    build_mesh_loop_hybrid_print, the ONLY caller that sets these). All four
+    default to values that are a no-op -- byte-identical output -- when
+    unused, exactly like the resume-plumbing kwargs above.
+
+    blend_ring : Contour | None
+        None (default; a no-op -- the shape function alone decides every
+        radius, exactly as before this parameter existed). When given (a
+        Contour from top_contour_from_mesh -- points_per_turn points, point
+        j implicitly at angle 2*pi*j/points_per_turn, mesh.xy-midpoint
+        centred -- the mesh's own seam-height outline), the base "shape"
+        radius at any given theta/z is no longer ``shape(theta_after_twist)``
+        alone: it is a blend between ``mesh_ring_radius_at(blend_ring,
+        theta_after_twist)`` and ``shape(theta_after_twist)`` (see
+        trident_gcode/profile_stack.py's mesh_ring_radius_at -- continuous
+        angular interpolation, unlike blend_stack's discrete index-aligned
+        rings, because Loop Fabric's stitch angles do not land on a fixed
+        points_per_turn grid). ``blend_ring`` must already be in the SAME
+        coordinate frame as ``theta``/``seam_theta`` here (i.e. NOT rolled
+        by a seam index the way build_mesh_hybrid_print rolls its own
+        mesh_ring for blend_stack's discrete convention) -- theta_after_twist
+        is an absolute angle in that shared frame on both sides of the
+        blend, including for the plain ``shape()`` call, so blend_ring has
+        to stay in that same absolute frame too.
+    blend_height : float
+        0.0 (default; a no-op -- see below). With ``blend_ring`` set, the
+        seam height (measured from ``base_z``) over which the blend eases
+        from the mesh ring to the parametric shape. Mirrors
+        ``blend_stack``'s own ``blend_height`` meaning exactly.
+    seam_style : str
+        "fillet" (default) or "chamfer" -- same meaning and same
+        ``_blend_weight`` curve ``blend_stack`` already uses (see
+        trident_gcode/profile_stack.py). A no-op whenever ``blend_ring`` is
+        None.
+    seam_coverage : float
+        1.0 (default) -- the fraction of ``blend_height`` the blend
+        actually spans (``corner_extent = blend_height * seam_coverage``,
+        the same formula ``blend_stack`` uses). A no-op whenever
+        ``blend_ring`` is None.
+
+    EXPLICIT Z-CLAMP, the one place this differs structurally from
+    ``blend_stack``: every existing contour stack in this codebase is
+    monotonically increasing from z=0 (or from ``base_z``), so ``t`` in
+    ``blend_stack`` never needs to consider z BELOW the seam -- its ring 0
+    is always the mesh ring, assigned exactly, never blended below it. Loop
+    Fabric's DIP stitch mode genuinely goes below the row line (and, for
+    row 0, below ``base_z`` itself -- see ``line0``'s own "dips below the
+    cuff/base top" formula). For any ``z <= base_z`` the blend weight here
+    clamps to EXACTLY 0 (pure ``blend_ring``, never extrapolated toward the
+    parametric shape) rather than merely clamped-toward-zero by the normal
+    min/max on the fraction -- so a dipping stitch that reaches below the
+    seam can never blend past the mesh ring's own actual outline.
     """
     profile = writer.profile
     cx, cy = center if center is not None else profile.bed_center
@@ -134,10 +247,45 @@ def build_loop_fabric(
     cuff_turns = max(1, spec.cuff_turns)
     stagger = spec.align != "column"
 
+    intensity = 1.0 if seam_style == "fillet" else 0.0
+    corner_extent = blend_height * seam_coverage
+
     def _radius(theta: float, z: float) -> float:
-        t = min(1.0, max(0.0, z / max(height, 1e-6)))
+        # Height fraction measured against base_z, not bed z=0 -- a no-op
+        # when base_z=0.0 (resume=False's default), but once a resumed
+        # wall's z values are seam-absolute (base_z > 0), z alone would
+        # evaluate radius_envelope/cage/mesh-blend far outside [0,1].
+        t = min(1.0, max(0.0, (z - base_z) / max(height, 1e-6)))
         # twist the SHAPE angle only (paths.py:219)
-        r = shape(theta - xy_twist_turns * 2.0 * math.pi * t)
+        theta_after_twist = theta - xy_twist_turns * 2.0 * math.pi * t
+        if blend_ring is None:
+            r = shape(theta_after_twist)
+        else:
+            # Phase 2: blend the mesh ring's own outline in at the seam,
+            # easing into the parametric shape over
+            # corner_extent = blend_height * seam_coverage -- the SAME
+            # formula (and the same shared _blend_weight curve) blend_stack
+            # uses for the parametric hybrid wall (profile_stack.py),
+            # reused here rather than reimplemented.
+            #
+            # EXPLICIT Z-CLAMP (see this function's own blend_ring
+            # docstring): unlike blend_stack, which never samples below its
+            # ring 0, Loop Fabric's DIP stitch mode can send z BELOW
+            # base_z. For any z <= base_z the blend weight clamps to
+            # EXACTLY 0 -- pure blend_ring, never extrapolated toward the
+            # parametric shape -- rather than merely clamped-toward-zero by
+            # the ordinary min/max below, so a dipping stitch below the
+            # seam never blends past the mesh ring's own actual outline.
+            if z <= base_z:
+                t_blend = 0.0
+            elif corner_extent <= 0.0:
+                t_blend = 1.0
+            else:
+                t_blend = min(1.0, max(0.0, (z - base_z) / corner_extent))
+            w = _blend_weight(t_blend, intensity)
+            mesh_r = mesh_ring_radius_at(blend_ring, theta_after_twist)
+            para_r = shape(theta_after_twist)
+            r = mesh_r + (para_r - mesh_r) * w
         if radius_envelope is not None:
             r *= radius_envelope(t)
         if cage is not None:
@@ -146,11 +294,23 @@ def build_loop_fabric(
 
     # ---- vertical layout -----------------------------------------------------
     z0 = first_layer_squish * cuff_lh
-    cuff_top = z0 + cuff_turns * cuff_lh
+    # cuff_top is the Z row 0 anchors to. When NOT resuming this is the top
+    # of the solid cuff this function is about to print (unchanged from
+    # before base_z existed). When resuming there IS no cuff -- base_z (the
+    # planar base's own top, supplied by the caller) takes over that role
+    # instead, literally substituted in below: a no-op at base_z=0.0 since
+    # that is only ever paired with resume=False.
+    cuff_top = base_z if resume else (z0 + cuff_turns * cuff_lh)
+    # Available vertical span for rows: the wall's own top (base_z + height,
+    # ABSOLUTE) minus line0 -- not bare `height`, which is only the WALL's
+    # local span once base_z is nonzero and would otherwise make n_rows
+    # collapse toward 1 the moment a resumed wall sits high above the bed.
+    # A no-op reduction to (height - line0) when base_z=0.0.
+    wall_top = base_z + height
     if mode == "spike":
         # Row 0's line sits right on the cuff; its spikes stand up from it.
         line0 = cuff_top + strand_h + wave_amp
-        n_rows = max(1, int((height - line0) / row_mm) + 1)
+        n_rows = max(1, int((wall_top - line0) / row_mm) + 1)
         # Highest point: last row's spike tips or the closing rim, whichever
         # reaches further (rows are planar rings; rim = row_mm + 2 strands).
         top_z = (line0 + (n_rows - 1) * row_mm
@@ -158,7 +318,7 @@ def build_loop_fabric(
     else:
         # Row 0's line sits so its loops dip cuff_hook below the cuff top.
         line0 = cuff_top + loop_h - cuff_hook + wave_amp
-        n_rows = max(1, int((height - line0) / row_mm) + 1)
+        n_rows = max(1, int((wall_top - line0) / row_mm) + 1)
         top_z = (line0 + (n_rows - 1) * row_mm
                  + 3.0 * strand_h + wave_amp)
 
@@ -169,10 +329,14 @@ def build_loop_fabric(
     # untwisted case cannot: shape() alone is rotationally periodic and the
     # envelope depends on height only). Sample densely only in that case, so an
     # untwisted design runs identical code and can never newly refuse.
+    # Sampled over [base_z, base_z + height] -- the wall's own ABSOLUTE span
+    # -- not [0, height]: a no-op shift at base_z=0.0, but once a resumed
+    # wall's z values are seam-absolute this must scan where the wall
+    # actually sits, matching _radius()'s own base_z-relative t formula.
     if xy_twist_turns != 0.0 and cage is not None:
-        z_levels = tuple(height * k / 8.0 for k in range(9))
+        z_levels = tuple(base_z + height * k / 8.0 for k in range(9))
     else:
-        z_levels = (0.0, height * 0.5, height)
+        z_levels = (base_z, base_z + height * 0.5, base_z + height)
     for k in range(points_per_turn):
         th = 2.0 * math.pi * k / points_per_turn
         for zz in z_levels:
@@ -189,7 +353,8 @@ def build_loop_fabric(
             f"Reduce height.")
 
     # ---- emit -------------------------------------------------------------------
-    writer.header()
+    if not resume:
+        writer.header()
     if z_clamped:
         # "probe keep-out" is only true on a machine that HAS a trailing
         # probe (Trident); a probe-less machine (e.g. Bambu P1S, has_probe=
@@ -200,28 +365,44 @@ def build_loop_fabric(
         writer.comment(
             f"NOTE: loop height clamped to {loop_h:.2f}mm / row to {row_mm:.2f}mm "
             f"({profile.name} z_amp_max={z_cap}mm - {reason})")
-    sx = cx + _radius(0.0, 0.0)
+    sx = cx + _radius(seam_theta, 0.0)
     writer.comment("move to fabric start")
-    writer.safe_lift(z0 + travel_z_clearance)
-    writer.travel(sx, cy, z0 + travel_z_clearance)
-    writer.travel(sx, cy, z0)
+    # start_z: the bottom of the cuff (z0) when this function is about to
+    # print one, or straight to the row loop's own entry point (cuff_top,
+    # which equals base_z when resuming -- see the vertical-layout section
+    # above) when resume=True skips the cuff entirely. The travel calls
+    # themselves stay unconditional either way (they already move generically
+    # from wherever the toolhead is) -- only the priming safe_lift() is
+    # skipped when resuming, mirroring build_profile_spiral's own resume-mode
+    # travel handling (trident_gcode/generators/profile_spiral.py).
+    start_z = cuff_top if resume else z0
+    if not resume:
+        writer.safe_lift(start_z + travel_z_clearance)
+    writer.travel(sx, cy, start_z + travel_z_clearance)
+    writer.travel(sx, cy, start_z)
     writer.unretract()
 
-    # Solid cuff: one completely FLAT priming ring squished onto the plate
-    # (the whole first layer sits level at z0 for maximum grip), then a
-    # vase-mode helix climbs to the cuff top.
-    writer.comment(f"anchor cuff (flat first ring + {cuff_turns} turns)")
-    cuff_pts = (cuff_turns + 1) * points_per_turn
-    for i in range(1, cuff_pts + 1):
-        s = i / points_per_turn            # turns completed
-        th = 2.0 * math.pi * (i % points_per_turn) / points_per_turn
-        z = z0 + max(0.0, s - 1.0) * cuff_lh   # turn 0 flat, then helix
-        r = _radius(th, z)
-        speed = writer.first_layer_speed if s <= 1.0 else writer.print_speed
-        writer.extrude_to(cx + r * math.cos(th), cy + r * math.sin(th), z,
-                          speed=speed, layer_height_override=cuff_lh)
-        if i == points_per_turn:
-            writer.set_fan(fan_speed if fan_speed is not None else writer.fan_speed)
+    cuff_pts = 0
+    if not resume:
+        # Solid cuff: one completely FLAT priming ring squished onto the
+        # plate (the whole first layer sits level at z0 for maximum grip),
+        # then a vase-mode helix climbs to the cuff top. A planar base
+        # already anchors the print to the bed, so this whole block -- and
+        # the fan-on trigger inside it -- is skipped when resuming; turning
+        # the fan on for a resumed print is the CALLER's job (see
+        # fan_already_on's own docstring above).
+        writer.comment(f"anchor cuff (flat first ring + {cuff_turns} turns)")
+        cuff_pts = (cuff_turns + 1) * points_per_turn
+        for i in range(1, cuff_pts + 1):
+            s = i / points_per_turn            # turns completed
+            th = 2.0 * math.pi * (i % points_per_turn) / points_per_turn
+            z = z0 + max(0.0, s - 1.0) * cuff_lh   # turn 0 flat, then helix
+            r = _radius(th, z)
+            speed = writer.first_layer_speed if s <= 1.0 else writer.print_speed
+            writer.extrude_to(cx + r * math.cos(th), cy + r * math.sin(th), z,
+                              speed=speed, layer_height_override=cuff_lh)
+            if i == points_per_turn and not fan_already_on:
+                writer.set_fan(fan_speed if fan_speed is not None else writer.fan_speed)
 
     # Fabric rows: continuous helix of stitches.
     writer.comment(f"loop fabric ({n_rows} rows x {stitches} stitches, "
@@ -251,7 +432,9 @@ def build_loop_fabric(
     for row in range(n_rows):
         phase = 0.5 * dtheta if (stagger and row % 2 == 1) else 0.0
         for k in range(stitches):
-            theta0 = k * dtheta + phase
+            # Renamed from "theta0" -- the new seam_theta parameter would
+            # otherwise collide with this per-stitch local of the same name.
+            stitch_theta0 = k * dtheta + phase + seam_theta
             if mode == "spike":
                 # Rounded arch stitch: a cubic bezier that pulls up
                 # diagonally HIGHER than the target, curves over the crown,
@@ -262,7 +445,7 @@ def build_loop_fabric(
                 # z = height above the local row line.
                 H = loop_h
                 lean = min(max(spec.lean_deg, 0.0), 45.0)
-                r_here = _radius(theta0, line0 + row * row_mm)
+                r_here = _radius(stitch_theta0, line0 + row * row_mm)
                 stitch_len = max(dtheta * r_here, 1e-6)
                 # Forward advance of the rise (leaning arch toward the print
                 # direction so the strand is partially self-supporting).
@@ -304,7 +487,7 @@ def build_loop_fabric(
                 for j in range(1, 11):
                     u = us[j-1]
                     z = zs[j-1]
-                    th = theta0 + dtheta * u
+                    th = stitch_theta0 + dtheta * u
                     lz = _line_z(row, k, u, th)
                     # Radial lean toward the next layer's path so the next
                     # row lands square on the standing tie.
@@ -335,14 +518,14 @@ def build_loop_fabric(
                 # -- run along the row line to the next stitch
                 for j in range(1, 4):
                     u = land_u + (1.0 - land_u) * j / 3.0
-                    th = theta0 + dtheta * u
+                    th = stitch_theta0 + dtheta * u
                     lz = _line_z(row, k, u, th)
                     _emit(th, lz, lz, 0.0)
             else:
                 for j in range(1, _SEGS_PER_STITCH + 1):
                     u = j / _SEGS_PER_STITCH
                     bell = (1.0 - math.cos(two_pi * u)) / 2.0     # 0..1..0
-                    th = theta0 + dtheta * (u - _LOOP_Q * math.sin(two_pi * u))
+                    th = stitch_theta0 + dtheta * (u - _LOOP_Q * math.sin(two_pi * u))
                     lz = _line_z(row, k, u, th)
                     _emit(th, lz, lz - loop_h * bell, spec.out_mm * bell)
         writer.comment(f"row {row + 1}/{n_rows}")
@@ -358,7 +541,7 @@ def build_loop_fabric(
     for turn in range(2):
         rz = rim0 + turn * strand_h
         for i in range(1, points_per_turn + 1):
-            th = two_pi * i / points_per_turn
+            th = two_pi * i / points_per_turn + seam_theta
             if wave_amp > 0.0 and mode == "spike" and turn == 0:
                 # First rim ring follows the last row's wave so it stays in
                 # contact with the (wavy) spike tips all the way around.

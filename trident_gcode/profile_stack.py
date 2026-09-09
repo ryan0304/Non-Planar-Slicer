@@ -341,6 +341,53 @@ def top_contour_from_mesh(
     return contour
 
 
+def mesh_ring_radius_at(ring: Contour, theta: float) -> float:
+    """Interpolated radius of *ring* at an arbitrary query angle *theta*
+    (radians, any real number -- wrapped mod 2*pi internally).
+
+    *ring* is a :data:`Contour` produced by :func:`top_contour_from_mesh`
+    (or anything sharing its convention): exactly ``len(ring)`` points,
+    with point *j* implicitly sitting at ``theta = 2*pi*j/len(ring)`` BY
+    CONSTRUCTION. That angle grid is used directly here rather than
+    recomputed from the stored ``(x, y)`` coordinates via
+    ``math.atan2`` -- the grid is already known exactly, and re-deriving
+    it from the points would only add needless numerical noise (and would
+    silently misbehave on a ring whose points are not, in fact, angularly
+    uniform).
+
+    Used by Loop Fabric's mesh-blend (``build_loop_fabric``'s
+    ``blend_ring``, ``trident_gcode/generators/loop_fabric.py``) to sample
+    the mesh outline CONTINUOUSLY: unlike :func:`blend_stack`, which only
+    ever blends DISCRETE, index-aligned rings on this same
+    ``points_per_turn`` grid, Loop Fabric's stitch angles
+    (``dtheta = 2*pi/stitches``) do not land on that grid, and its
+    dip/spike bezier sampling evaluates arbitrary sub-stitch angles in
+    between -- so the mesh ring has to answer "what is your radius at THIS
+    arbitrary angle", not just "what is your value at index j".
+
+    Linearly interpolates the RADIUS (``math.hypot(x, y)`` of each of the
+    two neighbouring vertices) between the two nearest grid angles --
+    not the raw ``(x, y)`` position -- so the result stays on a ray from
+    the ring's own origin at exactly *theta*, matching how every other
+    radius-valued function in this codebase (``shape_fn``,
+    ``radius_envelope``) is defined.
+    """
+    n = len(ring)
+    if n == 0:
+        raise ValueError("mesh_ring_radius_at: ring has no points")
+    two_pi = 2.0 * math.pi
+    theta = theta % two_pi
+    pos = theta / two_pi * n
+    j0 = int(math.floor(pos)) % n
+    j1 = (j0 + 1) % n
+    frac = pos - math.floor(pos)
+    x0, y0 = ring[j0]
+    x1, y1 = ring[j1]
+    r0 = math.hypot(x0, y0)
+    r1 = math.hypot(x1, y1)
+    return r0 + (r1 - r0) * frac
+
+
 def contour_normals(contour: Contour) -> list[tuple[float, float]]:
     """Compute outward unit normals at each vertex of a CCW polygon.
 
