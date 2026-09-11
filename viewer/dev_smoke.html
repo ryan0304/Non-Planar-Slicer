@@ -1696,6 +1696,110 @@
     })();
     restoreProbe.forEach(r => check(r[0], r[1], r[2]));
 
+    // ---- safety-warning presentation -------------------------------------
+    // Two regressions found by live testing, both of which made the severity
+    // work decorative rather than useful. Neither is visible to the Python
+    // tests (they are entirely client-side), so they are pinned here.
+
+    // 1. "Show setting" must actually reach the control, INCLUDING controls
+    //    the param-search index does not contain. The index only walks
+    //    `.drow, label.row` rows carrying a `> span` label, so the curve
+    //    EDITORS (#amp-curve and friends) are absent from it -- and those are
+    //    exactly where a wave-slope or probe-collision warning sends you.
+    //    Before the fallback in __revealControl, that button rendered and did
+    //    nothing at all.
+    check('__revealControl is exposed for the warning rows to use',
+          typeof w.__revealControl === 'function', typeof w.__revealControl);
+    if (typeof w.__revealControl === 'function') {
+      // Park on a step that is NOT the target's, so a change proves the jump
+      // acted rather than the control happening to be on screen already.
+      const stepBtn = w.document.querySelector('.step-item[data-step="print"]');
+      if (stepBtn) stepBtn.click();
+      const ampBefore = w.document.getElementById('amp-curve');
+      const hiddenFirst = ampBefore && ampBefore.offsetParent === null;
+      check('fixture: the amplitude curve starts off-screen for this check',
+            hiddenFirst, 'amp-curve was already visible');
+
+      const revealedCurve = w.__revealControl('amp-curve');
+      check('__revealControl reaches a CURVE EDITOR (not in the search index)',
+            revealedCurve === true, 'returned ' + revealedCurve);
+      const ampAfter = w.document.getElementById('amp-curve');
+      check('...and the curve editor is actually on screen afterwards',
+            !!ampAfter && ampAfter.offsetParent !== null,
+            'still hidden after reveal');
+
+      // A control that IS in the index must still work (the original path).
+      const revealedRow = w.__revealControl('d-base');
+      check('__revealControl still reaches an ordinary indexed row',
+            revealedRow === true, 'returned ' + revealedRow);
+
+      check('__revealControl reports failure for an unknown id rather than '
+            + 'scrolling somewhere arbitrary',
+            w.__revealControl('no-such-control-id') === false, 'expected false');
+    }
+
+    // 2. A DANGER-level result must not auto-switch to the G-code viewer.
+    //    applyGenerateResult switches panels on success, and the warning rows
+    //    live in the Design panel's Generate step -- so a probe-collision
+    //    risk used to render correctly and then be navigated away from before
+    //    anyone could read it. Asserted through the severity helpers the
+    //    render path itself uses, so this tracks the real decision.
+    if (typeof w.__worstSeverity === 'function') {
+      check('a danger issue outranks warnings and notes',
+            w.__worstSeverity({ issues_detail: [
+              { text: 'a', severity: 'note' },
+              { text: 'b', severity: 'danger' },
+              { text: 'c', severity: 'warn' } ] }) === 'danger',
+            'got ' + w.__worstSeverity({ issues_detail: [
+              { text: 'b', severity: 'danger' } ] }));
+      check('a result with no danger reports its worst as warn',
+            w.__worstSeverity({ issues_detail: [
+              { text: 'a', severity: 'note' },
+              { text: 'c', severity: 'warn' } ] }) === 'warn', 'expected warn');
+      check('an all-clear result has no worst severity',
+            w.__worstSeverity({ issues_detail: [] }) === null, 'expected null');
+      // The flat-strings fallback (older server, no issues_detail) must still
+      // produce a severity rather than silently reporting "nothing wrong".
+      check('flat string issues still count as warnings',
+            w.__worstSeverity({ issues: ['something went wrong'] }) === 'warn',
+            'expected warn from the fallback path');
+    } else {
+      check('__worstSeverity is exposed so the auto-switch rule is testable',
+            false, 'not exposed');
+    }
+
+    // The DECISION itself, not just the ranking that feeds it. Asserting only
+    // on __worstSeverity would let a future edit invert the branch in
+    // applyGenerateResult with every test still green -- which is exactly the
+    // regression this pins.
+    if (typeof w.__shouldSwitchToViewer === 'function') {
+      check('a DANGER result keeps the user on Design, where the risk row is',
+            w.__shouldSwitchToViewer({ issues_detail: [
+              { text: 'PROBE COLLISION RISK: ...', severity: 'danger' } ] }) === false,
+            'it auto-switched away from a danger row');
+      check('a warning-only result still auto-switches to the viewer '
+            + '(today\'s flow is untouched for non-danger results)',
+            w.__shouldSwitchToViewer({ issues_detail: [
+              { text: 'Peak Z-accel ...', severity: 'warn' } ] }) === true,
+            'expected true');
+      check('a notes-only result still auto-switches to the viewer',
+            w.__shouldSwitchToViewer({ issues_detail: [
+              { text: 'ignored for this design', severity: 'note' } ] }) === true,
+            'expected true');
+      check('a clean result still auto-switches to the viewer',
+            w.__shouldSwitchToViewer({ issues: [], issues_detail: [] }) === true,
+            'expected true');
+      check('a danger hiding among lesser issues still holds the user',
+            w.__shouldSwitchToViewer({ issues_detail: [
+              { text: 'n', severity: 'note' },
+              { text: 'w', severity: 'warn' },
+              { text: 'd', severity: 'danger' } ] }) === false,
+            'a danger was outvoted by the notes beside it');
+    } else {
+      check('__shouldSwitchToViewer is exposed so the auto-switch rule is '
+            + 'pinned by a test', false, 'not exposed');
+    }
+
     return results;
   }
 

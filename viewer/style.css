@@ -2986,6 +2986,72 @@ input[type=radio]:active:not(:disabled) {
   display: none;
 }
 
+/* Per-issue safety rows, above the full report text.
+   The report is a monospaced dump of the whole analysis; these rows are the
+   part a user must not be able to skim past. Severity is carried by the
+   reserved --danger/--warn trio (see the header of this file: they exist for
+   machine-safety states and nothing else), so a probe-strike risk cannot end
+   up wearing the same weight as "this setting was ignored".
+   A left rule, not a filled panel -- per TASTES.md there is no decorative
+   shadow anywhere, and the colour itself is the signal. */
+.gen-issues {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gen-issue {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  background: var(--surface);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+
+.gen-issue-danger { border-left-color: var(--danger); }
+.gen-issue-warn   { border-left-color: var(--warn); }
+.gen-issue-note   { border-left-color: var(--muted); }
+
+/* The tag is the scannable part: uppercase, mono, tabular -- it lines up
+   down the left edge so severity reads as a column, not as prose. */
+.gen-issue-tag {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.gen-issue-danger .gen-issue-tag { color: var(--danger); }
+.gen-issue-warn   .gen-issue-tag { color: var(--warn); }
+.gen-issue-note   .gen-issue-tag { color: var(--muted); }
+
+.gen-issue-text { flex: 1 1 auto; }
+
+/* Rectangular, not pill: the pill radius is reserved for the primary action
+   button (TASTES.md). This is a secondary jump, so it stays a plain rect. */
+.gen-issue-jump {
+  flex: 0 0 auto;
+  align-self: center;
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.gen-issue-jump:active { transform: scale(0.95); }
+
 /* Real progress bar for /api/generate_stream -- the one operation slow
    enough (up to ~15s) to earn something bigger than an inline spinner.
    Width is only ever driven up to 99% by "progress" lines; it is hidden

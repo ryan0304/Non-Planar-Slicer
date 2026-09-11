@@ -47,7 +47,7 @@ from trident_gcode.printer_validate import validate_raw, validate_profile_dict
 from trident_gcode.blobs import LoopSpec
 from trident_gcode.paths import SpiralSpec, circle, star, superellipse, ZoneOverride
 from trident_gcode.generators import build_continuous_spiral, build_profile_spiral, build_surface_spiral
-from trident_gcode.generators.surface_spiral import _archimedean
+from trident_gcode.generators.surface_spiral import _archimedean, surface_spiral_geometry
 from trident_gcode.generators.loop_fabric import build_loop_fabric
 from trident_gcode import surface as surf
 from trident_gcode.analyze import SUPPORT_Z_HI_MM, analyze_gcode, format_report
@@ -359,8 +359,72 @@ DEFAULT_FILAMENT = "PLA"
 # Mesh upload caps and cache.
 MESH_MAX_BYTES = 50 * 1024 * 1024     # 50 MB
 MESH_MAX_TRIANGLES = 500_000
-MESH_CACHE_MAX = 4
-_mesh_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+# JSON request-body ceiling for /api/generate, /api/generate_stream and
+# /api/export_stl -- the three POSTs that go through _read_json_body().
+#
+# Why a ceiling at all: the hosted deployment is a 512 MB box, and
+# _read_json_body used to read Content-Length bytes with no bound, so one
+# oversized POST was an out-of-memory kill for every concurrent user. Both of
+# the other upload paths in this file (MESH_MAX_BYTES above,
+# PRINTER_UPLOAD_MAX_BYTES below) already capped; this one was simply missed.
+#
+# Why 1 MB: a design body is NOT tiny. The largest legitimate blocks a client
+# can send are the Point Edit mask image (up to 64x64 floats, see
+# _parse_point_mask -- ~80 KB at full float precision), the FFD cage (up to
+# 12x24x3, see _parse_point_ffd -- ~15 KB), up to ZONE_MAX*4 zone-override
+# objects, the curve profiles, and the ~30-field planar-base block. A
+# generously-serialized worst case lands around 150 KB, so 1 MB is ~7x
+# headroom for a real request while still being small enough that many
+# concurrent parses cannot exhaust the dyno (json.loads expands a numeric
+# body by roughly an order of magnitude into Python objects, so the cap has
+# to be well under the box size, not near it).
+JSON_BODY_MAX_BYTES = 1024 * 1024     # 1 MB
+
+# How much of an over-size body _read_json_body will drain (in 64 KB chunks,
+# discarded as it goes -- memory stays flat) before answering 400.
+#
+# Draining is not politeness. A socket closed with unread data left in it is
+# reset, not shut down, and on Windows that reset discards the response
+# already written: the browser then sees a network error instead of the 400
+# explaining what it did wrong. Verified against a live server -- an
+# undrained refusal produced "HTTP 400" with an unreadable body.
+#
+# It is bounded because draining is itself the resource the attacker wants to
+# spend: an 8 GB claim gets the connection dropped rather than eight
+# gigabytes of the server's time.
+JSON_BODY_DRAIN_MAX_BYTES = 8 * JSON_BODY_MAX_BYTES   # 8 MB
+
+# Mesh cache: session id (or _MESH_NO_SESSION) -> OrderedDict of
+# mesh_id -> {"tris": [...]}. See _mesh_cache_put() for the eviction rules
+# and why the structure is nested rather than one flat bucket.
+#
+# Per-session count is what the single global MESH_CACHE_MAX used to be, so
+# no individual visitor loses capacity; the two global ceilings below exist
+# because a per-session cap alone lets N sessions multiply without bound.
+#
+# MESH_CACHE_MAX_TOTAL_TRIANGLES is the honest memory bound. A count ceiling
+# alone bounds nothing useful: uploads range from a few hundred triangles to
+# MESH_MAX_TRIANGLES, and a triangle is a tuple of three 3-tuples of Python
+# floats -- on the order of 450-500 bytes each, so a single mesh at the
+# per-mesh cap is already a couple of hundred MB. This budget is an ESTIMATE
+# from that object layout, not a profiled measurement; it is deliberately
+# larger than MESH_MAX_TRIANGLES so that one legal max-size upload can still
+# be cached.
+MESH_CACHE_MAX_PER_SESSION = 4
+MESH_CACHE_MAX_TOTAL = 16
+MESH_CACHE_MAX_TOTAL_TRIANGLES = 1_000_000
+
+# Bucket key for requests that carry no (or a malformed) X-Trident-Session
+# header: the local single-user CLI case and any older client. It is a
+# deliberately impossible session id -- printer_store._SESSION_RE only
+# accepts [a-z0-9]{8,64}, so no real client id can ever collide with it.
+_MESH_NO_SESSION = "-no-session-"
+
+_mesh_cache: "OrderedDict[str, OrderedDict[str, dict]]" = OrderedDict()
+# ThreadingHTTPServer means uploads and generates run concurrently on
+# different threads; every mutation of the structure above takes this.
+_mesh_cache_lock = threading.RLock()
 
 
 # --------------------------------------------------------------------------
@@ -1706,6 +1770,96 @@ def _append_extra_issues(report_text, issues_extra):
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Issue severity + the control each issue is about.
+#
+# The response's "issues" array is a flat list of STRINGS and stays that way --
+# tools/test_report_extra_issues.py, test_printer_import.py's said() helper and
+# any external caller all compare them as strings. Severity travels alongside
+# in "issues_detail", so the viewer can give a probe-strike risk and a cosmetic
+# scope note visibly different weight (TASTES.md: "Give risk/caution copy its
+# own visually distinct treatment") without breaking a single existing reader.
+#
+# WHY MATCHING ON OUR OWN TEXT IS SAFE HERE, AND HOW IT IS KEPT SAFE:
+# these are strings this codebase itself emits, not untrusted input -- but a
+# reword would still silently reclassify one. That is exactly the silent-
+# downgrade class CLAUDE.md warns about, so two things guard it:
+#   1. An analysis issue that matches no rule defaults to "warn", never the
+#      quiet "note" -- an unrecognised machine-safety finding must not be able
+#      to render as a cosmetic remark.
+#   2. tools/test_issue_severity.py drives every message _evaluate() in
+#      trident_gcode/analyze.py can produce through this table and asserts an
+#      EXPLICIT rule matched each one. Reword a message there and that test
+#      fails loudly instead of the severity quietly degrading.
+#
+# "control" is the DOM id of the control the reader should go change. The
+# viewer turns it into a click that reveals and pulses that control (see
+# window.__revealControl in viewer/designer.js). None = nothing to jump to.
+_SEVERITY_DANGER = "danger"
+_SEVERITY_WARN = "warn"
+_SEVERITY_NOTE = "note"
+
+# Ordered: first match wins, so put the specific before the general.
+_ISSUE_RULES = (
+    # -- machine-safety findings from analyze.py's _evaluate() ---------------
+    ("PROBE COLLISION RISK", _SEVERITY_DANGER, "amp-curve"),
+    ("falls outside the safe area", _SEVERITY_DANGER, "d-radius"),
+    ("exceeds Z max", _SEVERITY_DANGER, "d-height"),
+    ("exceeds max_z_velocity", _SEVERITY_WARN, "amp-curve"),
+    ("exceeds max_z_accel", _SEVERITY_WARN, "amp-curve"),
+    ("unsupported extrusion moves", _SEVERITY_WARN, "d-base"),
+    # -- issues_extra: scope notes, advisories, honesty labels ---------------
+    ("GUESS, NOT PRINT-TESTED", _SEVERITY_NOTE, None),
+    ("Probe-slope check passed", _SEVERITY_NOTE, None),
+    # Two different messages both say "exceeds this printer's printable", and
+    # they are fixed by DIFFERENT controls -- so both are matched on their own
+    # distinctive opening, ahead of that shared phrase. Getting this wrong is
+    # not cosmetic: it sends the reader to a control that cannot affect the
+    # warning they are looking at. (Caught by live testing, where a wave-slope
+    # warning offered to jump to the mesh-blend field.)
+    ("Peak wave slope", _SEVERITY_WARN, "amp-curve"),
+    ("mesh-to-wall blend", _SEVERITY_WARN, "d-meshbase-blend"),
+    ("exceeds this printer's printable", _SEVERITY_WARN, None),
+    ("only applies to the parametric wall", _SEVERITY_NOTE, "d-pattern"),
+    ("only apply to the parametric wall", _SEVERITY_NOTE, "d-pattern"),
+    ("ignored for this design", _SEVERITY_NOTE, "d-pattern"),
+    ("were not printed", _SEVERITY_NOTE, "d-base"),
+    ("was not printed", _SEVERITY_NOTE, "d-base"),
+    ("zone override", _SEVERITY_NOTE, None),
+    ("only scales", _SEVERITY_NOTE, None),
+    ("only scale", _SEVERITY_NOTE, None),
+)
+
+
+def _classify_issue(text, from_analysis):
+    """(severity, control_id) for one issue string.
+
+    *from_analysis* selects the fallback: an unmatched machine-safety finding
+    is a "warn", an unmatched advisory is a "note". See the header above for
+    why the fallbacks differ.
+    """
+    for needle, severity, control in _ISSUE_RULES:
+        if needle in text:
+            return severity, control
+    return (_SEVERITY_WARN if from_analysis else _SEVERITY_NOTE), None
+
+
+def _issues_detail(analysis_issues, issues_extra):
+    """The parallel, severity-carrying view of the same issues.
+
+    Order matches the flat "issues" array exactly (analysis findings first,
+    then the extras), so the two can be read side by side or zipped.
+    """
+    out = []
+    for text in analysis_issues:
+        severity, control = _classify_issue(text, True)
+        out.append({"text": text, "severity": severity, "control": control})
+    for text in (issues_extra or []):
+        severity, control = _classify_issue(text, False)
+        out.append({"text": text, "severity": severity, "control": control})
+    return out
+
+
 def generate_design(body):
     shape_name = str(body.get("shape", "circle"))
     radius = float(body.get("radius", 32.0))
@@ -1991,7 +2145,8 @@ def generate_design(body):
     # this branch the object is mesh_height + height, not height alone.
     mesh_hybrid_entry = None
     if mesh_hybrid_params is not None:
-        mesh_hybrid_entry = _mesh_cache.get(mesh_hybrid_params["mesh_base_id"])
+        mesh_hybrid_entry = _mesh_cache_get(
+            body.get("_session"), mesh_hybrid_params["mesh_base_id"])
         if mesh_hybrid_entry is None:
             raise KeyError(
                 "mesh_base_id not found (upload may have expired) - "
@@ -2472,19 +2627,166 @@ def generate_design(body):
         "gcode": gcode_text,
         "report": report_text,
         "issues": list(analysis.issues) + issues_extra,
+        # Same issues, carrying severity + the control to jump to. The
+        # flat array above stays strings for every existing reader.
+        "issues_detail": _issues_detail(analysis.issues, issues_extra),
         "stats": stats,
         "filename": filename,
     }
 
 
 # --------------------------------------------------------------------------
-# Mesh cache helpers (in-memory, single-user local server).
+# Mesh cache helpers (in-memory; per session, bounded globally).
+#
+# This used to be one flat OrderedDict of 4 entries shared by every visitor,
+# so on the public deployment the fifth STL uploaded site-wide silently
+# evicted the first user's mesh and their next generate died with
+# "mesh_base_id not found (upload may have expired)".
+#
+# The session id comes from the same X-Trident-Session header the custom
+# printer store already uses (see _session_id() and printer_store's honest
+# docstring): it is opaque, NOT a secret, and grants no authority. All it
+# does here is pick a bucket, exactly as it picks a bucket of replayed
+# printers there. Nothing below authenticates anything.
 # --------------------------------------------------------------------------
-def _mesh_cache_put(mesh_id, tris):
-    _mesh_cache[mesh_id] = {"tris": tris}
-    _mesh_cache.move_to_end(mesh_id)
-    while len(_mesh_cache) > MESH_CACHE_MAX:
-        _mesh_cache.popitem(last=False)
+def _mesh_session_key(session) -> str:
+    """Bucket key for a request's session id.
+
+    Anything that is not a well-formed session id -- absent header, garbage,
+    None -- lands in the single shared _MESH_NO_SESSION bucket. That bucket is
+    what keeps the local CLI/single-user case and older clients working; see
+    _mesh_cache_put() for why filling it cannot evict anyone's session-scoped
+    mesh.
+    """
+    return session if printer_store.is_valid_session(session) else _MESH_NO_SESSION
+
+
+def _mesh_cache_total() -> tuple[int, int]:
+    """(entry count, triangle count) across every bucket. Caller holds the lock."""
+    n = 0
+    tris = 0
+    for bucket in _mesh_cache.values():
+        n += len(bucket)
+        for entry in bucket.values():
+            tris += len(entry["tris"])
+    return n, tris
+
+
+def _mesh_cache_over_budget() -> bool:
+    """Caller holds the lock."""
+    n, tris = _mesh_cache_total()
+    return n > MESH_CACHE_MAX_TOTAL or tris > MESH_CACHE_MAX_TOTAL_TRIANGLES
+
+
+def _mesh_cache_drop_lru_from(key: str) -> bool:
+    """Evict the least-recently-used entry of one bucket. Caller holds the lock."""
+    bucket = _mesh_cache.get(key)
+    if not bucket:
+        return False
+    bucket.popitem(last=False)
+    if not bucket:
+        _mesh_cache.pop(key, None)
+    return True
+
+
+def _mesh_cache_put(mesh_id, tris, session=None) -> bool:
+    """Cache ``tris`` under ``mesh_id`` for ``session``.
+
+    Returns True if the mesh is now cached, False if the server is too full to
+    hold it (see the fallback rule below) -- the caller must surface that
+    rather than letting the client discover it at generate time.
+
+    Eviction, in order:
+
+    1. The owning bucket is trimmed to MESH_CACHE_MAX_PER_SESSION. A visitor's
+       fifth upload evicts their OWN oldest, which is the only fair answer and
+       is what the old global cap did for everybody at once.
+    2. If a global ceiling is still exceeded, entries are evicted from OTHER
+       buckets, shared-fallback first and then least-recently-used session.
+       Some cross-session eviction is unavoidable once genuinely more sessions
+       are active than the global ceiling holds; what matters is that a single
+       visitor cannot trigger it, because step 1 caps them at four.
+    3. Except: an insert into the shared _MESH_NO_SESSION bucket may ONLY ever
+       evict from that same bucket. Otherwise a client that simply omits the
+       session header would be handed a tool for evicting other people's
+       session-scoped meshes -- the exact failure this whole change exists to
+       remove. If the shared bucket has been drained to just the new entry and
+       the global budget is still blown by session-scoped meshes, the upload is
+       refused instead.
+    """
+    key = _mesh_session_key(session)
+    with _mesh_cache_lock:
+        bucket = _mesh_cache.get(key)
+        if bucket is None:
+            bucket = OrderedDict()
+            _mesh_cache[key] = bucket
+        bucket[mesh_id] = {"tris": tris}
+        bucket.move_to_end(mesh_id)
+        _mesh_cache.move_to_end(key)
+
+        # 1. Per-session trim.
+        while len(bucket) > MESH_CACHE_MAX_PER_SESSION:
+            bucket.popitem(last=False)
+
+        # 2/3. Global ceilings.
+        while _mesh_cache_over_budget():
+            if key == _MESH_NO_SESSION:
+                # Shared bucket: only ever eats its own.
+                if len(bucket) <= 1:
+                    del bucket[mesh_id]
+                    if not bucket:
+                        _mesh_cache.pop(key, None)
+                    return False
+                bucket.popitem(last=False)
+                continue
+            # A session bucket: prefer the shared bucket, then the
+            # least-recently-used other session, and only then its own oldest.
+            victim = None
+            if _mesh_cache.get(_MESH_NO_SESSION):
+                victim = _MESH_NO_SESSION
+            else:
+                for other in _mesh_cache:
+                    if other != key and _mesh_cache[other]:
+                        victim = other
+                        break
+            if victim is None:
+                if len(bucket) <= 1:
+                    # One mesh, on its own, over the whole-server budget. Can
+                    # only happen if MESH_CACHE_MAX_TOTAL_TRIANGLES is set
+                    # below MESH_MAX_TRIANGLES; keep it rather than cache
+                    # nothing at all.
+                    break
+                victim = key
+            _mesh_cache_drop_lru_from(victim)
+        return True
+
+
+def _mesh_cache_get(session, mesh_id):
+    """Look a mesh up for this request, or None.
+
+    The request's own session bucket wins; the shared _MESH_NO_SESSION bucket
+    is consulted second so a client that uploaded before it had a session id
+    (or that never sends the header at all) still finds its own upload instead
+    of dead-ending on "re-upload the STL". That second lookup leaks nothing
+    useful: a mesh_id is the md5 of the STL bytes, so guessing one means
+    already having the file.
+    """
+    if not mesh_id:
+        return None
+    key = _mesh_session_key(session)
+    with _mesh_cache_lock:
+        for candidate in (key, _MESH_NO_SESSION):
+            bucket = _mesh_cache.get(candidate)
+            if bucket is None:
+                continue
+            entry = bucket.get(mesh_id)
+            if entry is not None:
+                # Touch both, so an actively-used mesh is not the first thing
+                # a global eviction takes.
+                bucket.move_to_end(mesh_id)
+                _mesh_cache.move_to_end(candidate)
+                return entry
+    return None
 
 
 def _clean_shape(s):
@@ -2741,7 +3043,7 @@ def generate_surface_design(body):
         mesh_id = body.get("mesh_id")
         if not mesh_id:
             raise ValueError("mesh_id is required for surface=stl")
-        entry = _mesh_cache.get(mesh_id)
+        entry = _mesh_cache_get(body.get("_session"), mesh_id)
         if entry is None:
             raise KeyError(
                 "mesh_id not found (upload may have expired) - re-upload the STL")
@@ -2749,22 +3051,55 @@ def generate_surface_design(body):
     else:
         field = surf.make_parametric(surface_name, surface_amp, radius, surface_wavelength)
 
-    resolution = 0.4  # build_surface_spiral's own default; not client-exposed
+    # Spiral sampling pitch. Now client-settable (it was fixed at 0.4), but
+    # still server-clamped: too fine a resolution is a point-count blowup,
+    # which _check_surface_budget below is what actually bounds.
+    resolution = max(0.1, min(float(body.get("resolution", 0.4) or 0.4), 2.0))
     _check_surface_budget(radius, lw, resolution, surface_shells)
+
+    # Adhesion package. Conformal shells used to start as a bare spiral on
+    # bare glass -- no squish, no base, no brim -- which is the one mode in
+    # this app that shipped with nothing holding the first layer down. Every
+    # clamp below is the SAME expression the parametric path uses, so the two
+    # cannot drift into disagreeing about what a given request means.
+    surf_base_layers = int(body.get("base_layers", 0))
+    if str(body.get("bottom", "solid")) == "open":
+        surf_base_layers = 0
+    surf_base_layers = max(0, min(surf_base_layers, 10))
+    surf_brim = max(0, min(int(body.get("brim", 0)), 20))
+    surf_base_style = str(body.get("base_style", "spiral"))
+    if surf_base_style not in ("spiral", "concentric"):
+        surf_base_style = "spiral"
+    _flh_s = float(body.get("first_layer_height", 0) or 0)
+    if _flh_s > 0:
+        surf_squish = min(max(_flh_s / max(layer_height, 1e-6), 0.5), 1.0)
+    else:
+        surf_squish = min(max(float(body.get("squish", 1.0)), 0.5), 1.0)
+    surf_spacing = max(0.8, min(float(body.get("first_layer_spacing_factor", 1.0)), 1.5))
+    surf_first_flow = max(0.5, min(float(body.get("first_layer_flow", 1.0)), 2.0))
 
     writer = GcodeWriter(**writer_kwargs)
 
-    # Replicate build_surface_spiral's own base-points / z-offset computation
-    # (surface_spiral.py) so the probe-slope pre-check below runs over the
-    # SAME sample points and Z the real generator will use.
-    base_pts = _archimedean(radius, writer.line_width, resolution)
-    if len(base_pts) < 2:
-        raise ValueError("surface too small for the given line width")
-    first_layer_z = writer.layer_height
-    fmin = min(field(x, y) for (x, y) in base_pts)
-    z_offset = first_layer_z - fmin
+    # One implementation of the geometry, shared with the generator itself
+    # (surface_spiral.surface_spiral_geometry). This used to be a hand-copied
+    # transcription of the generator's base-points/z-offset math -- with an
+    # adhesion package in play that arithmetic moves, and a pre-flight check
+    # that has drifted from the toolpath it is supposed to be checking proves
+    # nothing. It raises on the same bad input the builder would refuse, so
+    # this check can never accept something the builder then rejects.
+    geom = surface_spiral_geometry(
+        writer, field, radius,
+        shells=surface_shells,
+        resolution=resolution,
+        first_layer_z=None,
+        first_layer_squish=surf_squish,
+        base_layers=surf_base_layers,
+        brim_loops=surf_brim,
+    )
+    base_pts = geom["base_pts"]
 
-    _check_probe_slope(profile, field, base_pts, z_offset, surface_shells, writer.layer_height)
+    _check_probe_slope(profile, field, base_pts, geom["z_offset"],
+                       surface_shells, writer.layer_height)
 
     # Progress side-channel (publish-only, for /api/generate_stream) -- same
     # publish-only pattern as generate_design: a no-op unless the streaming
@@ -2779,7 +3114,16 @@ def generate_surface_design(body):
         writer, field, radius,
         shells=surface_shells,
         resolution=resolution,
-        first_layer_z=first_layer_z,
+        # None, never writer.layer_height: an explicit first_layer_z OVERRIDES
+        # the squish-derived height, so passing one silently disables the
+        # squish this request just asked for.
+        first_layer_z=None,
+        first_layer_squish=surf_squish,
+        first_layer_spacing_factor=surf_spacing,
+        first_layer_flow=surf_first_flow,
+        base_layers=surf_base_layers,
+        brim_loops=surf_brim,
+        base_style=surf_base_style,
         travel_z_clearance=travel_clearance,
     )
 
@@ -2830,6 +3174,14 @@ def generate_surface_design(body):
         "footprint_radius_mm": report.get("footprint_radius_mm"),
         "fan_min_pct": (round(analysis.min_fan_speed * 100) if analysis.min_fan_speed is not None else None),
         "fan_max_pct": (round(analysis.max_fan_speed * 100) if analysis.max_fan_speed is not None else None),
+        # Adhesion package, reported so the panel can state what actually got
+        # printed under the shell rather than leaving the user to infer it.
+        "surface_base_layers": report.get("base_layers"),
+        "surface_brim_loops": report.get("brim_loops"),
+        "surface_base_style": report.get("base_style"),
+        "surface_first_layer_z_mm": report.get("first_layer_z_mm"),
+        "surface_shell_floor_z_mm": report.get("shell_floor_z_mm"),
+        "surface_resolution_mm": report.get("resolution_mm"),
     }
 
     filename = "design_surface_%s_%dmm.gcode" % (
@@ -2839,6 +3191,9 @@ def generate_surface_design(body):
         "gcode": gcode_text,
         "report": report_text,
         "issues": list(analysis.issues) + issues_extra,
+        # Same issues, carrying severity + the control to jump to. The
+        # flat array above stays strings for every existing reader.
+        "issues_detail": _issues_detail(analysis.issues, issues_extra),
         "stats": stats,
         "filename": filename,
     }
@@ -2851,7 +3206,7 @@ def generate_mesh_texture_design(body):
     mesh_id = body.get("mesh_id")
     if not mesh_id:
         raise ValueError("mesh_id is required for mode=mesh_texture")
-    entry = _mesh_cache.get(mesh_id)
+    entry = _mesh_cache_get(body.get("_session"), mesh_id)
     if entry is None:
         raise KeyError("mesh_id not found (upload may have expired) - re-upload the STL")
 
@@ -3172,6 +3527,9 @@ def generate_mesh_texture_design(body):
         "gcode": gcode_text,
         "report": report_text,
         "issues": list(analysis.issues) + issues_extra,
+        # Same issues, carrying severity + the control to jump to. The
+        # flat array above stays strings for every existing reader.
+        "issues_detail": _issues_detail(analysis.issues, issues_extra),
         "stats": stats,
         "filename": filename,
     }
@@ -3199,7 +3557,7 @@ def _export_contours_mesh_texture(body):
     mesh_id = body.get("mesh_id")
     if not mesh_id:
         raise ValueError("mesh_id is required for mode=mesh_texture")
-    entry = _mesh_cache.get(mesh_id)
+    entry = _mesh_cache_get(body.get("_session"), mesh_id)
     if entry is None:
         raise KeyError("mesh_id not found (upload may have expired) - re-upload the STL")
 
@@ -3681,13 +4039,50 @@ def _reject_nonfinite_tree(value, path="body"):
 
 
 def _read_json_body(handler):
-    """Read + parse a JSON request body. On malformed JSON, sends the 400
-    itself and returns None -- callers must check for that sentinel."""
+    """Read + parse a JSON request body. On malformed JSON or an over-size
+    body, sends the 400 itself and returns None -- callers must check for that
+    sentinel.
+
+    The size ceiling (JSON_BODY_MAX_BYTES) matches the header-first style the
+    mesh and printer upload paths already use, for the same reason: this runs
+    on a 512 MB box and reading an unbounded Content-Length is an
+    out-of-memory kill for every concurrent user, not just the sender.
+    """
     try:
         length = int(handler.headers.get("Content-Length", 0))
     except (TypeError, ValueError):
         length = 0
-    raw = handler.rfile.read(length) if length else b""
+    if length < 0:
+        length = 0
+    if length > JSON_BODY_MAX_BYTES:
+        # Refused on the header alone -- the oversized body is never held in
+        # memory. What happens to the bytes still in the socket is a separate
+        # question; see JSON_BODY_DRAIN_MAX_BYTES for why a moderate overage
+        # is drained (in fixed-size chunks, discarded immediately) and an
+        # absurd claim is not.
+        if length <= JSON_BODY_DRAIN_MAX_BYTES:
+            remaining = length
+            while remaining > 0:
+                chunk = handler.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        else:
+            handler.close_connection = True
+        handler._send_json(
+            {"error": "Request body too large (max %d MB)."
+                      % (JSON_BODY_MAX_BYTES // (1024 * 1024))}, status=400)
+        return None
+    # Cap the read itself as well, never just the header: Content-Length is a
+    # claim by the client, and this guarantee must not depend on the check
+    # above surviving a future edit.
+    raw = handler.rfile.read(min(length, JSON_BODY_MAX_BYTES)) if length else b""
+    if len(raw) > JSON_BODY_MAX_BYTES:      # belt and braces; see above
+        handler.close_connection = True
+        handler._send_json(
+            {"error": "Request body too large (max %d MB)."
+                      % (JSON_BODY_MAX_BYTES // (1024 * 1024))}, status=400)
+        return None
     try:
         body = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
         # Second pass: quoted "nan"/"inf" strings and overflowed literals like
@@ -3862,9 +4257,11 @@ class Handler(SimpleHTTPRequestHandler):
         except (TypeError, ValueError):
             layer_height = 0.30
 
-        entry = _mesh_cache.get(mesh_id) if mesh_id else None
+        entry = _mesh_cache_get(_session_id(self), mesh_id)
         if entry is None:
-            self._send_json({"error": "mesh_id not found"}, status=404)
+            self._send_json(
+                {"error": "mesh_id not found (upload may have expired) - "
+                          "re-upload the STL"}, status=404)
             return
 
         try:
@@ -3934,7 +4331,16 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         mesh_id = hashlib.md5(data).hexdigest()[:12]
-        _mesh_cache_put(mesh_id, tris)
+        if not _mesh_cache_put(mesh_id, tris, _session_id(self)):
+            # Only reachable for a request that sent no session id at all:
+            # the shared fallback bucket is not allowed to evict anyone's
+            # session-scoped mesh to make room (see _mesh_cache_put). Say so
+            # plainly rather than returning a mesh_id that is already gone.
+            self._send_json(
+                {"error": "Server mesh cache is full; try again shortly, or "
+                          "reload the page so the request carries a session "
+                          "id."}, status=503)
+            return
 
         # Single-outer-contour slicing silently discards holes and islands, so
         # check up front and hand the verdict to the UI rather than letting the
@@ -4417,6 +4823,12 @@ class Handler(SimpleHTTPRequestHandler):
         body = _read_json_body(self)
         if body is None:
             return
+
+        # Same server-owned injection as /api/generate: this path looks a mesh
+        # up in the per-session cache too, so without it a session's own
+        # upload would be invisible here.
+        if isinstance(body, dict):
+            body["_session"] = _session_id(self)
 
         try:
             data, filename = generate_export_stl(body)

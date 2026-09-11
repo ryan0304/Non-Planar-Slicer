@@ -6827,6 +6827,56 @@
       resultsEl.classList.remove('open'); input.blur();
     }
 
+    // Reveal an arbitrary control by DOM id, reusing choose()'s whole path --
+    // mode switch, step activation, expanding any collapsed section, the
+    // centred scroll and the pulse cue. Exposed so the generate panel's
+    // safety warnings can point at the control that caused them (see
+    // renderIssueRows in the generate section) without a second, subtly
+    // different copy of "how do I get the user to that row".
+    //
+    // Looks the id up in the index the search box already built, so a control
+    // that search can find is a control a warning can jump to, by
+    // construction. Returns false when the id is unknown or not currently
+    // reachable (e.g. a mesh-only row with no mesh loaded), letting the
+    // caller stay silent rather than scroll somewhere arbitrary.
+    window.__revealControl = function(controlId){
+      if(!controlId) return false;
+      var el = document.getElementById(controlId);
+      if(!el) return false;
+      for(var i = 0; i < index.length; i++){
+        if(index[i].row && index[i].row.contains(el)){ choose(index[i]); return true; }
+      }
+      // Not every control is in the search index: the index only walks
+      // `.drow, label.row` elements that carry a `> span` label, so the curve
+      // EDITORS (#amp-curve, #sil-curve, #width-curve -- bare canvases inside
+      // their own blocks) are absent from it. They are still perfectly valid
+      // things to send a reader to: the wave-slope and probe-collision
+      // warnings are both fixed at the amplitude curve. So fall back to
+      // revealing the element directly, reusing the same section-expansion,
+      // centred scroll and pulse cue choose() uses.
+      //
+      // Found by live testing: without this, "Show setting" on a wave-slope
+      // warning rendered a button that silently did nothing.
+      var panel = el.closest('.mode-panel');
+      if(panel && panel.id === 'mode-viewer'){ if(window.setAppMode) window.setAppMode('viewer'); }
+      else if(window.setAppMode) window.setAppMode('design');
+      var stepPanel = el.closest('.step-panel');
+      if(stepPanel) activateStep(stepPanel.id.replace('step-', ''));
+      expandSectionsContaining(el);
+      var scrollEl = el.closest('.panel-scroll') || scroll;
+      requestAnimationFrame(function(){
+        var target = el.closest('.drow') || el;
+        if(scrollEl && scrollEl.getBoundingClientRect){
+          var cr = scrollEl.getBoundingClientRect(), er = target.getBoundingClientRect();
+          scrollEl.scrollTop += (er.top - cr.top) - (scrollEl.clientHeight / 2 - er.height / 2);
+        }
+        target.classList.remove('param-search-hit'); void target.offsetWidth;
+        target.classList.add('param-search-hit');
+        setTimeout(function(){ target.classList.remove('param-search-hit'); }, 1400);
+      });
+      return true;
+    };
+
     input.addEventListener('input', function(){ search(input.value); });
     input.addEventListener('keydown', function(e){
       // Escape must clear unconditionally -- checked before the matches-gate
@@ -7079,6 +7129,26 @@
   ];
 
   (function(){
+    // ONE apply path, shared by the preset bar and the build-plate right-click
+    // menu below. They used to carry byte-identical copies of this body, which
+    // is how the two could have drifted apart.
+    //
+    // histLabelOnce names the EVENT ("preset: Loop Fabric Vase") instead of
+    // letting describeDesignDiff() summarize whichever handful of fields
+    // happened to change -- the same treatment importing a .trident file
+    // already gets, and exactly what that variable was introduced for (see its
+    // own declaration: "load/preset/reset/undo/redo"). applyDesignToUI() ends
+    // in persistDesign(), un-keyed, so the entry lands as one discrete undo
+    // step rather than coalescing into a neighbouring run.
+    function applyPreset(p){
+      if(!p) return;
+      for(var k in p){ if(k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
+      design.cage = null;
+      previewArmed = true;
+      histLabelOnce = 'preset: ' + p.name;
+      applyDesignToUI();
+    }
+
     var sel = document.getElementById('preset-select');
     PRESETS.forEach(function(p, i){
       var o = document.createElement('option');
@@ -7087,15 +7157,10 @@
     });
     sel.addEventListener('change', function(){
       if(sel.value === '') return;
-      var p = PRESETS[parseInt(sel.value)];
-      if(!p) return;
-      for(var k in p){ if(k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
-      design.cage = null;
-      previewArmed = true;
-      applyDesignToUI();
-      sel.value = '';
+      applyPreset(PRESETS[parseInt(sel.value)]);
+      sel.value = '';   // back to the placeholder: the bar is a launcher, not a state display
     });
-    
+
     // Populate the right-click preset context menu
     var ctxItems = document.getElementById('preset-ctx-items');
     var ctxMenu = document.getElementById('preset-context-menu');
@@ -7116,10 +7181,7 @@
         btn.appendChild(label);
         
         btn.addEventListener('click', function(){
-          for(var k in p){ if(k !== 'name' && design.hasOwnProperty(k)) design[k] = p[k]; }
-          design.cage = null;
-          previewArmed = true; // <--- Force preview update
-          applyDesignToUI();
+          applyPreset(p);
           ctxMenu.style.display = 'none';
         });
         ctxItems.appendChild(btn);
@@ -7542,6 +7604,127 @@
   var MESH_MAX_MB = 50;
   var meshState = { mesh_id: null, filename: null, info: null, arrayBuffer: null };
 
+  // ---- uploaded-mesh persistence ------------------------------------------
+  // meshState above lives in page memory only, and the server's own copy is an
+  // in-process cache. So before this, EVERY one of these lost the mesh and
+  // dead-ended the next Generate with "mesh_base_id not found (upload may have
+  // expired) - re-upload the STL":
+  //   * reloading the page (meshState gone, design-state restored without it)
+  //   * the hosted dyno spinning down after 15 idle minutes, or redeploying
+  //   * the server restarting for any reason
+  // The design that references the mesh survives in localStorage; the mesh
+  // itself did not, which is what made the pairing feel broken.
+  //
+  // IndexedDB, not localStorage: localStorage is a ~5 MB string store, and
+  // these are binary STLs up to MESH_MAX_MB. This is a deliberately tiny
+  // wrapper (one database, one store, one record) rather than a dependency --
+  // viewer/ is plain script files with no build step and no runtime deps.
+  //
+  // Every method resolves rather than rejects on failure: private-browsing
+  // modes and blocked storage must degrade to "no persistence", never to a
+  // broken import panel.
+  var MESH_DB_NAME = 'trident-mesh';
+  var MESH_DB_STORE = 'mesh';
+  var MESH_DB_KEY = 'current';       // one slot: the app holds one mesh at a time
+
+  function meshDbOpen(){
+    return new Promise(function(resolve){
+      var req;
+      try { req = indexedDB.open(MESH_DB_NAME, 1); }
+      catch(e){ resolve(null); return; }
+      req.onupgradeneeded = function(){
+        var db = req.result;
+        if(!db.objectStoreNames.contains(MESH_DB_STORE)) db.createObjectStore(MESH_DB_STORE);
+      };
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ resolve(null); };
+      req.onblocked = function(){ resolve(null); };
+    });
+  }
+
+  function meshStorePut(rec){
+    return meshDbOpen().then(function(db){
+      if(!db) return false;
+      return new Promise(function(resolve){
+        var tx;
+        try { tx = db.transaction(MESH_DB_STORE, 'readwrite'); }
+        catch(e){ db.close(); resolve(false); return; }
+        tx.objectStore(MESH_DB_STORE).put(rec, MESH_DB_KEY);
+        tx.oncomplete = function(){ db.close(); resolve(true); };
+        tx.onerror = function(){ db.close(); resolve(false); };
+        tx.onabort = function(){ db.close(); resolve(false); };
+      });
+    });
+  }
+
+  function meshStoreGet(){
+    return meshDbOpen().then(function(db){
+      if(!db) return null;
+      return new Promise(function(resolve){
+        var tx;
+        try { tx = db.transaction(MESH_DB_STORE, 'readonly'); }
+        catch(e){ db.close(); resolve(null); return; }
+        var get = tx.objectStore(MESH_DB_STORE).get(MESH_DB_KEY);
+        get.onsuccess = function(){ db.close(); resolve(get.result || null); };
+        get.onerror = function(){ db.close(); resolve(null); };
+      });
+    });
+  }
+
+  function meshStoreClear(){
+    return meshDbOpen().then(function(db){
+      if(!db) return false;
+      return new Promise(function(resolve){
+        var tx;
+        try { tx = db.transaction(MESH_DB_STORE, 'readwrite'); }
+        catch(e){ db.close(); resolve(false); return; }
+        tx.objectStore(MESH_DB_STORE).delete(MESH_DB_KEY);
+        tx.oncomplete = function(){ db.close(); resolve(true); };
+        tx.onerror = function(){ db.close(); resolve(false); };
+        tx.onabort = function(){ db.close(); resolve(false); };
+      });
+    });
+  }
+
+  // Re-upload already-held bytes and adopt the id the server gives back.
+  // Used by the page-load restore and by the Generate retry: in both cases the
+  // OLD mesh_id is gone from the server's cache, so the bytes must be re-sent
+  // to earn a new one -- the id is the server's handle, not ours to reissue.
+  // Returns the new mesh_id, or null (caller decides how loud to be).
+  function reuploadMeshBytes(arrayBuffer, filename){
+    return apiFetch('/api/upload_mesh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': filename || 'mesh.stl' },
+      body: arrayBuffer
+    }).then(function(r){ return r.json(); }).then(function(data){
+      if(!data || data.error || !data.mesh_id) return null;
+      meshState.mesh_id = data.mesh_id;
+      meshState.filename = filename || meshState.filename;
+      meshState.info = data;
+      meshState.arrayBuffer = arrayBuffer;
+      return data.mesh_id;
+    }).catch(function(){ return null; });
+  }
+
+  // Page-load restore: put the mesh back on the bed without the user having to
+  // find and re-pick the file. Silent on every failure -- a missing or
+  // unreadable record just means "no mesh", which is the state the app would
+  // have been in anyway.
+  function restoreMeshFromStore(){
+    return meshStoreGet().then(function(rec){
+      if(!rec || !rec.bytes) return null;
+      return reuploadMeshBytes(rec.bytes, rec.filename).then(function(id){
+        if(!id) return null;
+        // Same three calls uploadSTL() makes on success, in the same order.
+        showMeshInfo(meshState.info, meshState.filename);
+        refreshShapeRows();
+        if(typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
+        if(typeof applyDesignToUI === 'function') applyDesignToUI();
+        return id;
+      });
+    }).catch(function(){ return null; });
+  }
+
   var stlDrop = document.getElementById('stl-drop');
   var stlFile = document.getElementById('stl-file');
   var stlStatusEl = document.getElementById('stl-status');
@@ -7612,6 +7795,11 @@
         meshState.filename = file.name;
         meshState.info = data;
         meshState.arrayBuffer = arrayBuffer;
+        // Keep the bytes so a reload, a dyno spin-down or a server restart
+        // does not strand the design that references them -- see the
+        // meshStore* helpers above. Fire-and-forget: a storage failure must
+        // not fail an upload that already succeeded.
+        meshStorePut({ mesh_id: data.mesh_id, filename: file.name, bytes: arrayBuffer });
         showMeshInfo(data, file.name);
         // the base/brim/skirt rows back.
         refreshShapeRows();
@@ -7771,6 +7959,9 @@
     meshState.filename = null;
     meshState.info = null;
     meshState.arrayBuffer = null;
+    // Clearing the mesh means clearing it everywhere -- otherwise the next
+    // reload would helpfully restore the very thing the user just removed.
+    meshStoreClear();
     if(typeof window.clearMeshBasePreview === 'function') window.clearMeshBasePreview();
     var drop = document.getElementById('stl-drop');
     if (drop) drop.style.display = '';
@@ -8193,27 +8384,154 @@
     previewArmed = true;
     if(window.clearPreview) window.clearPreview();
     if(window.loadGcode){ window.loadGcode(j.filename, j.gcode); }
-    if(window.setAppMode) window.setAppMode('viewer');
+    // Switching to the viewer is the normal, wanted behaviour -- except when
+    // the result carries a DANGER-level finding (probe-collision risk, out of
+    // bounds, over Z max). Those rows live in the Design panel's Generate
+    // step, so auto-switching would navigate the user away from the one thing
+    // they most need to read, straight to an attractive toolpath. Found by
+    // live testing: a risk row rendered correctly and was then hidden behind a
+    // panel switch, which makes the whole severity treatment decorative.
+    // Warnings and notes keep today's flow untouched.
+    if(window.setAppMode && shouldSwitchToViewer(j)) window.setAppMode('viewer');
+    else if(!shouldSwitchToViewer(j) && typeof activateStep === 'function') activateStep('generate');
     generatedRev = clickRev;          // the click-time revision, not the live one -- see above
     updateStaleBadge();
     reportEl.textContent = j.report || '';
     reportEl.style.display = 'block';
     dlBtn.style.display = 'block';
+    renderIssueRows(j);
     var nIssues = (j.issues||[]).length;
     if(nIssues){
-      statusEl.className = 'err';
-      statusEl.textContent = nIssues + ' safety warning(s) - see report';
+      // The count line stays, but it is now a summary ABOVE real rows rather
+      // than the only thing the user gets. Severity drives the wording: one
+      // danger outranks any number of notes, because "3 safety warning(s)"
+      // read identically whether the worst of them was a probe strike or a
+      // cosmetic "this setting was ignored".
+      var worst = worstSeverity(j);
+      statusEl.className = (worst === 'danger' || worst === 'warn') ? 'err' : '';
+      statusEl.textContent = summariseIssues(j);
     } else {
       statusEl.className = 'ok';
       statusEl.textContent = 'safe [OK] - ' + (j.stats ? (j.stats.filament_m + ' m, ' + j.filename) : j.filename);
     }
   }
 
+  // ---- safety-warning presentation ----------------------------------------
+  // Before this, every issue -- a probe-collision risk, a "not print-tested"
+  // caveat and a cosmetic scope note alike -- arrived as one undifferentiated
+  // 10.5px pre-wrapped blob behind a bare count. TASTES.md is explicit that
+  // risk copy must not wear the muted style of ordinary help text, and
+  // style.css reserves --danger/--warn for exactly this and nothing else.
+  //
+  // issues_detail (severity + the control to jump to) is preferred when the
+  // server sends it; the flat string array is the fallback so an older server
+  // still renders rows, just without severity.
+  function issueDetails(j){
+    if(j && Array.isArray(j.issues_detail) && j.issues_detail.length) return j.issues_detail;
+    return ((j && j.issues) || []).map(function(t){
+      return { text: String(t), severity: 'warn', control: null };
+    });
+  }
+
+  var SEVERITY_RANK = { danger: 3, warn: 2, note: 1 };
+
+  function worstSeverity(j){
+    var worst = null, rank = 0;
+    issueDetails(j).forEach(function(d){
+      var r = SEVERITY_RANK[d.severity] || 0;
+      if(r > rank){ rank = r; worst = d.severity; }
+    });
+    return worst;
+  }
+  // THE auto-switch rule, as one named predicate rather than an inline
+  // condition -- so the behaviour that keeps a DANGER row on screen is a
+  // thing a test can hold, not a branch a future edit can quietly invert.
+  //
+  // Switching to the G-code viewer after a successful generate is the normal
+  // wanted behaviour. The exception is a danger-level finding: those rows
+  // live in the Design panel's Generate step, so switching would navigate the
+  // user away from the one thing they most need to read.
+  function shouldSwitchToViewer(j){
+    return worstSeverity(j) !== 'danger';
+  }
+
+  // Test hooks (harmless in production), same convention as window.__hist /
+  // __testInjectPrinter above. viewer/dev_smoke.html asserts against both:
+  // __worstSeverity for the ranking, __shouldSwitchToViewer for the actual
+  // decision applyGenerateResult makes.
+  window.__worstSeverity = worstSeverity;
+  window.__shouldSwitchToViewer = shouldSwitchToViewer;
+
+  function summariseIssues(j){
+    var details = issueDetails(j);
+    var counts = { danger: 0, warn: 0, note: 0 };
+    details.forEach(function(d){
+      if(counts[d.severity] === undefined) counts.warn++; else counts[d.severity]++;
+    });
+    var parts = [];
+    if(counts.danger) parts.push(counts.danger + ' risk' + (counts.danger > 1 ? 's' : ''));
+    if(counts.warn) parts.push(counts.warn + ' warning' + (counts.warn > 1 ? 's' : ''));
+    if(counts.note) parts.push(counts.note + ' note' + (counts.note > 1 ? 's' : ''));
+    return parts.join(', ');
+  }
+
+  function renderIssueRows(j){
+    var host = document.getElementById('gen-issues');
+    if(!host) return;
+    // removeChild rather than innerHTML='': nothing here is ever parsed as
+    // markup, so there is no path from a server string to the HTML parser at
+    // all. Every message below is set with textContent for the same reason.
+    while(host.firstChild) host.removeChild(host.firstChild);
+    var details = issueDetails(j);
+    if(!details.length){ host.style.display = 'none'; return; }
+    host.style.display = 'block';
+
+    // Worst first: a probe strike must not sit below three cosmetic notes.
+    // Stable within a severity, so the server's own ordering still shows
+    // through (analysis findings before advisories).
+    details = details.slice().sort(function(a, b){
+      return (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0);
+    });
+
+    details.forEach(function(d){
+      var sev = SEVERITY_RANK[d.severity] ? d.severity : 'warn';
+      var row = document.createElement('div');
+      row.className = 'gen-issue gen-issue-' + sev;
+
+      var tag = document.createElement('span');
+      tag.className = 'gen-issue-tag';
+      tag.textContent = sev === 'danger' ? 'RISK' : (sev === 'warn' ? 'WARNING' : 'NOTE');
+      row.appendChild(tag);
+
+      var msg = document.createElement('span');
+      msg.className = 'gen-issue-text';
+      // textContent, never innerHTML: these strings are assembled server-side
+      // and can quote a filename or a printer name the user supplied.
+      msg.textContent = d.text;
+      row.appendChild(msg);
+
+      // Only offer the jump when the control is actually reachable right now
+      // -- __revealControl returns false rather than scrolling somewhere
+      // arbitrary, so a dead "Show me" is never rendered.
+      if(d.control && document.getElementById(d.control)){
+        var jump = document.createElement('button');
+        jump.type = 'button';
+        jump.className = 'gen-issue-jump';
+        jump.textContent = 'Show setting';
+        jump.addEventListener('click', function(){
+          if(typeof window.__revealControl === 'function') window.__revealControl(d.control);
+        });
+        row.appendChild(jump);
+      }
+      host.appendChild(row);
+    });
+  }
+
   // Original one-shot path. Used as a fallback when /api/generate_stream is
   // unreachable (404 against an older server, a network error, or a
   // response with no streaming body) -- indeterminate spinner only, since
   // there is no progress signal to show a real bar for.
-  function runLegacyGenerate(body, clickRev){
+  function runLegacyGenerate(body, clickRev, isRetry){
     statusEl.className = '';
     statusEl.textContent = 'Generating (no progress available)...';
     apiFetch('/api/generate', {
@@ -8224,8 +8542,17 @@
       genBtn.disabled = false;
       hideGenProgress();
       if(!res.ok){
+        var emsg = res.j && res.j.error ? res.j.error : 'generation failed';
+        if(!isRetry && isMeshMissingError(emsg)){
+          retryGenerateAfterMeshReupload(clickRev).then(function(recovered){
+            if(recovered) return;
+            statusEl.className = 'err';
+            statusEl.textContent = emsg;
+          });
+          return;
+        }
         statusEl.className = 'err';
-        statusEl.textContent = res.j && res.j.error ? res.j.error : 'generation failed';
+        statusEl.textContent = emsg;
         return;
       }
       applyGenerateResult(res.j, clickRev);
@@ -8237,12 +8564,40 @@
     });
   }
 
-  genBtn.addEventListener('click', function(){
-    var body = buildGenerateBody();
-    // Captured together, alongside body: both are frozen at click time so
-    // the eventual response can only ever be stamped against the design it
-    // was actually built from. See the comment in applyGenerateResult.
-    var clickRev = designRev;
+  // True for the one error the user can neither predict nor act on: the
+  // server's in-process mesh cache no longer holds the id this design refers
+  // to (it restarted, spun down, or evicted). Matched on the server's own
+  // wording from serve.py -- both the 400 from /api/generate* and the 404
+  // from /api/mesh_slice say "not found" about a mesh id.
+  function isMeshMissingError(msg){
+    if(!msg) return false;
+    msg = String(msg);
+    return (msg.indexOf('mesh_base_id not found') !== -1) ||
+           (msg.indexOf('mesh_id not found') !== -1);
+  }
+
+  // Re-send the bytes we still hold (in memory, else from IndexedDB) to earn a
+  // fresh id, then run the generation again with a body rebuilt around it.
+  // Exactly one attempt -- see runGenerate's isRetry guard -- so a genuinely
+  // broken upload path surfaces its real error instead of looping.
+  function retryGenerateAfterMeshReupload(clickRev){
+    statusEl.className = '';
+    statusEl.textContent = 'Mesh expired on the server - re-sending it...';
+    var haveBytes = meshState.arrayBuffer
+      ? Promise.resolve({ bytes: meshState.arrayBuffer, filename: meshState.filename })
+      : meshStoreGet();
+    return haveBytes.then(function(rec){
+      if(!rec || !rec.bytes) return false;
+      return reuploadMeshBytes(rec.bytes, rec.filename).then(function(id){
+        if(!id) return false;
+        if(typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
+        runGenerate(buildGenerateBody(), clickRev, true);
+        return true;
+      });
+    }).catch(function(){ return false; });
+  }
+
+  function runGenerate(body, clickRev, isRetry){
     genBtn.disabled = true;
     statusEl.className = ''; statusEl.textContent = 'Starting...';
     dlBtn.style.display = 'none';
@@ -8292,6 +8647,14 @@
           settled = true;
           genBtn.disabled = false;
           hideGenProgress();
+          if(!isRetry && isMeshMissingError(obj.error)){
+            retryGenerateAfterMeshReupload(clickRev).then(function(recovered){
+              if(recovered) return;   // runGenerate() has taken over the status line
+              statusEl.className = 'err';
+              statusEl.textContent = obj.error || 'generation failed';
+            });
+            return;
+          }
           statusEl.className = 'err';
           statusEl.textContent = obj.error || 'generation failed';
         }
@@ -8335,8 +8698,15 @@
       }
       // Never got a usable stream at all -- fall back so the app still
       // works against an older server.
-      runLegacyGenerate(body, clickRev);
+      runLegacyGenerate(body, clickRev, isRetry);
     });
+  }
+
+  genBtn.addEventListener('click', function(){
+    // body and clickRev are captured together, frozen at click time, so the
+    // eventual response can only ever be stamped against the design it was
+    // actually built from. See the comment in applyGenerateResult.
+    runGenerate(buildGenerateBody(), designRev, false);
   });
 
   dlBtn.addEventListener('click', function(){
@@ -8481,6 +8851,12 @@
         design[k] = JSON.parse(JSON.stringify(DEFAULT_DESIGN[k]));
       }
       if(keepPrinter) design.printer = keepPrinter;
+      // "Start new design" resets the DESIGN, so the mesh that design was
+      // built on top of goes with it -- unlike the printer above, which is a
+      // statement about the hardware on the desk rather than about this
+      // particular model. Dropping the stored copy too is what stops the next
+      // reload from restoring a mesh the user just started away from.
+      meshStoreClear();
       applyDesignToUI();                 // repaints, persists, re-previews
       if(typeof activateStep === 'function') activateStep('model');
       close();
@@ -8493,6 +8869,23 @@
     var primary = document.getElementById('sr-continue');
     if(primary) primary.focus();
   })();
+
+  // Last init step, deliberately: restoreMeshFromStore() calls showMeshInfo(),
+  // refreshShapeRows() and applyDesignToUI(), so every one of them has to be
+  // defined and every panel already wired by the time it runs. It is async and
+  // self-silencing, so a slow or unavailable IndexedDB never delays first
+  // paint -- the mesh simply reappears on the bed a moment later.
+  //
+  // Not while framed, for the same reason guide.js refuses to auto-open its
+  // modal there (see the long comment at the end of viewer/guide.js):
+  // viewer/dev_smoke.html drives this page inside an IFRAME and asserts
+  // against a mesh-free baseline -- a mesh restoring itself mid-run silently
+  // changes which rows are visible (a loaded mesh suppresses skirt, and
+  // effectiveBaseSpec() zeroes it), and those failures read as unrelated
+  // regressions rather than "the previous session's STL came back". Same
+  // general rule as the guide's: never resurrect prior-session state while
+  // framed, and do not special-case dev_smoke.html's URL to do it.
+  if(window.top === window.self) restoreMeshFromStore();
 })();
 
 

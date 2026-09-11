@@ -156,9 +156,9 @@
                 <button class="mode-btn" data-mode="viewer" aria-pressed="false">G-code Viewer</button>
               </div> -->
 
-              <div id="preset-bar" style="display:none">
-                <select id="preset-select">
-                  <option value="">0.20mm Standard</option>
+              <div id="preset-bar" class="preset-bar">
+                <select id="preset-select" aria-label="Start from a preset design">
+                  <option value="">Start from a preset...</option>
                 </select>
               </div>
 
@@ -572,6 +572,7 @@
                     aria-valuenow="0" aria-label="Generate progress">
                     <div id="gen-progress-fill" class="gen-progress-fill"></div>
                   </div>
+                  <div id="gen-issues" class="gen-issues" style="display:none"></div>
                   <pre id="gen-report" class="gen-report"></pre>
                 </div>
 

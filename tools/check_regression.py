@@ -121,6 +121,94 @@ def run_loop_fabric_case(tmpdir: Path, ref_name: str, xy_twist_turns: float) -> 
     return True, "OK"
 
 
+def run_surface_spiral_case(tmpdir: Path) -> tuple[bool, str]:
+    """build_surface_spiral (the non-planar conformal shell) has no byte-exact
+    case of its own before 2026-09-12 -- it is reachable from the CLI only via
+    ``--surface``, which was never in CLI_CASES, so the least mature generator
+    in the app had the least coverage. Direct construction, same pattern as
+    run_profile_spiral_case().
+
+    This case deliberately passes NO adhesion arguments: it is the safety net
+    that proves the adhesion package added the same day (first_layer_squish /
+    base_layers / brim_loops / first_layer_spacing_factor / first_layer_flow /
+    base_style / base_points_per_turn) is a bit-exact no-op at its defaults.
+    The reference was generated from PRE-change code, exactly as
+    ref_loop_fabric.gcode was for the xy_twist_turns addition. See
+    regression_ref/MANIFEST.md.
+
+    ref_surface_spiral_adhesion.gcode below is the same geometry with the
+    package turned ON, locking the new base/brim/squish output itself."""
+    from trident_gcode.profile import PrinterProfile
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.surface import dome
+    from trident_gcode.generators.surface_spiral import build_surface_spiral
+
+    ref_name = "ref_surface_spiral.gcode"
+    ref = REF_DIR / ref_name
+    if not ref.exists():
+        return False, f"reference file missing: {ref}"
+
+    profile = PrinterProfile()
+    writer = GcodeWriter(
+        profile=profile, line_width=0.45, layer_height=0.3,
+        bed_temp=60.0, nozzle_temp=210.0, material="PLA",
+        print_speed=40.0, first_layer_speed=20.0,
+    )
+    build_surface_spiral(writer, dome(12.0, 4.0), 12.0, shells=2)
+    out = tmpdir / ref_name
+    writer.save(str(out))
+    generated = out.read_bytes()
+    expected = ref.read_bytes()
+    if generated != expected:
+        return False, f"byte mismatch: generated {len(generated)}b vs reference {len(expected)}b"
+    return True, "OK"
+
+
+def run_surface_spiral_adhesion_case(tmpdir: Path) -> tuple[bool, str]:
+    """Locks the surface mode's bed-adhesion package (added 2026-09-12), the
+    sibling of run_surface_spiral_case() above with every new control ON:
+    a 0.75 squish, 2 solid base disks and a 3-loop brim built by reusing
+    trident_gcode/generators/base_fill.py.
+
+    Identical field/radius/shells/writer to that case, so the ONLY difference
+    between the two references is the adhesion package itself -- which makes
+    the pair a direct before/after of the feature rather than two unrelated
+    prints. Locks, in particular, the geometric invariant the whole change
+    turns on: the shell's floor sits at first_layer_z + base_layers*lh
+    (0.225 + 2*0.3 = 0.825), exactly one layer above the top base disk at
+    0.525, so the conformal shell neither re-prints into its own base nor
+    floats above it."""
+    from trident_gcode.profile import PrinterProfile
+    from trident_gcode.gcode import GcodeWriter
+    from trident_gcode.surface import dome
+    from trident_gcode.generators.surface_spiral import build_surface_spiral
+
+    ref_name = "ref_surface_spiral_adhesion.gcode"
+    ref = REF_DIR / ref_name
+    if not ref.exists():
+        return False, f"reference file missing: {ref}"
+
+    profile = PrinterProfile()
+    writer = GcodeWriter(
+        profile=profile, line_width=0.45, layer_height=0.3,
+        bed_temp=60.0, nozzle_temp=210.0, material="PLA",
+        print_speed=40.0, first_layer_speed=20.0,
+    )
+    build_surface_spiral(
+        writer, dome(12.0, 4.0), 12.0, shells=2,
+        first_layer_squish=0.75,
+        first_layer_spacing_factor=1.25,
+        base_layers=2, brim_loops=3,
+    )
+    out = tmpdir / ref_name
+    writer.save(str(out))
+    generated = out.read_bytes()
+    expected = ref.read_bytes()
+    if generated != expected:
+        return False, f"byte mismatch: generated {len(generated)}b vs reference {len(expected)}b"
+    return True, "OK"
+
+
 def run_zone_override_case(tmpdir: Path) -> tuple[bool, str]:
     """SpiralSpec.zones has no CLI flag either (see paths.py's ZoneOverride) --
     same direct-construction pattern as run_loop_fabric_case(). Also asserts,
@@ -708,6 +796,14 @@ def main() -> int:
             ok, msg = run_loop_fabric_case(tmpdir, ref_name, xy_twist_turns)
             print(f"{'PASS' if ok else 'FAIL'}  {ref_name:28s} {msg if not ok else ''}")
             all_ok &= ok
+
+        ok, msg = run_surface_spiral_case(tmpdir)
+        print(f"{'PASS' if ok else 'FAIL'}  {'ref_surface_spiral.gcode':28s} {msg if not ok else ''}")
+        all_ok &= ok
+
+        ok, msg = run_surface_spiral_adhesion_case(tmpdir)
+        print(f"{'PASS' if ok else 'FAIL'}  {'ref_surface_spiral_adhesion.gcode':28s} {msg if not ok else ''}")
+        all_ok &= ok
 
         ok, msg = run_zone_override_case(tmpdir)
         print(f"{'PASS' if ok else 'FAIL'}  {'ref_zone_overrides.gcode':28s} {msg if not ok else ''}")
