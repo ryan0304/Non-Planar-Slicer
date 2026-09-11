@@ -145,6 +145,35 @@ thing stays one continuous bead). Verified: the dome shell matches the ideal
 surface to within 0.004 mm. Steep surfaces are auto-slowed to honour the Z-rate
 limit, like everything else.
 
+### Bed adhesion for a conformal shell (app)
+
+Until recently this was the one mode in the app that printed with **no adhesion
+package at all**: the shell began as a thin spiral laid straight onto bare glass
+— no first-layer squish, no base disk, no brim — while every other mode had all
+three. It now takes the same set, using the same `base_fill.py` the vase modes
+use rather than a second implementation:
+
+* **First-layer squish** — the same convention `continuous_spiral.py` uses, so a
+  given squish means the same thing in both.
+* **Base layers** — solid disks under the shell (`spiral` or `concentric` fill).
+* **Brim** — loops around the footprint; the bed-fit check accounts for their
+  reach.
+* **Resolution** — the spiral's sampling pitch, previously fixed at 0.4 mm.
+
+The shell floor sits **one full layer above the top base disk**, not
+`base_layers - 1` like a vase wall. A vase helix starts at the disk and climbs
+over its first turn; a conformal shell is a complete layer, so starting it at
+the disk's own Z would drive the nozzle back through material already laid.
+
+Leaving the new controls alone reproduces the previous output **byte for byte** —
+that is locked by `regression_ref/ref_surface_spiral.gcode`, which was generated
+from the pre-change generator, so it is proof rather than an assertion.
+
+> **Not print-tested.** The one-layer clearance is derived geometry, and the
+> squish/spacing figures are inherited from `continuous_spiral`'s print-tested
+> convention rather than measured on a conformal shell. Treat the first
+> dome-on-a-base print as a test piece.
+
 ## FullControl integration
 
 [FullControl](https://fullcontrol.xyz) designs a print as a list of point-by-point
@@ -327,6 +356,14 @@ done by the real interface and captured frame by frame, so what you are shown is
 what your copy will do. The sequences loop on their own; nothing to press. It
 opens by itself on a genuine first visit and never again after that.
 
+**Starting from a preset.** A **Start from a preset...** dropdown sits just above
+the four step tabs, with eight curated, machine-safe starting points (Gentle Wave
+Vase, Twisted Star, Diamond Mesh Basket, Loop Fabric Vase and friends). Picking
+one applies its whole field set as a single undo step, logged by name — the edit
+history reads `preset: Twisted Star`, not `10 settings changed`, so you can see
+what happened and **Ctrl+Z** straight back out of it. The same list is on the
+build plate's right-click menu.
+
 A **Design a vase** panel sits at the top of the sidebar. Pick a shape
 (circle / star / square), set radius, height, layer height, waves, twist, base
 layers, brim, squish and print speed, and choose a filament (populated from your
@@ -364,6 +401,23 @@ machine-safe pipeline as the CLI (`GcodeWriter` + `analyze_gcode`), loaded
 straight into the 3D viewer with full playback and telemetry, and the Trident
 safety report is shown beneath the button. A **Download .gcode** button saves the
 result.
+
+**Reading the warnings.** Anything the run wants to tell you is listed as its own
+row beneath the button, at one of three weights, because a probe-strike risk and
+a cosmetic "that setting doesn't apply here" note are not the same news:
+
+| | |
+|---|---|
+| **RISK** | The machine could be damaged or the print cannot be made — a probe collision, a footprint off the bed, a top above Z max. |
+| **WARNING** | It will print, worse — firmware throttling a wave crest, extrusion in mid-air, a blend steeper than this printer manages. |
+| **NOTE** | Advisory: a setting that doesn't apply to the mode you picked, or an honest "not print-tested" caveat. |
+
+Where a row has a control behind it, **Show setting** takes you straight to it —
+switching mode, opening the step, expanding the section and highlighting the
+control, including the curve editors. Generating normally drops you into the
+G-code viewer; a **RISK** keeps you on Design instead, since that is where the
+row you need to read lives. The full text report is still printed underneath,
+unchanged.
 
 Every change is autosaved to the browser (`localStorage`) and undoable --
 **Ctrl+Z** / **Ctrl+Shift+Z** (or the undo/redo buttons) step back and forward
@@ -817,7 +871,22 @@ that changes before you do it:
   another's — but it is isolation, not access control, and it is not a
   security boundary.
 - **Nothing on the server persists.** Restart it and every session's custom
-  printers are gone until each browser reloads and replays its own.
+  printers are gone until each browser reloads and replays its own. Uploaded
+  STLs are the exception in practice: the browser keeps its own copy (see
+  below) and silently re-sends it, so a restart costs a round trip rather than
+  the design.
+- **Uploaded meshes are per-session and re-uploaded on demand.** The server's
+  mesh cache is keyed by session with a global ceiling, so one visitor's
+  uploads cannot evict another's — before that it was a single shared bucket
+  of four, and the fifth STL uploaded *site-wide* silently stranded the first
+  visitor's design on "mesh_base_id not found". The browser also stores the
+  STL bytes in IndexedDB and re-uploads them transparently on page load, or
+  once on a cache miss before retrying, so a reload, a redeploy or a dyno
+  spin-down no longer dead-ends a design that references a mesh.
+- **Request bodies are capped** (1 MB for the JSON endpoints, on top of the
+  existing 50 MB mesh and 2 MB printer-config limits). On a small hosted box
+  an unbounded `Content-Length` is an out-of-memory kill for *every*
+  concurrent user, not just the sender.
 - **The safety note at the top of this file applies to your users, not just
   to you.** G-code generated by a hosted instance for someone else's printer
   is unverified by anyone. If you hand the link to strangers, tell them to
@@ -943,7 +1012,8 @@ start of each band so you can visually match the print to the G-code.
 
 ## Tests
 
-No test runner and no config — run the scripts directly:
+No test runner and no config — run the scripts directly. The two that matter
+most:
 
 ```bash
 python tools/check_regression.py      # byte-compares output against regression_ref/
@@ -953,6 +1023,32 @@ python tools/test_printer_import.py   # printer parser/validator + generator beh
 `check_regression.py` must stay **byte-identical**. Every reference file is real
 Trident output, so a diff means a change altered what the machine does — that is
 a bug to explain, not a baseline to regenerate.
+
+The rest of `tools/test_*.py` are plain scripts with the same shape (PASS/FAIL
+per case, non-zero exit on failure) and no dependencies — run them the same way.
+Sorted roughly by what they protect:
+
+| Script | Covers |
+|---|---|
+| `test_hybrid.py`, `test_mesh_hybrid.py` | the hybrid planar base, parametric and mesh-based, including the loop-fabric variants |
+| `test_surface_spiral.py` | the conformal shell and its adhesion package |
+| `test_orca_slice.py`, `test_orca_gcode_parser.py` | the OrcaSlicer boundary: profile JSON, and the fail-closed parser for its output |
+| `test_orca_live_integration.py` | the real subprocess — **skips cleanly** when no OrcaSlicer is installed |
+| `test_mesh.py`, `test_mesh_geometry.py` | STL loading, slicing, and the seam-ring sampling the hybrid wall lands on |
+| `test_serve_limits.py`, `test_serve_mesh_params.py` | the request boundary: size ceilings, per-session mesh cache, parameter clamping |
+| `test_issue_severity.py` | that every machine-safety message is explicitly classified, so a reword cannot silently downgrade a risk to a note |
+| `test_report_extra_issues.py` | that scope warnings reach the visible report, not just a count |
+| `test_base_fan_curve.py`, `test_fan_off_layers.py`, `test_radius_speed.py`, `test_profile_spiral_zones.py` | cooling curves, fan timing, radius-based speed, zone overrides |
+| `test_viewer_search_index.py` | the control-search index the UI (and the warning rows' **Show setting**) rely on |
+| `test_phase_integration.py` | **cross-component** — see below |
+
+`test_phase_integration.py` is deliberately unlike the others. They each mock the
+Orca subprocess away and test one unit; this one starts a **real server** and
+drives it over HTTP, asserting the pieces work *together* — e.g. that a mesh
+planar base plus loop fabric plus zone overrides in one request yields the Orca
+seam marker, real fabric above it, no duplicate cuff, and the right severities.
+It skips the hybrid cases with an explicit `SKIP` line when no OrcaSlicer is
+available rather than failing.
 
 The viewer has its own browser-run suite. It covers the measure tool, the
 machine-limit fallbacks, the printer/world coordinate mirror, the Bottom and
@@ -981,6 +1077,8 @@ ORCA_RENDER_DEPLOYMENT.md       full write-up of standing up hosted hybrid mode 
 tools/make_sample_meshes.py     writes sample STLs into examples/
 tools/check_regression.py       byte-compares generated output against regression_ref/
 tools/test_printer_import.py    tests the custom-printer parser/validator (incl. a hostile config)
+tools/test_*.py                 the rest of the suite -- see Tests above for what each covers
+tools/test_phase_integration.py cross-component: starts a real server, drives it over HTTP
 tools/orca_render_feasibility/  throwaway probe: does OrcaSlicer fit a host's exact resource caps? (see ORCA_RENDER_DEPLOYMENT.md)
 calibrate.py                    calibration print suite (live-Z / flow / z-amp)
 presets.py                      curated, machine-safe presets
@@ -1039,4 +1137,24 @@ regression_ref/                 reference G-code checked by tools/check_regressi
       app-only; hosted deployments can reach it too via a Docker-based
       Render setup that bundles OrcaSlicer (see
       [`ORCA_RENDER_DEPLOYMENT.md`](ORCA_RENDER_DEPLOYMENT.md))
+- [x] Loop fabric on a planar base — the knitted wall resumed on top of a real
+      sliced base (parametric or imported mesh) instead of the base being
+      silently dropped, with the mesh's own outline blended in at the seam
+- [x] Hosted-use hardening — per-session mesh cache, request-size ceilings,
+      and uploaded STLs that survive a reload, redeploy or dyno spin-down
+- [x] Safety warnings with severity (risk / warning / note) and a jump to the
+      control each one is about
+- [x] Bed adhesion for conformal shells — first-layer squish, base disks and
+      brim for surface mode, which previously printed onto bare glass
 - [ ] Feasibility study + prototype for true dynamic tri-Z bed tilt
+
+Known gaps, recorded rather than forgotten:
+
+- Loop fabric still ignores zone overrides, point-edit modifiers,
+  radius-based speed and the fan min/max ramp (reported as notes, not
+  silently)
+- `calibrate.py` is hardwired to the Trident and only drives the parametric
+  vase, so the Bambu profiles' placeholder Z limits — and loop fabric, the
+  hybrid seam and surface mode — have no calibration path
+- The conformal-shell adhesion package is derived geometry, **not print-tested**
+- No CI: the suite is run by hand

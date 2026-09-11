@@ -178,6 +178,60 @@ def test_mesh_texture_base_style_scope_reaches_report_text():
 
 
 # ---------------------------------------------------------------------------
+# 3b. End-to-end: generate_mesh_texture_design's Height-field-is-ignored note.
+#
+# Regression for the live bug this test was written to pin: a user's mesh
+# used as "Texture the whole model" prints at the MESH's own height, never
+# the Design tab's Height field -- a short mesh (their own "Lamp Mount Test",
+# ~5mm tall) produced a print that looked like "just that small base" with no
+# explanation, because the Height field still showed 60mm and nothing said
+# it did not apply. cylinder.stl is 40mm tall; sending height=999 must both
+# print at 40mm AND say so in the report, not just silently use 40mm.
+# ---------------------------------------------------------------------------
+def test_mesh_texture_height_ignored_scope_reaches_report_text():
+    serve._mesh_cache_put("t_report_extra_issues_mt_height",
+                           load_stl(str(ROOT / "examples" / "cylinder.stl")))
+
+    body = {
+        "mode": "mesh_texture", "mesh_id": "t_report_extra_issues_mt_height",
+        "layer_height": 0.4, "points_per_turn": 120, "printer": "trident",
+        "height": 999,
+    }
+    r = serve.generate_mesh_texture_design(dict(body))
+
+    NEEDLE = "prints at the mesh's own height"
+    check(abs(r["stats"]["height_mm"] - 40.0) < 1.0,
+          "e2e/generate_mesh_texture_design: actually prints at the mesh's "
+          "own height (40mm), not the ignored Height field (999mm)",
+          str(r["stats"]))
+    check(any(NEEDLE in m for m in r["issues"]),
+          "e2e/generate_mesh_texture_design: the height-ignored note is in "
+          "the issues array (sanity check)", str(r["issues"]))
+    check(NEEDLE in r["report"],
+          "e2e/generate_mesh_texture_design: the height-ignored note text "
+          "is ALSO in report_text", r["report"])
+
+
+# Teeth: a design whose Height field already matches the mesh's own height
+# (within the 1mm tolerance) must NOT get this note -- it would be noise on
+# every ordinary use of the mode where the two happen to agree.
+def test_mesh_texture_height_matching_gets_no_note():
+    serve._mesh_cache_put("t_report_extra_issues_mt_height_match",
+                           load_stl(str(ROOT / "examples" / "cylinder.stl")))
+
+    body = {
+        "mode": "mesh_texture", "mesh_id": "t_report_extra_issues_mt_height_match",
+        "layer_height": 0.4, "points_per_turn": 120, "printer": "trident",
+        "height": 40.0,
+    }
+    r = serve.generate_mesh_texture_design(dict(body))
+    NEEDLE = "prints at the mesh's own height"
+    check(not any(NEEDLE in m for m in r["issues"]),
+          "e2e/generate_mesh_texture_design: no height-ignored note when "
+          "the Height field already matches the mesh", str(r["issues"]))
+
+
+# ---------------------------------------------------------------------------
 # 4. End-to-end: generate_surface_design's own issues_extra (the probe-slope
 # pass note) must reach report_text too -- a differently-shaped issues_extra
 # than the other two functions (advisory note, not a dropped-feature scope
@@ -202,6 +256,8 @@ def main() -> int:
     test_loop_fabric_zone_scope_reaches_report_text()
     test_loop_fabric_radius_speed_scope_reaches_report_text()
     test_mesh_texture_base_style_scope_reaches_report_text()
+    test_mesh_texture_height_ignored_scope_reaches_report_text()
+    test_mesh_texture_height_matching_gets_no_note()
     test_surface_probe_note_reaches_report_text()
 
     if _FAILURES:

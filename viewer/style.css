@@ -694,6 +694,16 @@ canvas {
   opacity: 0.45;
 }
 
+/* Same token, same meaning, in the main left sidebar -- the Height row while
+   Texture the whole model is active (that mode always prints at the mesh's
+   own height; see mesh-texture-height-hint and refreshShapeRows() in
+   designer.js). Dimmed rather than disabled for the same reason as the two
+   rules above: the value stays real and editable, it just does nothing
+   until the mode or mesh changes. */
+.panel .row-inert {
+  opacity: 0.45;
+}
+
 .panel-scroll {
   padding: 8px 10px;
   overflow-y: auto;

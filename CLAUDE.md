@@ -63,10 +63,29 @@ python tools/check_regression.py      # byte-compares output against regression_
 python tools/test_printer_import.py   # printer config parser + validator
 ```
 
+Those two are the gate, but they are not the suite — there are ~19
+`tools/test_*.py` scripts, all the same shape (PASS/FAIL per case, non-zero exit
+on failure, no dependencies). Before claiming a change is clean, sweep all of
+them, not just the two above. README's "Tests" section lists what each covers.
+
+`tools/test_phase_integration.py` is the odd one out and worth knowing about:
+every other script monkeypatches the Orca subprocess away and tests one unit,
+while that one starts a **real server** and drives it over HTTP to check the
+pieces work *together*. Unit tests passing while the combination is broken is a
+failure mode this repo has actually had — prefer adding to it when a change
+spans the server, a generator and the viewer.
+
 `check_regression.py` must stay **byte-identical**. Every reference file is
 Trident-generated, so a diff means a change altered real machine output — treat
 that as a bug to explain, not a baseline to regenerate. If the change is
-genuinely intended, say so explicitly and regenerate deliberately.
+genuinely intended, say so explicitly and regenerate deliberately. When adding a
+feature that *could* move output, capture the reference from the PRE-change code
+first, then prove the feature is a no-op at its defaults against it.
+
+The viewer has its own browser suite (`viewer/dev_smoke.html?selftest=1`). It is
+**not hermetic** — inherited `localStorage` from ordinary use of the app changes
+its results, so a handful of failures there may be environmental rather than
+real. Check against a clean profile before believing one.
 
 `tools/fixtures/printers/hostile.cfg` is adversarial on purpose (absurd limits,
 `M502`, no `G28`, unresolved placeholders). When you add a validator rule, add

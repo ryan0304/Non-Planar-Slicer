@@ -1738,6 +1738,29 @@
             w.__revealControl('no-such-control-id') === false, 'expected false');
     }
 
+    // 1b. "Start new design" and "Clear mesh" must empty EVERY place that
+    //     holds a mesh, not just the stored copy -- a live bug where "Start
+    //     new design" reset the whole panel but left the old STL sitting on
+    //     the plate and the mesh still active server-side. clearMeshEverywhere
+    //     is the one teardown both buttons now share; asserted here on its
+    //     visible side effects since meshState itself is not exposed on
+    //     window (the mesh-info/stl-drop visibility toggle is the same signal
+    //     applyGenerateResult and refreshShapeRows read).
+    if (typeof w.__clearMeshEverywhere === 'function') {
+      w.__clearMeshEverywhere(false); // false: no mesh loaded here, nothing to store-clear
+      const meshInfo = frame.contentDocument.getElementById('mesh-info');
+      const stlDrop = frame.contentDocument.getElementById('stl-drop');
+      check('clearMeshEverywhere hides the mesh-info panel',
+            !meshInfo || meshInfo.style.display === 'none',
+            'got display=' + (meshInfo && meshInfo.style.display));
+      check('clearMeshEverywhere restores the STL drop zone',
+            !stlDrop || stlDrop.style.display === '',
+            'got display=' + (stlDrop && stlDrop.style.display));
+    } else {
+      check('__clearMeshEverywhere is exposed so "Start new design" and '
+            + '"Clear mesh" sharing one teardown is testable', false, 'not exposed');
+    }
+
     // 2. A DANGER-level result must not auto-switch to the G-code viewer.
     //    applyGenerateResult switches panels on success, and the warning rows
     //    live in the Design panel's Generate step -- so a probe-collision

@@ -6519,6 +6519,22 @@
     // inert there -- hide them rather than let the panel offer a choice the
     // generator will drop. Base layers and brim DO work in STL mode.
     var meshLoaded = !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
+    // Texture the whole model prints at the MESH's own height (server:
+    // generate_mesh_texture_design, stack_from_mesh slices exactly the
+    // mesh's own maxz-minz) -- the Height field above does nothing here,
+    // but it stayed a normal, apparently-live number field with no signal,
+    // so a short mesh (a mounting bracket, say) silently printed only its
+    // own few millimetres while the panel still read "Height: 60mm".
+    // Dimmed (.row-inert), not disabled: same convention as the Support
+    // group's distance rows while Support is off (style.css) -- the value
+    // stays real and editable, it just does nothing until the mode changes
+    // or the mesh is cleared, and `disabled` would read as "unavailable"
+    // when the honest message is "this is set somewhere else right now".
+    var meshIsTexture = meshLoaded && design.mesh_base_mode !== 'planar_base';
+    var heightRow = document.getElementById('row-height');
+    if(heightRow) heightRow.classList.toggle('row-inert', meshIsTexture);
+    var heightHint = document.getElementById('mesh-texture-height-hint');
+    if(heightHint) heightHint.style.display = meshIsTexture ? '' : 'none';
     var baseStyleRow = document.getElementById('row-basestyle');
     if(baseStyleRow) baseStyleRow.style.display = (isOpen || isLoopFabric || meshLoaded) ? 'none' : '';
     if(squishRow) squishRow.style.display = isOpen ? 'none' : '';
@@ -7603,6 +7619,14 @@
   // ---- STL mesh import (Import tab) ---------------------------------------
   var MESH_MAX_MB = 50;
   var meshState = { mesh_id: null, filename: null, info: null, arrayBuffer: null };
+  // Bumped by clearMeshEverywhere() so the page-load restore below can tell
+  // "I started before the user cleared the mesh" and drop its own result
+  // instead of writing a just-cleared mesh back in. restoreMeshFromStore()
+  // does an IndexedDB read then a network round trip (reuploadMeshBytes) --
+  // both take real time, long enough for "Start new design" to run and
+  // finish first if the user acts fast on page load. Same pattern as
+  // uploadSTL's stlUploadSeq guard just below.
+  var meshEpoch = 0;
 
   // ---- uploaded-mesh persistence ------------------------------------------
   // meshState above lives in page memory only, and the server's own copy is an
@@ -7711,9 +7735,14 @@
   // unreadable record just means "no mesh", which is the state the app would
   // have been in anyway.
   function restoreMeshFromStore(){
+    var startEpoch = meshEpoch;
     return meshStoreGet().then(function(rec){
       if(!rec || !rec.bytes) return null;
       return reuploadMeshBytes(rec.bytes, rec.filename).then(function(id){
+        // The user cleared the mesh (or started a new design) while this was
+        // still in flight -- applying this result now would silently put
+        // back the exact mesh they just removed.
+        if(meshEpoch !== startEpoch) return null;
         if(!id) return null;
         // Same three calls uploadSTL() makes on success, in the same order.
         showMeshInfo(meshState.info, meshState.filename);
@@ -7954,18 +7983,40 @@
   var meshScaleEl = document.getElementById('mesh-scale');
   if(meshScaleEl) meshScaleEl.addEventListener('input', refreshMeshBasePreview);
 
-  document.getElementById('mesh-clear').addEventListener('click', function(){
+  // Remove the mesh from EVERY place that holds one. There are five, and
+  // missing any of them leaves the app in a state the user did not ask for:
+  //   1. meshState        - what /api/generate is told to slice
+  //   2. the IndexedDB record - what the next page load restores
+  //   3. window.clearMeshBasePreview() - the 3D object on the bed
+  //   4. the import panel rows - what the user reads to decide
+  //   5. the scope notes / shape rows - a mesh suppresses skirt, changes
+  //      loops-vs-fabric, and narrows point-edit/zone scope
+  //
+  // Factored out because "Start new design" needs exactly this and used to do
+  // only (2): it cleared the stored copy but left the mesh in memory and on
+  // the bed, so the one thing that button promises -- a clean plate -- was the
+  // one thing it did not deliver. Verified on the live site: radius reset
+  // 41 -> 32 and the IndexedDB record went, while mesh-info still read
+  // "cylinder.stl" and the cylinder stayed on the plate.
+  //
+  // `alsoStored` exists because the two callers differ on one point only:
+  // both drop the mesh, and both want the stored copy gone too -- but keeping
+  // the parameter makes that a decision at the call site rather than an
+  // assumption buried here.
+  function clearMeshEverywhere(alsoStored){
+    meshEpoch++;
     meshState.mesh_id = null;
     meshState.filename = null;
     meshState.info = null;
     meshState.arrayBuffer = null;
     // Clearing the mesh means clearing it everywhere -- otherwise the next
     // reload would helpfully restore the very thing the user just removed.
-    meshStoreClear();
+    if(alsoStored !== false) meshStoreClear();
     if(typeof window.clearMeshBasePreview === 'function') window.clearMeshBasePreview();
     var drop = document.getElementById('stl-drop');
     if (drop) drop.style.display = '';
-    document.getElementById('mesh-info').style.display = 'none';
+    var infoEl = document.getElementById('mesh-info');
+    if(infoEl) infoEl.style.display = 'none';
     showMeshCheck(null);
     if (stlFile) stlFile.value = '';
     if(typeof updatePointEditScopeNote === 'function') updatePointEditScopeNote();
@@ -7974,6 +8025,13 @@
     // Clearing the mesh can turn loops back into fabric (loop-fabric hides
     // base/brim/skirt) - re-evaluate those rows.
     refreshShapeRows();
+  }
+  // Exposed for viewer/dev_smoke.html, which asserts a "Start new design"
+  // really does empty the plate.
+  window.__clearMeshEverywhere = clearMeshEverywhere;
+
+  document.getElementById('mesh-clear').addEventListener('click', function(){
+    clearMeshEverywhere(true);
   });
 
   // ---- generate ----------------------------------------------------------
@@ -8854,9 +8912,12 @@
       // "Start new design" resets the DESIGN, so the mesh that design was
       // built on top of goes with it -- unlike the printer above, which is a
       // statement about the hardware on the desk rather than about this
-      // particular model. Dropping the stored copy too is what stops the next
-      // reload from restoring a mesh the user just started away from.
-      meshStoreClear();
+      // particular model. This used to only drop the STORED copy
+      // (meshStoreClear()), leaving the in-memory mesh and the bed's 3D
+      // object untouched -- so "Start new design" reset every number in the
+      // panel but left the old STL sitting on the plate. clearMeshEverywhere
+      // is the same teardown the "Clear mesh" button uses.
+      if(typeof clearMeshEverywhere === 'function') clearMeshEverywhere(true);
       applyDesignToUI();                 // repaints, persists, re-previews
       if(typeof activateStep === 'function') activateStep('model');
       close();

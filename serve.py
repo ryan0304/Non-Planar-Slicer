@@ -1820,6 +1820,7 @@ _ISSUE_RULES = (
     ("Peak wave slope", _SEVERITY_WARN, "amp-curve"),
     ("mesh-to-wall blend", _SEVERITY_WARN, "d-meshbase-blend"),
     ("exceeds this printer's printable", _SEVERITY_WARN, None),
+    ("does not apply in this mode", _SEVERITY_NOTE, "d-height"),
     ("only applies to the parametric wall", _SEVERITY_NOTE, "d-pattern"),
     ("only apply to the parametric wall", _SEVERITY_NOTE, "d-pattern"),
     ("ignored for this design", _SEVERITY_NOTE, "d-pattern"),
@@ -3211,6 +3212,14 @@ def generate_mesh_texture_design(body):
         raise KeyError("mesh_id not found (upload may have expired) - re-upload the STL")
 
     scale = float(body.get("scale", 1.0))
+    # Read only to compare against the actual printed height below and warn
+    # if they disagree -- this mode's print height is ALWAYS the mesh's own
+    # height (stack_from_mesh slices exactly maxz-minz), never this field.
+    # The Design tab's Height control still shows and accepts a value because
+    # it is shared with every other mode; leaving it live-but-inert here with
+    # no signal is what let a user's 5mm mounting bracket silently produce a
+    # 5mm print while the panel still read "Height: 60mm".
+    requested_height = body.get("height")
     layer_height = float(body.get("layer_height", 0.30))
     points_per_turn = int(body.get("points_per_turn", 240))
     line_width = body.get("line_width", None)
@@ -3438,6 +3447,27 @@ def generate_mesh_texture_design(body):
     slope_limit = slope_ceiling(profile)
     peak_slope = _peak_wave_slope(amp_fn, z_waves, lambda t: bottom_radius)
     issues_extra = []
+    # Texture the whole model always prints at the MESH's own height
+    # (stack_from_mesh above slices exactly maxz-minz of the uploaded STL) --
+    # the Height field on the Design tab is shared with every other mode but
+    # does nothing here. Surfaced any time the two disagree by more than a
+    # rounding mm, which is every time unless the mesh happens to be exactly
+    # as tall as the current Height value: a short mesh (a mounting bracket,
+    # say) used this way used to print only its own few millimetres with no
+    # explanation, which read as "the print is missing" rather than "this
+    # mode ignores that field".
+    if requested_height is not None:
+        try:
+            _requested_height = float(requested_height)
+        except (TypeError, ValueError):
+            _requested_height = None
+        if _requested_height is not None:
+            printed_height = layer_height * len(contours)
+            if abs(printed_height - _requested_height) > 1.0:
+                issues_extra.append(
+                    "Texture the whole model prints at the mesh's own height "
+                    "(%.1f mm) - the Height field (%.1f mm) does not apply "
+                    "in this mode." % (printed_height, _requested_height))
     if peak_slope > slope_limit + 1e-9:
         issues_extra.append(_slope_exceeded_message(
             peak_slope, slope_limit, bottom_radius, z_waves, amp_ceiling(profile)))

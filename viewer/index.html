@@ -186,8 +186,11 @@
                   </div>
                   <div class="drow"><span>Radius (mm)</span><input type="number" id="d-radius" min="10" max="80"
                       step="1"></div>
-                  <div class="drow"><span>Height (mm)</span><input type="number" id="d-height" min="10" max="140"
+                  <div class="drow" id="row-height"><span>Height (mm)</span><input type="number" id="d-height" min="10" max="140"
                       step="1"></div>
+                  <div class="hint tight-top" id="mesh-texture-height-hint" style="display:none">
+                    Ignored: Texture the whole model prints at the mesh's own height instead.
+                  </div>
                   <div class="drow"><span>Layer height</span><input type="number" id="d-lh" min="0.2" max="0.6"
                       step="0.05"></div>
                   <div class="drow"><span>XY twist (turns)</span><input type="number" id="d-xytwist" min="-3" max="3"
@@ -306,10 +309,9 @@
                       </span>
                     </div>
                     <div class="hint tight-top" id="mesh-mode-hint">
-                      <b>Planar base</b> - build design on top: prints this STL as a real solid base (walls +
-                      infill, sliced by a local OrcaSlicer install), then the usual non-planar wall continues
-                      above it. <b>Texture the whole model</b>: today's existing behaviour - the non-planar wall
-                      traces this mesh's own outline at every height instead.
+                      <b>Planar base</b>: solid base (walls + infill, via OrcaSlicer), then the non-planar
+                      wall builds on top. <b>Texture the whole model</b>: the wall traces this mesh's own
+                      outline at every height instead.
                     </div>
                     <div class="hint tight-top" id="meshbase-orca-hint" style="display:none">Planar base mode
                       requires a working OrcaSlicer install on the server; this one does not have it
@@ -775,17 +777,16 @@
         <div class="panel-scroll">
           <h3 class="section-heading">Planar base (OrcaSlicer)</h3>
           <div class="hint tight-top" id="planarbase-scope-hint">
-            Solid planar base only, sliced by a local OrcaSlicer install from the imported
-            STL. These settings do not affect the non-planar wall printed above it.
+            Solid base only, sliced via local OrcaSlicer. Does not affect the
+            non-planar wall printed above it.
           </div>
           <div class="hint tight-top" id="meshbase-height-hint">
-            Height means ONLY the non-planar portion printed ABOVE this mesh, not the whole object -
-            a 20 mm mount + Height 200 prints a 220 mm object.
+            Height = the non-planar wall ABOVE this mesh only, not the whole
+            object - a 20mm mount + Height 200 prints a 220mm object.
           </div>
           <div class="hint tight-top" id="meshbase-blank-hint">
-            Grouped as OrcaSlicer groups them. A blank field or "(default)" means
-            OrcaSlicer's own value for the selected printer and filament is used
-            unchanged - only a value you actually type is sent.
+            Grouped as OrcaSlicer groups them. Blank or "(default)" = OrcaSlicer's
+            own value; only a value you type is sent.
           </div>
 
           <!-- ---------------------------------------------------------- -->
