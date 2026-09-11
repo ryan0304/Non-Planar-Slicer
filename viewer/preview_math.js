@@ -753,7 +753,18 @@
   // mirrors loop_fabric.py's _radius(): twisted-shape-angle * envelope * cage,
   // sampled at the height fraction of the point being emitted -- NOT at a
   // fixed t.
-  function buildLoopFabricPreview(design, lf, radiusAt, height, cuffLh, squish, nozzle){
+  function buildLoopFabricPreview(design, lf, radiusAt, height, cuffLh, squish,
+                                  nozzle, resume, baseZ){
+    // resume/baseZ: mirrors build_loop_fabric()'s own contract
+    // (trident_gcode/generators/loop_fabric.py) -- false/0 (the defaults)
+    // reproduce this function's exact pre-existing output. True skips the
+    // whole anchor-cuff block below: a real Orca-sliced mesh planar base
+    // (build_mesh_loop_hybrid_print) already anchors the print to the bed,
+    // so row 0 hooks onto ITS top surface (baseZ) instead of a cuff this
+    // preview would otherwise draw redundantly, and possibly overlapping,
+    // on top of the mesh geometry.
+    resume = !!resume;
+    baseZ = baseZ || 0;
     var segs = [];
     // strand_h = clamp(nozzle_diameter, 0.3, 0.6) -- the bead is decoupled from
     // the (several-mm) row pitch, exactly as the generator does it.
@@ -763,13 +774,23 @@
 
     // ---- vertical layout (loop_fabric.py's own) ---------------------------
     var z0 = squish * cuffLh;
-    var cuffTop = z0 + lf.cuffTurns * cuffLh;
+    // cuffTop is the Z row 0 anchors to: the cuff's own top edge normally, or
+    // baseZ (the mesh's real top) when resuming instead -- a no-op
+    // substitution at baseZ=0/resume=false, exactly mirroring
+    // build_loop_fabric()'s own cuff_top formula.
+    var cuffTop = resume ? baseZ : (z0 + lf.cuffTurns * cuffLh);
     var line0 = (lf.mode === 'spike')
       ? cuffTop + strandH + waveAmp
       : cuffTop + loopH - lf.cuffHook + waveAmp;
+    // wallTop is the wall's own ABSOLUTE top (baseZ + height), not bare
+    // `height` -- a no-op at baseZ=0, but once a resumed wall sits high
+    // above the bed, comparing line0 (now baseZ-anchored) against the local
+    // `height` alone would collapse nRows toward 1. Mirrors the identical
+    // wall_top fix in build_loop_fabric() itself.
+    var wallTop = baseZ + height;
     // Math.trunc, not floor: Python's int() truncates toward zero, and this
     // expression goes negative on a design shorter than its own cuff.
-    var nRows = Math.max(1, Math.trunc((height - line0) / rowMm) + 1);
+    var nRows = Math.max(1, Math.trunc((wallTop - line0) / rowMm) + 1);
     lf.nRows = nRows;   // reported back through __loopFabricPreview
 
     // Segment budget (see the note above): trade samples per stitch, never
@@ -794,13 +815,20 @@
     }
 
     // ---- 1. anchor cuff: one flat ring at z0, then a helix to cuff_top ----
-    moveTo(0.0, z0, radiusAt(0.0, z0));
-    var cuffPts = (lf.cuffTurns + 1) * ppt;
-    for(var i = 1; i <= cuffPts; i++){
-      var s = i / ppt;                       // turns completed
-      var thC = TWO_PI * (i % ppt) / ppt;
-      var zC = z0 + Math.max(0.0, s - 1.0) * cuffLh;
-      lineTo(thC, zC, radiusAt(thC, zC));
+    // Skipped entirely when resuming -- see this function's own resume
+    // docstring above -- and the fabric starts directly at cuffTop (baseZ)
+    // instead, matching build_loop_fabric()'s identical resume=True branch.
+    if(!resume){
+      moveTo(0.0, z0, radiusAt(0.0, z0));
+      var cuffPts = (lf.cuffTurns + 1) * ppt;
+      for(var i = 1; i <= cuffPts; i++){
+        var s = i / ppt;                       // turns completed
+        var thC = TWO_PI * (i % ppt) / ppt;
+        var zC = z0 + Math.max(0.0, s - 1.0) * cuffLh;
+        lineTo(thC, zC, radiusAt(thC, zC));
+      }
+    } else {
+      moveTo(0.0, cuffTop, radiusAt(0.0, cuffTop));
     }
 
     // ---- 2. fabric rows ----------------------------------------------------
@@ -1089,10 +1117,66 @@
         // stays a function of height alone and the cage stays anchored to
         // the bed. No ovality or spine -- build_loop_fabric() is not given
         // them.
+        //
+        // fabricBaseZ: 0 for the parametric case (byte-identical to before
+        // this existed), or the mesh's own achieved base height when a mesh
+        // is used as a real planar base (spec.mesh_base_active) -- mirrors
+        // build_loop_fabric()'s own base_z-relative height fraction
+        // (trident_gcode/generators/loop_fabric.py), so t stays in [0,1]
+        // over the WALL segment above the seam instead of over the whole
+        // bed-to-top span once z is seam-absolute.
+        var fabricBaseZ = spec.mesh_base_active ? baseZ : 0;
+        // The mesh-ring blend path is active whenever a real planar-base
+        // mesh ring exists at all -- INCLUDING a hard seam
+        // (meshBlend.blendHeightMm === 0, corner_extent<=0): mirrors
+        // blend_stack()'s/loop_fabric.py's own contract that ring 0 (z at
+        // the seam) is ALWAYS exactly the mesh ring, unconditionally, and
+        // only rings ABOVE it are ever fully parametric. Gating this on
+        // `blendHeightMm > 0` instead would wrongly skip the mesh ring even
+        // exactly AT the seam whenever blend height is 0 -- the fabric's
+        // very first row would jump straight to the parametric shape.
+        var hasMeshRing = !!(spec.mesh_base_active && meshBlend && meshBlend.ring);
         var radiusAt = function(theta, z){
-          var t = Math.min(1.0, Math.max(0.0, z / Math.max(height, 1e-6)));
+          var t = Math.min(1.0, Math.max(0.0, (z - fabricBaseZ) / Math.max(height, 1e-6)));
           var shapeAngle = theta - xyTwist * TWO_PI * t;
-          var rr = shapeFn(shapeAngle) * radFn(t);
+          var rr;
+          if(!hasMeshRing){
+            rr = shapeFn(shapeAngle);
+          } else {
+            // Mirrors loop_fabric.py's own blend_ring branch of _radius()
+            // EXACTLY, including the operation ORDER: the mesh ring's own
+            // outline is blended against the PLAIN parametric shape (no
+            // envelope/cage yet) first, and radius_envelope/cage are
+            // applied to the BLENDED result afterward, below -- not to the
+            // parametric side alone before blending, which would leave the
+            // mesh-ring contribution unscaled by them and silently disagree
+            // with the real generator the moment a non-flat radius_profile
+            // or a cage is also active.
+            //
+            // Three-way branch, matching _radius()'s own tBlend exactly:
+            //   z <= fabricBaseZ         -> pure mesh ring (w=0), even a
+            //                                dipping stitch below the seam
+            //                                never extrapolates past it.
+            //   blendHeightMm <= 0       -> pure parametric (w=1) the
+            //                                instant z rises above the seam
+            //                                -- a hard seam, not "no ring
+            //                                at all" (see hasMeshRing above).
+            //   otherwise                -> normal blend over blendHeightMm.
+            var paraR = shapeFn(shapeAngle);
+            var meshXY = _meshRingXYAt(meshBlend.ring, shapeAngle);
+            var meshR = Math.hypot(meshXY[0], meshXY[1]);
+            var tb;
+            if(z <= fabricBaseZ){
+              tb = 0.0;
+            } else if(meshBlend.blendHeightMm <= 0){
+              tb = 1.0;
+            } else {
+              tb = Math.min(1.0, Math.max(0.0, (z - fabricBaseZ) / meshBlend.blendHeightMm));
+            }
+            var w = _meshBlendWeight(tb, meshBlend.intensity);
+            rr = meshR + w * (paraR - meshR);
+          }
+          rr *= radFn(t);
           if(design.cage && design.cage.length >= 2){
             rr *= cageScale(design.cage, theta, t);
           }
@@ -1108,7 +1192,8 @@
         window.__previewWallMeta = null;
         var fabric = buildLoopFabricPreview(design, lf, radiusAt, height,
                                             layerHeight, firstLayerSquish,
-                                            design.nozzle);
+                                            design.nozzle,
+                                            !!spec.mesh_base_active, fabricBaseZ);
         // Resolved fabric stats for the UI/tests: the numbers the print will
         // ACTUALLY use after every clamp, not the ones sitting in the panel.
         window.__loopFabricPreview = {

@@ -6436,15 +6436,21 @@
   })();
 
   // ---- show/hide dependent rows -------------------------------------------
-  // True only for parametric loop fabric (a solid-cuff-anchored knitted wall
-  // that prints no base/brim/skirt). Mesh-mode loops are a different feature
-  // (hanging loop sites on a normal wall via build_profile_spiral) that DOES
-  // print a base, so this is deliberately false when a mesh is loaded. Reads
-  // the DOM select directly (like refreshPatternRows) so it does not depend
-  // on listener order relative to whatever updates `design.pattern`.
+  // True for parametric loop fabric (a solid-cuff-anchored knitted wall that
+  // prints no base/brim/skirt) AND for loop fabric resumed onto a real
+  // Orca-sliced mesh PLANAR BASE (build_mesh_loop_hybrid_print) -- that base
+  // takes over the cuff's anchoring job, so this combination still prints no
+  // disk-stack base/brim/skirt of its OWN either. A mesh used instead to
+  // TEXTURE THE WHOLE MODEL (mesh_base_mode !== 'planar_base') is a different
+  // feature (hanging loop sites on a normal build_profile_spiral wall, see
+  // generate_mesh_texture_design) that DOES print a base, so that case alone
+  // stays false. Reads the DOM select directly (like refreshPatternRows) so
+  // it does not depend on listener order relative to whatever updates
+  // `design.pattern`.
   function loopFabricActive(){
-    var noMesh = !(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
-    return document.getElementById('d-pattern').value === 'loops' && noMesh;
+    var mesh = typeof meshState !== 'undefined' && meshState && meshState.mesh_id;
+    var meshIsTexture = mesh && design.mesh_base_mode !== 'planar_base';
+    return document.getElementById('d-pattern').value === 'loops' && !meshIsTexture;
   }
 
   // Single source of truth for what actually prints at the bottom of the
@@ -6471,11 +6477,14 @@
       brim: lf ? 0 : Math.round(design.brim),
       skirt: (lf || mesh) ? 0 : Math.round(design.skirt || 0),
       base_style_applies: !mesh,
-      // Which GENERATOR the request will hit. serve.py sends a parametric
-      // loops design to build_loop_fabric(), which replaces the wall outright,
-      // so the draft has to draw the fabric rather than a spiral. Carried on
-      // the same object for the same reason as the fields above: one place
-      // decides, and the request and the draft cannot disagree about it.
+      // Which GENERATOR the request will hit. serve.py sends a "loops"
+      // design to build_loop_fabric() (no mesh, or a mesh used as a planar
+      // base -- build_loop_hybrid_print / build_mesh_loop_hybrid_print
+      // resume it onto a real Orca-sliced base instead), which replaces the
+      // wall outright, so the draft has to draw the fabric rather than a
+      // spiral. Carried on the same object for the same reason as the fields
+      // above: one place decides, and the request and the draft cannot
+      // disagree about it.
       loop_fabric: lf,
       // True mesh-HYBRID planar base (an uploaded STL sliced by Orca as the
       // solid base, non-planar wall resumed on top) -- narrower than `mesh`
