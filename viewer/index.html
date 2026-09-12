@@ -362,10 +362,9 @@
                     <div class="drow"><span>Fade out</span><input type="number" id="d-pfadeout" min="0" max="1"
                         step="0.05"></div>
                     <div class="drow"><span>Open lattice (mesh)</span><input type="checkbox" id="d-palternate"></div>
-                    <div class="hint" id="lattice-hint" style="display:none;margin-top:2px">Alternate turns zigzag
-                      opposite ways and bond only at crossings &#8212; an open net of strands. Print SLOW (20-30 mm/s)
-                      with max cooling; best with v-wave or pleats, depth 2-3 mm, 15-40 repeats. Fragile by design.
-                    </div>
+                    <div class="hint" id="lattice-hint" style="display:none;margin-top:2px">Zigzags bond only at
+                      crossings, forming an open net &#8212; fragile by design. Print SLOW (20-30 mm/s) with max
+                      cooling; best with v-wave or pleats, depth 2-3 mm, 15-40 repeats.</div>
                     <div class="hint" style="margin-top:2px">Radial texture: displaces the wall
                       sideways, never Z &#8212; no probe risk, so it can be bold.</div>
                   </div>
@@ -430,10 +429,9 @@
                         max="30" step="1"></div>
                     <div class="drow"><span>Base cuff (turns)</span><input type="number" id="d-loop-cuff" min="1"
                         max="10" step="1"></div>
-                    <div class="hint" style="margin-top:2px">Knitted wall: the whole wall becomes rows of
-                      VERTICAL loop stitches. Each row climbs by Row height while every stitch dips down by
-                      Loop height and hooks the row below &#8212; loop height must exceed row height to
-                      interlock. No solid wall; fully open fabric. Slow + max cooling.</div>
+                    <div class="hint" style="margin-top:2px">Knitted wall: rows of VERTICAL loop stitches. Each
+                      row climbs by Row height; each stitch dips by Loop height and hooks the row below (Loop
+                      height must exceed Row height). Open fabric, no solid wall. Slow + max cooling.</div>
                   </div>
                 </div>
 
@@ -474,13 +472,11 @@
                         add a point, right-click to remove, drag to shape. Shift = fine.</div>
                     </div>
                     <div id="sil-asym-panel" style="display:none">
-                      <div class="hint" style="margin-top:2px">Points appear ON THE MODEL (left) when this mode is
-                        active and a draft preview is visible. Hover a point to highlight it (orange), then drag to
-                        bulge or dent that local region. A point you have moved turns red.</div>
-                      <div class="hint" style="margin-top:4px"><b>Shift+click</b> (or Ctrl+click) each point to select
-                        several - selected points get a white ring. Drag any one of them to move the whole selection
-                        together, rigidly. A plain click with no modifier selects just that one point. Esc cancels a
-                        drag in progress, or clears the selection.</div>
+                      <div class="hint" style="margin-top:2px">Points appear on the model (draft preview must be
+                        visible). Hover to highlight (orange), drag to bulge or dent. Moved points turn red.</div>
+                      <div class="hint" style="margin-top:4px"><b>Shift+click</b> (or Ctrl+click) to select several
+                        (white ring); drag any one to move the selection together. A plain click selects just that
+                        point. Esc cancels a drag or clears the selection.</div>
                       <div id="cage-selcount" class="sel-count">No points selected</div>
                       <div class="btn-row mt-2">
                         <button id="cage-clear-sel" class="btn" disabled>Clear selection</button>
@@ -539,14 +535,12 @@
                 <div class="drow"><span>Print speed (mm/s)</span><input type="number" id="d-speed" min="20" max="90"
                     step="1"></div>
                 <div class="drow"><span>Variable speed by radius</span><input type="checkbox" id="d-radius-speed"></div>
-                <div class="hint" id="radius-speed-hint" style="display:none;margin-top:2px">Slows the wall down where
-                  its radius is small, so a narrow section takes closer to the same time per turn as a wide one and the
-                  fresh bead gets a more even amount of time to cool. Only ever slows down &#8212; never above your
-                  Print speed. <b>Unvalidated first pass:</b> the model is a plain radius ratio, not a measured cooling
-                  curve, and nobody has printed it yet.</div>
-                <div class="hint" id="radius-speed-scope-note" style="display:none;margin-top:2px">Variable speed by
-                  radius only applies to the parametric wall (not loop fabric or STL texture mode) &#8212; ignored for
-                  this design.</div>
+                <div class="hint" id="radius-speed-hint" style="display:none;margin-top:2px">Slows the wall where
+                  its radius is small, so narrow sections cool as evenly as wide ones. Only ever slows down &#8212;
+                  never above Print speed. <b>Unvalidated:</b> a plain ratio model, not a measured curve, and
+                  untested on a real print.</div>
+                <div class="hint" id="radius-speed-scope-note" style="display:none;margin-top:2px">Only applies to
+                  the parametric wall (not loop fabric or STL texture mode) &#8212; ignored for this design.</div>
                 <div class="drow"><span>Line width override</span><input type="number" id="d-lwoverride" min="0.1"
                     max="1.2" step="0.05" placeholder="auto"></div>
 
@@ -665,9 +659,8 @@
             </div>
 
             <div class="hint">
-              <span id="bed-dimensions-hint">Bed: dimensions &times; dimensions mm. Z up to dimensions mm.</span> The
-              path is colored low&#8594;high so you can
-              see the non-planar Z modulation. Drag to orbit, scroll to zoom, right-drag to pan.
+              <span id="bed-dimensions-hint">Bed: dimensions &times; dimensions mm. Z up to dimensions mm.</span>
+              Path colored low&#8594;high shows the Z modulation. Drag = orbit, scroll = zoom, right-drag = pan.
               <br><br>
               <b>Playback:</b> space = play/pause &middot; <b>&#8592; &#8594;</b> step one turn &middot; Home/End =
               start/finish.
@@ -1268,9 +1261,8 @@ Range: [0%, 100%]">Seam intensity (%)</span>
           physically deform the already-sliced path.</div>
         <div class="zo-axis-wrap">
           <div class="zo-axis" id="zo-axis"></div>
-          <div class="hint" style="margin:0">Drag the colored rings directly on the 3D model to adjust the zone's
-            height. Drag between the rings to move the entire band. If zones overlap, their textures will smoothly blend
-            together!</div>
+          <div class="hint" style="margin:0">Drag the colored rings on the 3D model to adjust the zone's height,
+            or drag between them to move the whole band. Overlapping zones blend smoothly.</div>
         </div>
         <div class="zo-rows" id="zo-rows"></div>
         <div class="hint" id="zo-empty-hint" style="margin-top:var(--sp-2)">No zones yet. Right-click the 3D model and
