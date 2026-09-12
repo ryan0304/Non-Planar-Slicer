@@ -1166,6 +1166,37 @@
           minWallZ >= expectedBaseZ - 1e-3,
           'got min wall-region Z ' + minWallZ + ', want >= ' + expectedBaseZ);
 
+    // ---- Texture the whole model: the preview must follow the MESH --------
+    // Regression for a live report: with an STL used as "Texture the whole
+    // model", the draft drew the PARAMETRIC design (shape/radius/Height)
+    // while the server generated the mesh's own outline at the mesh's own
+    // height -- a 64mm-wide, 5mm-tall mount previewed as a 60mm cylinder and
+    // sliced as a 5mm disc ("nowhere near what we seen in the draft
+    // preview"). preview_math.js now slices the same mesh via
+    // window.getMeshContourStack (viewer.js).
+    //
+    // No mesh is loaded in this harness, so what is pinned here is the
+    // CONTRACT plus the degrade-gracefully path: the hook must exist (a
+    // rename would silently restore the old fiction), and asking for a
+    // mesh-texture preview with no mesh loaded must fall back to the
+    // parametric design instead of throwing or drawing nothing.
+    check('getMeshContourStack is exposed for the texture-mode preview',
+          typeof w.getMeshContourStack === 'function', 'not exposed');
+    check('getMeshContourStack returns null when no mesh is loaded',
+          w.getMeshContourStack ? w.getMeshContourStack(0.3, 120) === null : false,
+          'expected null with no mesh');
+    let texturePts = null, textureThrew = null;
+    try {
+      texturePts = w.generatePreview(previewDesign,
+                     { base_layers: 2, brim: 0, mesh_texture_active: true });
+    } catch (e) { textureThrew = String(e); }
+    check('a mesh-texture preview with no mesh loaded does not throw',
+          textureThrew === null, 'threw ' + textureThrew);
+    check('...and falls back to the parametric design rather than drawing nothing',
+          !!texturePts && texturePts.length === withBase.length,
+          'got ' + (texturePts ? texturePts.length : 'null')
+            + ' floats, want ' + withBase.length);
+
     // ---- base follows the wall's t=0 footprint (radius envelope) ------------
     // Mirrors continuous_spiral.py's _base_t0_footprint(): the base disks must
     // be built from the wall's OWN starting radius, not the raw, un-enveloped

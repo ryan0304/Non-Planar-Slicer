@@ -6495,7 +6495,15 @@
       // suppress the disk-stack base entirely, mirroring hybrid.py's
       // build_mesh_hybrid_print (always base_layers=0 for the wall it
       // resumes -- the printed base is the user's STL, not a disk fill).
-      mesh_base_active: mesh && design.mesh_base_mode === 'planar_base'
+      mesh_base_active: mesh && design.mesh_base_mode === 'planar_base',
+      // The other mesh usage: "Texture the whole model" replaces the wall
+      // with the mesh's own outline at the mesh's own height (server:
+      // generate_mesh_texture_design -> stack_from_mesh). The draft preview
+      // used to ignore this entirely and keep drawing the parametric
+      // shape/radius/Height, so a 64mm-wide, 5mm-tall mount previewed as a
+      // 60mm cylinder and generated as a 5mm disc. preview_math.js reads
+      // this to slice the real mesh instead.
+      mesh_texture_active: mesh && design.mesh_base_mode !== 'planar_base'
     };
   }
 

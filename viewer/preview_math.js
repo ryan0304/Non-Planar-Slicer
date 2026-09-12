@@ -977,6 +977,32 @@
     return [p0[0] + frac * (p1[0] - p0[0]), p0[1] + frac * (p1[1] - p0[1])];
   }
 
+  // Mesh contour stack (Texture the whole model) sampled at height fraction
+  // `t` and angle `theta`, as a RADIUS in mm about the mesh's own XY
+  // midpoint. Mirrors stack_from_mesh's two behaviours: rings are indexed by
+  // layer, and a layer the slicer could not resolve borrows its nearest
+  // resolved neighbour rather than collapsing to zero (which would draw a
+  // spike through the middle of the model). Returns null when no ring in the
+  // stack is usable at all, so the caller can fall back to the parametric
+  // shape instead of drawing nothing.
+  function _meshStackRadiusAt(stack, t, theta){
+    var rings = stack.rings, n = rings.length;
+    if(!n) return null;
+    var idx = Math.round(t * (n - 1));
+    if(idx < 0) idx = 0; else if(idx >= n) idx = n - 1;
+    var ring = rings[idx];
+    if(!ring){
+      // Nearest resolved neighbour, searching outward from this layer.
+      for(var d = 1; d < n; d++){
+        if(idx - d >= 0 && rings[idx - d]){ ring = rings[idx - d]; break; }
+        if(idx + d < n && rings[idx + d]){ ring = rings[idx + d]; break; }
+      }
+    }
+    if(!ring) return null;
+    var xy = _meshRingXYAt(ring, theta);
+    return Math.sqrt(xy[0] * xy[0] + xy[1] * xy[1]);
+  }
+
   function previewWallOffset(design, spec){
     spec = spec || { base_layers: 0, brim: 0 };
     var layerHeight = design.layer_height;
@@ -1040,6 +1066,21 @@
 
     var height = design.height;
     var layerHeight = design.layer_height;
+    // "Texture the whole model": the printed object IS the mesh, sliced --
+    // its own height, its own outline at every layer (server:
+    // generate_mesh_texture_design -> stack_from_mesh, which reads neither
+    // design.height nor the shape/radius). Resolve the real height here,
+    // before it is used for turns/totalSteps below, so the draft's wall is
+    // as tall as the print will be instead of as tall as the (inert) Height
+    // field says. meshStack stays null whenever the mesh cannot be sliced
+    // live, and every use of it below is guarded -- a preview must degrade
+    // to the old behaviour, never throw.
+    var meshStack = null;
+    if(spec.mesh_texture_active && typeof window.getMeshContourStack === 'function'){
+      meshStack = window.getMeshContourStack(layerHeight, MESH_RING_PPT);
+      if(meshStack && meshStack.heightMm > 0) height = meshStack.heightMm;
+      else meshStack = null;
+    }
     var zWaves = Math.round(design.z_waves);
     var xyTwist = design.xy_twist || 0;
     var zTwist = design.z_twist || 0;
@@ -1349,10 +1390,23 @@
         }
         if(extraTwist !== 0.0) shapeAngle -= extraTwist * TWO_PI;
       }
-      var r = shapeFn(shapeAngle);
-
-      // Radius envelope from silhouette curve.
-      r *= radFn(t);
+      // Texture the whole model: the wall's own outline comes from the MESH,
+      // sliced layer by layer -- not from shape/radius, which the server
+      // never reads in this mode. The radial texture, cage and asymmetry
+      // below still apply on top, matching build_profile_spiral, which takes
+      // the mesh contour stack and then displaces it exactly the same way.
+      // The silhouette curve (radFn) is deliberately NOT applied here: it is
+      // a radius_envelope on a parametric shape, and stack_from_mesh's output
+      // goes into build_profile_spiral without one.
+      var r;
+      var rMesh = meshStack ? _meshStackRadiusAt(meshStack, t, shapeAngle) : null;
+      if(rMesh !== null && rMesh > 0){
+        r = rMesh;
+      } else {
+        r = shapeFn(shapeAngle);
+        // Radius envelope from silhouette curve.
+        r *= radFn(t);
+      }
 
       // Shape cage (asymmetric local deformation grid), if present.
       // Applies to parametric AND loops-fabric designs (both honor it

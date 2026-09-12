@@ -2173,27 +2173,19 @@ function _pointInPolygon2D(pt, poly) {
   return inside;
 }
 
-window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
+// One cross-section, at one RAW (unscaled) Z, resampled to `pointsPerTurn`
+// [x, y] pairs in SCALED mm about the mesh's own bbox XY midpoint -- or null
+// on any of the bail-outs documented on getMeshTopContour above (no
+// crossing, a genuine second island, a non-star-convex outline, the ray
+// origin sitting on the outline).
+//
+// Factored out of getMeshTopContour so the whole-stack slicer
+// (getMeshContourStack, below it) runs the SAME geometry rather than a
+// second, subtly-different copy -- the two modes have to agree about what a
+// cross-section of this mesh is, or the draft contradicts itself depending
+// on which radio is selected.
+function _meshRingAtRawZ(targetZRaw, pointsPerTurn, k) {
   if (!meshBaseRawTris || !meshBaseRawBoundsMin || !meshBaseRawBoundsMax) return null;
-  if (!(layerHeightMm > 0) || !isFinite(layerHeightMm)) return null;
-  if (!(pointsPerTurn >= 3)) return null;
-
-  const k = meshBaseScale;
-  const rawMinZ = meshBaseRawBoundsMin[2], rawMaxZ = meshBaseRawBoundsMax[2];
-  const meshHeightScaled = k * (rawMaxZ - rawMinZ);
-  if (!(meshHeightScaled > 0) || !isFinite(meshHeightScaled)) return null;
-
-  const result = { achievedBaseHeightMm: meshHeightScaled, ring: null };
-  // hybrid.py's own floor: under two layers, there is no seam ring to slice
-  // (and Generate itself will refuse the print) -- just skip the ring.
-  if (meshHeightScaled < 2.0 * layerHeightMm) return result;
-
-  // Same z hybrid.py's build_mesh_hybrid_print samples at: half a layer below
-  // the mesh's own true top (SCALED mm, measured from the translated minz=0),
-  // converted back to the RAW (unscaled) frame this cached triangle data is
-  // still in.
-  const targetZScaled = meshHeightScaled - layerHeightMm * 0.5;
-  const targetZRaw = rawMinZ + targetZScaled / k;
 
   // ---- mesh_xy_midpoint(tris): raw bbox XY midpoint, the ray origin -------
   const ox = (meshBaseRawBoundsMin[0] + meshBaseRawBoundsMax[0]) / 2.0;
@@ -2214,7 +2206,7 @@ window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
     }
     if (hits.length === 2) segs.push(hits);
   }
-  if (!segs.length) return result;
+  if (!segs.length) return null;
 
   // ---- stitch_loops(segs): connect endpoints into closed loops -----------
   const EPS = 1e-4;
@@ -2250,7 +2242,7 @@ window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
     }
     if (loop.length >= 4) loops.push(loop);
   }
-  if (!loops.length) return result;
+  if (!loops.length) return null;
 
   // ---- top_contour_from_mesh() step 1-2: pick the OUTER loop, tolerating --
   // ---- holes -- a mount with screw holes has one big outer boundary plus --
@@ -2274,7 +2266,7 @@ window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
       outerIdx = kept.reduce((best, i) => (absAreas[i] > absAreas[best] ? i : best), kept[0]);
       for (const i of kept) {
         if (i === outerIdx) continue;
-        if (!_pointInPolygon2D(loops[i][0], loops[outerIdx])) return result; // a genuine island -- ambiguous, bail
+        if (!_pointInPolygon2D(loops[i][0], loops[outerIdx])) return null; // a genuine island -- ambiguous, bail
       }
     } else {
       outerIdx = kept.length ? kept[0] : 0;
@@ -2293,12 +2285,12 @@ window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
   for (let i = 0; i < n; i++) {
     const [x0, y0] = local[i];
     const [x1, y1] = local[(i + 1) % n];
-    if ((x0 === 0 && y0 === 0) || (x1 === 0 && y1 === 0)) return result; // origin on the outline
+    if ((x0 === 0 && y0 === 0) || (x1 === 0 && y1 === 0)) return null; // origin on the outline
     let d = Math.atan2(y1, x1) - Math.atan2(y0, x0);
     d = Math.atan2(Math.sin(d), Math.cos(d)); // wrap to [-pi, pi]
     total += d;
   }
-  if (Math.abs(Math.abs(total) - 2.0 * Math.PI) > 1e-3) return result; // origin outside, or self-wraps
+  if (Math.abs(Math.abs(total) - 2.0 * Math.PI) > 1e-3) return null; // origin outside, or self-wraps
   const sweepSign = total >= 0 ? 1 : -1;
   for (let i = 0; i < n; i++) {
     const [x0, y0] = local[i];
@@ -2307,7 +2299,7 @@ window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
     d = Math.atan2(Math.sin(d), Math.cos(d));
     if (sweepSign * d < -1e-6) { signOk = false; break; }
   }
-  if (!signOk) return result;
+  if (!signOk) return null;
 
   // ---- _ray_radius(local, theta), angle-resampled ------------------------
   const ring = [];
@@ -2326,14 +2318,93 @@ window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
       const s = (ax * ey - ay * ex) / denom;
       if (s > 0 && (best === null || s > best)) best = s;
     }
-    if (best === null || !isFinite(best)) return result; // no crossing at this angle -- abandon the ring
+    if (best === null || !isFinite(best)) return null; // no crossing at this angle -- abandon the ring
     // Scale to real mm here (raw local units * mesh scale), matching the
     // units the parametric preview's own rings already use.
     ring.push([k * best * dx, k * best * dy]);
   }
 
-  result.ring = ring;
+  return ring;
+}
+
+window.getMeshTopContour = function (layerHeightMm, pointsPerTurn) {
+  if (!meshBaseRawTris || !meshBaseRawBoundsMin || !meshBaseRawBoundsMax) return null;
+  if (!(layerHeightMm > 0) || !isFinite(layerHeightMm)) return null;
+  if (!(pointsPerTurn >= 3)) return null;
+
+  const k = meshBaseScale;
+  const rawMinZ = meshBaseRawBoundsMin[2], rawMaxZ = meshBaseRawBoundsMax[2];
+  const meshHeightScaled = k * (rawMaxZ - rawMinZ);
+  if (!(meshHeightScaled > 0) || !isFinite(meshHeightScaled)) return null;
+
+  const result = { achievedBaseHeightMm: meshHeightScaled, ring: null };
+  // hybrid.py's own floor: under two layers, there is no seam ring to slice
+  // (and Generate itself will refuse the print) -- just skip the ring.
+  if (meshHeightScaled < 2.0 * layerHeightMm) return result;
+
+  // Same z hybrid.py's build_mesh_hybrid_print samples at: half a layer below
+  // the mesh's own true top (SCALED mm, measured from the translated minz=0),
+  // converted back to the RAW (unscaled) frame this cached triangle data is
+  // still in.
+  const targetZScaled = meshHeightScaled - layerHeightMm * 0.5;
+  const targetZRaw = rawMinZ + targetZScaled / k;
+
+  result.ring = _meshRingAtRawZ(targetZRaw, pointsPerTurn, k);
   return result;
+};
+
+// window.getMeshContourStack(): the "Texture the whole model" counterpart to
+// getMeshTopContour() above. That one answers "where does the wall RESUME
+// from" (one ring, at the mesh's top) for the planar-base mode; this one
+// answers "what IS the wall" (every ring, bottom to top) for texture mode,
+// which is a port of trident_gcode/profile_stack.py's stack_from_mesh().
+//
+// Why this exists: the draft preview used to draw the PARAMETRIC design
+// (shape/radius/Height from the Design tab) even when a mesh was loaded as
+// Texture the whole model -- but that mode replaces the wall outright with
+// the mesh's own outline at the mesh's own height. A 64mm-wide, 5mm-tall
+// mount previewed as a 60mm-tall cylinder and then generated as a 5mm disc:
+// "the generated gcode is nowhere near what we seen in the draft preview".
+// The preview now slices the same mesh the server will slice.
+//
+// Returns null when no mesh is loaded, else
+//   { heightMm, layerCount, rings }
+// where `heightMm` is the SCALED mesh height (what the print will actually
+// be tall), and `rings[i]` is that layer's outline as `pointsPerTurn` [x, y]
+// pairs in scaled mm about the mesh's own XY midpoint -- or null for a layer
+// whose cross-section the live slicer could not resolve unambiguously (the
+// same bail-outs getMeshTopContour documents). Callers interpolate across
+// nulls; stack_from_mesh does the same thing server-side rather than
+// dropping the layer and letting the stack drift out of index.
+window.getMeshContourStack = function (layerHeightMm, pointsPerTurn) {
+  if (!meshBaseRawTris || !meshBaseRawBoundsMin || !meshBaseRawBoundsMax) return null;
+  if (!(layerHeightMm > 0) || !isFinite(layerHeightMm)) return null;
+  if (!(pointsPerTurn >= 3)) return null;
+
+  const k = meshBaseScale;
+  const rawMinZ = meshBaseRawBoundsMin[2], rawMaxZ = meshBaseRawBoundsMax[2];
+  const meshHeightScaled = k * (rawMaxZ - rawMinZ);
+  if (!(meshHeightScaled > 0) || !isFinite(meshHeightScaled)) return null;
+
+  // stack_from_mesh: n_layers = round(height / layer_height), sampled at
+  // mid-layer heights. Capped here (and only here) because this runs on every
+  // preview redraw in a browser, unlike the server's one-shot slice: a tall
+  // mesh at a fine layer height would otherwise slice thousands of rings per
+  // keystroke. Over the cap the rings are sampled evenly and the wall is
+  // drawn through them -- a draft, at draft resolution.
+  const MAX_PREVIEW_RINGS = 160;
+  const trueLayers = Math.max(1, Math.round(meshHeightScaled / layerHeightMm));
+  const layerCount = Math.min(trueLayers, MAX_PREVIEW_RINGS);
+
+  const rings = [];
+  for (let i = 0; i < layerCount; i++) {
+    // Even sampling across the mesh's height: at or under the cap this is
+    // exactly stack_from_mesh's (i + 0.5) * layer_height mid-layer ladder.
+    const frac = (i + 0.5) / layerCount;
+    const targetZRaw = rawMinZ + frac * (rawMaxZ - rawMinZ);
+    rings.push(_meshRingAtRawZ(targetZRaw, pointsPerTurn, k));
+  }
+  return { heightMm: meshHeightScaled, layerCount: layerCount, rings: rings };
 };
 
 // Rebuilds the live Mesh wrapper from the cached geometry/material/placement
