@@ -7801,6 +7801,14 @@
       alert('File too large (max ' + MESH_MAX_MB + ' MB).');
       return;
     }
+    // Bump the epoch here too, not only in clearMeshEverywhere(): a page
+    // load starts restoreMeshFromStore() (IndexedDB read + a network round
+    // trip) in the background, and a user who manually picks a NEW file
+    // before that finishes used to be racing it -- the OLD restored mesh
+    // could still land afterward and overwrite the fresh upload's meshState
+    // with what the user just replaced. Observed in practice testing the
+    // live site: a fresh upload's UI briefly looked right, then reverted.
+    meshEpoch++;
     // Sequence guard, same pattern as printer-config parsing's
     // runRevalidate() below: two rapid drops/picks must let only the LATER
     // one win, not whichever response happens to land first.

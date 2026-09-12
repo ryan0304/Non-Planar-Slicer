@@ -149,6 +149,14 @@ loop fabric, hybrid planar base, zone overrides, point edits):**
 - [ ] Race-test timing-sensitive fixes at the actual speed a fast user
       would trigger them (see the mesh-state checklist above), not a
       comfortable multi-second gap.
+- [ ] Clear `localStorage` and the `trident-mesh` IndexedDB database before
+      trusting a manual live-site read, the same way you would for
+      `dev_smoke.html`. Leftover state from your OWN earlier testing on the
+      same browser profile produced a confusing false negative in this
+      session: a fix that was actually deployed and correct looked broken
+      because a stale mesh from a prior test was mid-restore in the
+      background and re-asserted its own `mesh_base_mode` moments after a
+      fresh action appeared to work.
 
 ## Incident log
 
@@ -158,6 +166,7 @@ guards against it. Newest first.
 
 | Symptom | Pattern | Now guarded by |
 |---|---|---|
+| A manual upload of a NEW mesh could still be silently overwritten moments later by an OLDER mesh finishing its restore-from-IndexedDB in the background -- `meshEpoch` was bumped by `clearMeshEverywhere()` but not by `uploadSTL()`, so only the clear-vs-restore race was closed, not the upload-vs-restore one. Found live, testing the fix below on a dirty browser profile that made a correct fix look broken. | #2 incomplete teardown/guard, narrower instance -- the epoch mechanism existed but wasn't applied everywhere an in-flight restore could still land | `meshEpoch++` added to `uploadSTL()` too |
 | A hybrid planar base (`hybrid_base_height`) typed in while the mesh was used to Texture the whole model produced no base and no explanation ("the planar base is missing") -- the field looked live because its hide condition only checked the OTHER mesh usage (planar-base mode) | #5 gated on the wrong condition, found immediately after "fixing" the sibling #1 bug above -- same root cause, different field | `refreshShapeRows()`'s hide condition widened from `meshBaseActive` to `meshLoaded`; matching `buildGenerateBody()` send-guard; server NOTE + `_ISSUE_RULES` entry as defense in depth; `test_mesh_texture_hybrid_base_height_ignored_scope_reaches_report_text` + its teeth twin |
 | "Texture the whole model" printed only the mesh's own height with the Height field showing a different number and no explanation -- looked like "just a small base" | #1 silently scoped control | Server NOTE comparing requested vs. actual height (`generate_mesh_texture_design`); `#row-height` dims + hint the instant Texture mode is picked; `test_mesh_texture_height_ignored_scope_reaches_report_text` + its teeth twin |
 | "Start new design" reset every design field but left the previous mesh in memory, in IndexedDB, and on the 3D bed; a fast click could even race the page-load mesh restore and put it back after the reset | #2 incomplete teardown | Single `clearMeshEverywhere()` used by both "Clear mesh" and "Start new design"; `meshEpoch` counter guards the restore-vs-clear race; dev_smoke assertions on `__clearMeshEverywhere` |
