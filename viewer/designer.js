@@ -392,6 +392,12 @@
     shape: ['circle', 'star', 'square'],
     base_style: ['spiral', 'concentric'],
     hybrid_infill_pattern: ['grid', 'line', 'triangles', 'cubic', 'gyroid', 'honeycomb', 'concentric', 'rectilinear'],
+    // Radio-backed rather than <select>-backed, but the repair this table
+    // drives is exactly what it needs: a saved design carrying a mode that no
+    // longer exists (a third "wrap" mode was briefly shipped and removed)
+    // must fall back to the default, not leave the panel with no radio
+    // checked and the request in a mode the server has never heard of.
+    mesh_base_mode: ['planar_base', 'texture'],
     mesh_base_seam_style: ['fillet', 'chamfer'],
     mesh_base_infill_pattern: ['grid', 'line', 'triangles', 'cubic', 'gyroid', 'honeycomb', 'concentric', 'rectilinear'],
     pattern: ['', 'loops', 'vwave', 'hwave', 'ripple', 'diamond', 'bubbles', 'pleats', 'hammered'],
@@ -437,6 +443,21 @@
     printer: 1, bed_center: 1, filament: 1,
     loop_row: 1, loop_up: 1, point_ffd_grid: 1
   };
+  // Which of the two "Use this STL as" modes sends the mesh to OrcaSlicer as a
+  // real SOLID (mesh_base_id) rather than tracing its outline (mesh_id):
+  //   planar_base -- "Print as base": solid first, then the non-planar wall
+  //                  resumes from the nearest point of its outer wall
+  //   texture     -- "Wrap around": no solid, the wall follows the model's own
+  //                  outline from the bed up
+  // Named rather than spelled out at each gate so the two can never be
+  // classified differently in two places. A short-lived third mode ('wrap',
+  // a solid with the wall beside it on the plate) was built and removed;
+  // anything still carrying it in localStorage is migrated on load below.
+  function meshModeIsSolid(mode){
+    return mode === 'planar_base';
+  }
+  window.__meshModeIsSolid = meshModeIsSolid;
+
   var cachedDesign = null;
   try {
     var saved = JSON.parse(localStorage.getItem('design-state') || 'null');
@@ -1226,6 +1247,12 @@
 
   registerSection('shape', document.getElementById('sec-head-shape'), document.getElementById('sec-body-shape'), true);
   registerSection('asymmetry', document.getElementById('sec-head-asymmetry'), document.getElementById('sec-body-asymmetry'), false);
+  // Open by default, unlike Asymmetry above -- these rows (Bottom, Base
+  // layers, Brim, Base style, Skirt, first-layer height/spacing and the
+  // hybrid planar base) used to be buried INSIDE that collapsed section, so
+  // the settings that decide whether a print sticks to the plate could not
+  // be found without expanding a heading named for lean and ovality.
+  registerSection('base', document.getElementById('sec-head-base'), document.getElementById('sec-body-base'), true);
   registerSection('importstl', document.getElementById('sec-head-importstl'), document.getElementById('import-panel'), false);
   registerSection('silhouette', document.getElementById('sec-head-silhouette'), document.getElementById('sec-body-silhouette'), false);
   registerSection('zwaves', document.getElementById('sec-head-zwaves'), document.getElementById('sec-body-zwaves'), false);
@@ -3000,7 +3027,7 @@
       meshBaseInputs().forEach(function(el){ el.disabled = true; });
       if(planarRadio){
         planarRadio.disabled = true;
-        if(design.mesh_base_mode === 'planar_base'){
+        if(meshModeIsSolid(design.mesh_base_mode)){
           design.mesh_base_mode = 'texture';
           if(textureRadio) textureRadio.checked = true;
           persistDesign();
@@ -5599,7 +5626,7 @@
     var btn = document.getElementById('zone-btn');
     var outOfScope = design.pattern === 'loops'
       || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id
-            && design.mesh_base_mode !== 'planar_base');
+            && !meshModeIsSolid(design.mesh_base_mode));
     if(note) note.style.display = outOfScope ? '' : 'none';
     if(btn) btn.classList.toggle('zo-out-of-scope', outOfScope);
     if(typeof refreshZoneRings === 'function') refreshZoneRings();
@@ -5627,7 +5654,7 @@
     var hint = document.getElementById('radius-speed-hint');
     var outOfScope = design.pattern === 'loops'
       || !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id
-            && design.mesh_base_mode !== 'planar_base');
+            && !meshModeIsSolid(design.mesh_base_mode));
     if(note) note.style.display = outOfScope ? '' : 'none';
     if(en) en.disabled = outOfScope;
     if(hint) hint.style.display = (!outOfScope && design.radius_speed_comp) ? 'block' : 'none';
@@ -6193,7 +6220,7 @@
     // mode is not (see that function's own comment for why).
     var outOfScope = design.pattern === 'loops' ||
       !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id
-         && design.mesh_base_mode !== 'planar_base');
+         && !meshModeIsSolid(design.mesh_base_mode));
     var zones = (design.zone_overrides || []);
     var live = [];
     zones.forEach(function(z, idx){
@@ -6449,7 +6476,7 @@
   // `design.pattern`.
   function loopFabricActive(){
     var mesh = typeof meshState !== 'undefined' && meshState && meshState.mesh_id;
-    var meshIsTexture = mesh && design.mesh_base_mode !== 'planar_base';
+    var meshIsTexture = mesh && !meshModeIsSolid(design.mesh_base_mode);
     return document.getElementById('d-pattern').value === 'loops' && !meshIsTexture;
   }
 
@@ -6495,7 +6522,7 @@
       // suppress the disk-stack base entirely, mirroring hybrid.py's
       // build_mesh_hybrid_print (always base_layers=0 for the wall it
       // resumes -- the printed base is the user's STL, not a disk fill).
-      mesh_base_active: mesh && design.mesh_base_mode === 'planar_base',
+      mesh_base_active: mesh && meshModeIsSolid(design.mesh_base_mode),
       // The other mesh usage: "Texture the whole model" replaces the wall
       // with the mesh's own outline at the mesh's own height (server:
       // generate_mesh_texture_design -> stack_from_mesh). The draft preview
@@ -6503,7 +6530,7 @@
       // shape/radius/Height, so a 64mm-wide, 5mm-tall mount previewed as a
       // 60mm cylinder and generated as a 5mm disc. preview_math.js reads
       // this to slice the real mesh instead.
-      mesh_texture_active: mesh && design.mesh_base_mode !== 'planar_base'
+      mesh_texture_active: mesh && !meshModeIsSolid(design.mesh_base_mode)
     };
   }
 
@@ -6527,22 +6554,34 @@
     // inert there -- hide them rather than let the panel offer a choice the
     // generator will drop. Base layers and brim DO work in STL mode.
     var meshLoaded = !!(typeof meshState !== 'undefined' && meshState && meshState.mesh_id);
-    // Texture the whole model prints at the MESH's own height (server:
-    // generate_mesh_texture_design, stack_from_mesh slices exactly the
-    // mesh's own maxz-minz) -- the Height field above does nothing here,
-    // but it stayed a normal, apparently-live number field with no signal,
-    // so a short mesh (a mounting bracket, say) silently printed only its
-    // own few millimetres while the panel still read "Height: 60mm".
-    // Dimmed (.row-inert), not disabled: same convention as the Support
-    // group's distance rows while Support is off (style.css) -- the value
-    // stays real and editable, it just does nothing until the mode changes
-    // or the mesh is cleared, and `disabled` would read as "unavailable"
-    // when the honest message is "this is set somewhere else right now".
-    var meshIsTexture = meshLoaded && design.mesh_base_mode !== 'planar_base';
+    // "Outline only" on a model with interior holes throws that model away
+    // and prints a plain shell of its silhouette. The mesh check already
+    // computes hole_layers for the import panel's own callout, but that
+    // callout describes the FILE, not the consequence of the currently
+    // selected mode -- so a user could read "24 of 24 layers contain interior
+    // holes", pick the mode whose name sounded like "use my whole model", and
+    // still be surprised when the holes were gone. This says the consequence,
+    // at the moment it applies, and names the mode that avoids it.
+    var lossHint = document.getElementById('mesh-outline-loss-hint');
+    if(lossHint){
+      var vc = (typeof meshState !== 'undefined' && meshState && meshState.info)
+        ? meshState.info.vase_check : null;
+      var meshHasHoles = !!(vc && vc.hole_layers > 0);
+      var outlineOnly = meshLoaded && !meshModeIsSolid(design.mesh_base_mode);
+      lossHint.style.display = (meshHasHoles && outlineOnly) ? '' : 'none';
+    }
+
+    // Height is live in EVERY mode, including Texture the whole model: the
+    // server stretches the mesh's sliced stack to it (see
+    // generate_mesh_texture_design). This row was briefly dimmed with an
+    // "Ignored" note here, back when the field really was inert in texture
+    // mode -- the honest fix was to make the number do what it says, not to
+    // grey out a control the user had deliberately set. Nothing to gate.
+    var meshIsTexture = meshLoaded && !meshModeIsSolid(design.mesh_base_mode);
     var heightRow = document.getElementById('row-height');
-    if(heightRow) heightRow.classList.toggle('row-inert', meshIsTexture);
+    if(heightRow) heightRow.classList.remove('row-inert');
     var heightHint = document.getElementById('mesh-texture-height-hint');
-    if(heightHint) heightHint.style.display = meshIsTexture ? '' : 'none';
+    if(heightHint) heightHint.style.display = 'none';
     var baseStyleRow = document.getElementById('row-basestyle');
     if(baseStyleRow) baseStyleRow.style.display = (isOpen || isLoopFabric || meshLoaded) ? 'none' : '';
     if(squishRow) squishRow.style.display = isOpen ? 'none' : '';
@@ -6566,7 +6605,7 @@
     // truth for "will this request send mesh_base_id" -- recomputed here
     // rather than re-derived, so the panel and the request can never
     // disagree about which mode is live.
-    var meshBaseActive = meshLoaded && design.mesh_base_mode === 'planar_base';
+    var meshBaseActive = meshLoaded && meshModeIsSolid(design.mesh_base_mode);
     var meshModeRow = document.getElementById('row-mesh-mode');
     if(meshModeRow) meshModeRow.style.display = meshLoaded ? '' : 'none';
     var meshModeHint = document.getElementById('mesh-mode-hint');
@@ -7748,6 +7787,34 @@
   // find and re-pick the file. Silent on every failure -- a missing or
   // unreadable record just means "no mesh", which is the state the app would
   // have been in anyway.
+  // "Use this STL as" goes back to the default (Planar base) whenever a mesh
+  // ARRIVES -- a fresh pick, or a page-load restore of the stored one.
+  //
+  // mesh_base_mode is part of the persisted design, and it used to survive
+  // both. That made "Texture the whole model" a one-way door: once selected,
+  // every later import AND every reload came back in texture mode, with no
+  // indication why. For a mount with holes that means the solid is thrown
+  // away and replaced by a single wall around its outer silhouette, at the
+  // mesh's own height, with the Height field inert -- reported repeatedly as
+  // "the imported planar base model is missing" and "the height is dimmed
+  // still", on a build where the Planar base radio was enabled and
+  // OrcaSlicer was available the whole time.
+  //
+  // Resetting on restore too is the part that actually un-sticks an existing
+  // session: a user already in that state has a mesh restored for them on
+  // every load and would otherwise have to know to re-import the same file
+  // to escape. Texture mode stays one click away, it just no longer outlives
+  // the model it was chosen for.
+  //
+  // If OrcaSlicer is unavailable the capability probe forces texture and
+  // disables the radio on its own; it runs independently of this.
+  function resetMeshUsageToDefault(){
+    if(typeof DEFAULT_DESIGN === 'undefined' || !DEFAULT_DESIGN.mesh_base_mode) return;
+    design.mesh_base_mode = DEFAULT_DESIGN.mesh_base_mode;
+    var usageRadios = document.querySelectorAll('input[name="mesh-usage"]');
+    usageRadios.forEach(function(rr){ rr.checked = rr.value === design.mesh_base_mode; });
+  }
+
   function restoreMeshFromStore(){
     var startEpoch = meshEpoch;
     return meshStoreGet().then(function(rec){
@@ -7758,7 +7825,11 @@
         // back the exact mesh they just removed.
         if(meshEpoch !== startEpoch) return null;
         if(!id) return null;
-        // Same three calls uploadSTL() makes on success, in the same order.
+        // Same calls uploadSTL() makes on success, in the same order --
+        // including the usage reset, so a session already stuck in texture
+        // mode recovers on its next load instead of restoring the mesh
+        // straight back into the mode that hid it.
+        resetMeshUsageToDefault();
         showMeshInfo(meshState.info, meshState.filename);
         refreshShapeRows();
         if(typeof refreshMeshBasePreview === 'function') refreshMeshBasePreview();
@@ -7851,6 +7922,30 @@
         // meshStore* helpers above. Fire-and-forget: a storage failure must
         // not fail an upload that already succeeded.
         meshStorePut({ mesh_id: data.mesh_id, filename: file.name, bytes: arrayBuffer });
+        // A NEWLY PICKED file starts in the default mode (Planar base), not
+        // whatever the last model happened to be set to. mesh_base_mode is
+        // part of the persisted design, so once it had ever been switched to
+        // "Texture the whole model" every future import silently came in as
+        // texture -- for a mount with holes that means the solid is replaced
+        // by a single wall around its outer silhouette, at the mesh's own
+        // height, with the Height field inert. Reported as "the planar base
+        // is still missing, i only see the non planar part" and "the height
+        // automatically adjust... i didnt ask for that", on a build where
+        // the Planar base radio was enabled and OrcaSlicer was available the
+        // whole time -- nothing was broken except which radio was already
+        // selected.
+        //
+        // Deliberately here and not in reuploadMeshBytes(): that path re-sends
+        // the SAME mesh for a page-load restore or a cache-expiry retry, where
+        // silently flipping the user's chosen mode would be its own bug. Only
+        // a fresh pick resets it. Planar base is also the faithful choice of
+        // the two (it slices the real solid, holes and all), so when the two
+        // disagree this errs toward printing what the file actually is.
+        //
+        // If OrcaSlicer is unavailable the capability probe further up still
+        // forces texture and disables the radio -- it runs on its own and is
+        // not undone here.
+        resetMeshUsageToDefault();
         showMeshInfo(data, file.name);
         // the base/brim/skirt rows back.
         refreshShapeRows();
@@ -8241,7 +8336,7 @@
     // and honouring one silently would print something not asked for) --
     // computed once here and reused below so the two send-sites can never
     // disagree about which mode is live.
-    var meshBaseActive = !!meshState.mesh_id && design.mesh_base_mode === 'planar_base';
+    var meshBaseActive = !!meshState.mesh_id && meshModeIsSolid(design.mesh_base_mode);
     // Hybrid planar base: only sent when actually enabled (0 = off, same
     // "0 = off" numeric convention as base_layers/brim/skirt above) AND no
     // mesh of EITHER usage is active. Guarding on meshBaseActive alone used

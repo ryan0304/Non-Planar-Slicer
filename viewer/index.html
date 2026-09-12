@@ -221,6 +221,20 @@
                         step="0.05"></div>
                   </div>
 
+                </div>
+
+                <hr>
+                <!-- Base and adhesion. Split out of the Asymmetry section, where
+                     every one of these rows used to live: a collapsed-by-default
+                     section named for lean/ovality is not somewhere anyone looks
+                     for "Bottom: Solid/Open", "Base layers", or the hybrid planar
+                     base, and they could not be found at all without first
+                     expanding a heading that claims to be about something else
+                     ("why i could not able to pick the base type solid or open?",
+                     "the planar base is still missing"). Open by default for the
+                     same reason: these decide whether the print sticks. -->
+                <h3 class="section-heading" id="sec-head-base">Base &amp; adhesion</h3>
+                <div id="sec-body-base">
                   <div class="drow" id="d-bottom" style="margin-top:8px"><span>Bottom</span>
                     <span>
                       <label class="radio-inline"><input type="radio" name="d-bottom" value="solid"> Solid</label>
@@ -302,20 +316,41 @@
                     <div class="drow" id="row-mesh-mode" style="margin-top:8px"><span>Use this STL as</span>
                       <span>
                         <label class="radio-inline"><input type="radio" name="mesh-usage" id="mesh-mode-planar"
-                            value="planar_base"> Planar base</label>
+                            value="planar_base"> Print as base</label>
                         &nbsp;
                         <label class="radio-inline"><input type="radio" name="mesh-usage" id="mesh-mode-texture"
-                            value="texture"> Texture the whole model</label>
+                            value="texture"> Wrap around</label>
                       </span>
                     </div>
+                    <!-- These two labels used to read "Planar base" and "Texture
+                         the whole model". The second one cost a user a long,
+                         angry afternoon: it SOUNDS like "use my whole model",
+                         which is what they wanted, while it actually throws the
+                         solid away and traces the silhouette. Both now say what
+                         happens TO THE FILE, and the hint leads with what each
+                         one keeps or loses rather than with how it is built. -->
                     <div class="hint tight-top" id="mesh-mode-hint">
-                      <b>Planar base</b>: solid base (walls + infill, via OrcaSlicer), then the non-planar
-                      wall builds on top. <b>Texture the whole model</b>: the wall traces this mesh's own
-                      outline at every height instead.
+                      <b>Print as base</b>: the model is printed solid first (walls + infill via
+                      OrcaSlicer, holes and internal features kept), and the moment that finishes the
+                      non-planar wall starts from the nearest point on its outer wall and carries on
+                      upward. Total height = model + Height.
+                      <b>Wrap around</b>: no solid is printed - the non-planar wall starts at the bed
+                      and follows the model's own outline all the way up, so holes and anything inside
+                      it are lost.
                     </div>
-                    <div class="hint tight-top" id="meshbase-orca-hint" style="display:none">Planar base mode
+                    <div class="hint tight-top" id="meshbase-orca-hint" style="display:none">"Print as base"
                       requires a working OrcaSlicer install on the server; this one does not have it
-                      available right now - falling back to Texture the whole model.</div>
+                      available right now - falling back to Wrap around.</div>
+                    <!-- Fired only when the two actually disagree about this
+                         file: a mesh with interior holes, in Outline only. That
+                         is the exact combination that silently produced a
+                         featureless pancake and the report "imported planar
+                         base is missing". --> 
+                    <div class="hint tight-top" id="mesh-outline-loss-hint" style="display:none">
+                      <b>This model has holes.</b> "Wrap around" traces its outline only, so the holes
+                      are filled in and the part you imported is not in the G-code. Choose
+                      <b>Print as base</b> to print the real solid.
+                    </div>
 
                     <div id="mesh-check" class="mesh-check" style="display:none">
                       <div class="mesh-check-head"><span id="mesh-check-icon">!</span><span

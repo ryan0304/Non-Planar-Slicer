@@ -1066,20 +1066,22 @@
 
     var height = design.height;
     var layerHeight = design.layer_height;
-    // "Texture the whole model": the printed object IS the mesh, sliced --
-    // its own height, its own outline at every layer (server:
-    // generate_mesh_texture_design -> stack_from_mesh, which reads neither
-    // design.height nor the shape/radius). Resolve the real height here,
-    // before it is used for turns/totalSteps below, so the draft's wall is
-    // as tall as the print will be instead of as tall as the (inert) Height
-    // field says. meshStack stays null whenever the mesh cannot be sliced
-    // live, and every use of it below is guarded -- a preview must degrade
-    // to the old behaviour, never throw.
+    // "Texture the whole model": the wall's OUTLINE is the mesh's, sliced
+    // layer by layer (server: generate_mesh_texture_design -> stack_from_mesh),
+    // but its HEIGHT is the Height field -- the server stretches the mesh's
+    // stack in Z to reach it. So the rings come from the mesh and `height`
+    // stays the user's number; a Z-stretch changes only how far apart the
+    // cross-sections sit, which is exactly what drawing the same rings over
+    // the requested height reproduces. meshStack stays null whenever the mesh
+    // cannot be sliced live, and every use of it below is guarded -- a
+    // preview must degrade to the parametric shape, never throw.
     var meshStack = null;
     if(spec.mesh_texture_active && typeof window.getMeshContourStack === 'function'){
       meshStack = window.getMeshContourStack(layerHeight, MESH_RING_PPT);
-      if(meshStack && meshStack.heightMm > 0) height = meshStack.heightMm;
-      else meshStack = null;
+      if(!meshStack || !(meshStack.heightMm > 0)) meshStack = null;
+      // No Height set at all (or a nonsense one): fall back to the mesh's own
+      // height, which is what the server slices when it cannot stretch.
+      if(meshStack && !(height > 0)) height = meshStack.heightMm;
     }
     var zWaves = Math.round(design.z_waves);
     var xyTwist = design.xy_twist || 0;

@@ -3295,6 +3295,41 @@ def generate_mesh_texture_design(body):
         tris = [tuple((vx * scale, vy * scale, vz * scale) for (vx, vy, vz) in t)
                 for t in tris]
 
+    # Height applies HERE too, not just to the parametric wall. This mode used
+    # to slice the mesh over its own maxz-minz and ignore the field outright,
+    # so a 5mm mount could only ever print 5mm tall no matter what the Design
+    # tab said -- the field was inert and (worse, after a later change) shown
+    # greyed out, which read as the app overriding a number the user had
+    # deliberately set.
+    #
+    # Honouring it as a Z STRETCH of the mesh, rather than as "build a taller
+    # wall on top", is what keeps this mode's own contract: the wall traces
+    # THIS mesh's outline at every height. Stretching keeps every cross-section
+    # the user can see in the draft -- the silhouette at a given fraction of
+    # the height is unchanged -- and only re-spaces them, so the printed object
+    # is recognisably the same model at the height that was asked for. X and Y
+    # are untouched: Scale (the mesh panel's own control) owns those, and
+    # quietly widening a part because someone raised its height would be its
+    # own surprise.
+    #
+    # Absent/0/non-numeric height leaves the mesh exactly as it is, which is
+    # the pre-existing behaviour byte-for-byte.
+    _z_stretch = None
+    if requested_height is not None:
+        try:
+            _rh = float(requested_height)
+        except (TypeError, ValueError):
+            _rh = None
+        if _rh is not None and math.isfinite(_rh) and _rh > 0.0:
+            _zmin = min(v[2] for t in tris for v in t)
+            _zmax = max(v[2] for t in tris for v in t)
+            _mesh_h = _zmax - _zmin
+            if _mesh_h > 1e-9 and abs(_rh - _mesh_h) > 1e-9:
+                _z_stretch = _rh / _mesh_h
+                tris = [tuple((vx, vy, _zmin + (vz - _zmin) * _z_stretch)
+                              for (vx, vy, vz) in t)
+                        for t in tris]
+
     contours = stack_from_mesh(tris, layer_height, points_per_turn)
     heights = [layer_height * (i + 0.5) for i in range(len(contours))]
 
@@ -3451,27 +3486,16 @@ def generate_mesh_texture_design(body):
     slope_limit = slope_ceiling(profile)
     peak_slope = _peak_wave_slope(amp_fn, z_waves, lambda t: bottom_radius)
     issues_extra = []
-    # Texture the whole model always prints at the MESH's own height
-    # (stack_from_mesh above slices exactly maxz-minz of the uploaded STL) --
-    # the Height field on the Design tab is shared with every other mode but
-    # does nothing here. Surfaced any time the two disagree by more than a
-    # rounding mm, which is every time unless the mesh happens to be exactly
-    # as tall as the current Height value: a short mesh (a mounting bracket,
-    # say) used this way used to print only its own few millimetres with no
-    # explanation, which read as "the print is missing" rather than "this
-    # mode ignores that field".
-    if requested_height is not None:
-        try:
-            _requested_height = float(requested_height)
-        except (TypeError, ValueError):
-            _requested_height = None
-        if _requested_height is not None:
-            printed_height = layer_height * len(contours)
-            if abs(printed_height - _requested_height) > 1.0:
-                issues_extra.append(
-                    "Texture the whole model prints at the mesh's own height "
-                    "(%.1f mm) - the Height field (%.1f mm) does not apply "
-                    "in this mode." % (printed_height, _requested_height))
+    # Height is honoured in this mode now (see the Z-stretch above), so there
+    # is nothing to decline -- but a stretch big enough to change the part's
+    # proportions is worth saying out loud, because the mesh's own height is
+    # no longer what comes out. Only reported past 2x/0.5x, where "this is a
+    # stretched version of my model" stops being obvious from the preview.
+    if _z_stretch is not None and (_z_stretch > 2.0 or _z_stretch < 0.5):
+        issues_extra.append(
+            "Height stretched this mesh %.1fx vertically (its own height is "
+            "%.1f mm). Cross-sections are unchanged; only their spacing is."
+            % (_z_stretch, (layer_height * len(contours)) / max(_z_stretch, 1e-9)))
     if peak_slope > slope_limit + 1e-9:
         issues_extra.append(_slope_exceeded_message(
             peak_slope, slope_limit, bottom_radius, z_waves, amp_ceiling(profile)))
