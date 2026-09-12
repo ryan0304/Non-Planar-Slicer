@@ -1012,6 +1012,10 @@ start of each band so you can visually match the print to the G-code.
 
 ## Tests
 
+This section is an index of what exists. For the actual pre-ship process —
+which scenarios need a real click-through rather than a script, and the
+failure patterns this project keeps repeating — see `TEST_PLAN.md`.
+
 No test runner and no config — run the scripts directly. The two that matter
 most:
 

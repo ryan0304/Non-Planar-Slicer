@@ -1821,6 +1821,10 @@ _ISSUE_RULES = (
     ("mesh-to-wall blend", _SEVERITY_WARN, "d-meshbase-blend"),
     ("exceeds this printer's printable", _SEVERITY_WARN, None),
     ("does not apply in this mode", _SEVERITY_NOTE, "d-height"),
+    # Ahead of the generic "only applies to the parametric wall" rule below
+    # for the same reason as the wave-slope/mesh-blend pair above: this one
+    # is fixed by the Hybrid base height field, not the pattern dropdown.
+    ("a hybrid planar base only applies", _SEVERITY_NOTE, "d-hybrid-height"),
     ("only applies to the parametric wall", _SEVERITY_NOTE, "d-pattern"),
     ("only apply to the parametric wall", _SEVERITY_NOTE, "d-pattern"),
     ("ignored for this design", _SEVERITY_NOTE, "d-pattern"),
@@ -3531,6 +3535,19 @@ def generate_mesh_texture_design(body):
             "variable speed by radius only applies to the parametric wall "
             "(an uploaded mesh has no nominal radius to scale against) - "
             "ignored for this design.")
+    # The OTHER planar base (a solid, Orca-sliced silhouette extrusion from
+    # the BED up to hybrid_base_height, then the usual parametric wall
+    # resumes) has nothing to resume onto here -- the wall in this mode IS
+    # the mesh's own contour stack, sliced start to finish, with no seam ring
+    # to hand off from a separate base. Reported live: a hybrid base height
+    # typed in while the mesh was used to Texture the whole model produced no
+    # base and no explanation ("the planar base is missing") -- the viewer
+    # now hides these controls once any mesh is loaded (refreshShapeRows), so
+    # this is defense in depth for a request built any other way.
+    if float(body.get("hybrid_base_height", 0) or 0) > 0:
+        issues_extra.append(
+            "a hybrid planar base only applies to the parametric wall (not "
+            "Texture the whole model) - ignored for this design.")
 
     report_text = _append_extra_issues(report_text, issues_extra)
     stats = {

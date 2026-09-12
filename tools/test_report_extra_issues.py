@@ -232,6 +232,64 @@ def test_mesh_texture_height_matching_gets_no_note():
 
 
 # ---------------------------------------------------------------------------
+# 3c. End-to-end: generate_mesh_texture_design's hybrid-base-height-is-ignored
+# note.
+#
+# Regression for a SECOND live bug reported in the same session: a hybrid
+# planar base (a solid, Orca-sliced silhouette extrusion from the bed up to
+# hybrid_base_height, then the parametric wall resumes) has nothing to
+# resume onto in Texture-the-whole-model mode -- the wall IS the mesh's own
+# contour stack start to finish. The viewer used to still show the Hybrid
+# base height field as a normal, live control whenever the mesh was used as
+# Texture rather than Planar base (its hide condition checked only the
+# planar-base case), and the field's value was silently dropped server-side
+# with zero explanation -- reported live as "the planar base is missing."
+# ---------------------------------------------------------------------------
+def test_mesh_texture_hybrid_base_height_ignored_scope_reaches_report_text():
+    serve._mesh_cache_put("t_report_extra_issues_mt_hybrid",
+                           load_stl(str(ROOT / "examples" / "cylinder.stl")))
+
+    body = {
+        "mode": "mesh_texture", "mesh_id": "t_report_extra_issues_mt_hybrid",
+        "layer_height": 0.4, "points_per_turn": 120, "printer": "trident",
+        "hybrid_base_height": 20.0,
+    }
+    r = serve.generate_mesh_texture_design(dict(body))
+
+    NEEDLE = "a hybrid planar base only applies"
+    check(any(NEEDLE in m for m in r["issues"]),
+          "e2e/generate_mesh_texture_design: the hybrid-base-height-ignored "
+          "note is in the issues array (sanity check)", str(r["issues"]))
+    check(NEEDLE in r["report"],
+          "e2e/generate_mesh_texture_design: the hybrid-base-height-ignored "
+          "note text is ALSO in report_text", r["report"])
+    # Confirm it did not silently print a hybrid base either -- the request's
+    # ONLY effect must be the note, not a partially-honoured base.
+    check(abs(r["stats"]["height_mm"] - 40.0) < 1.0,
+          "e2e/generate_mesh_texture_design: the ignored hybrid base did not "
+          "change the printed height (still the mesh's own 40mm)",
+          str(r["stats"]))
+
+
+# Teeth: hybrid_base_height=0 (the default / off state) must NOT get this
+# note -- every ordinary Texture-mode design leaves this field at 0.
+def test_mesh_texture_hybrid_base_height_off_gets_no_note():
+    serve._mesh_cache_put("t_report_extra_issues_mt_hybrid_off",
+                           load_stl(str(ROOT / "examples" / "cylinder.stl")))
+
+    body = {
+        "mode": "mesh_texture", "mesh_id": "t_report_extra_issues_mt_hybrid_off",
+        "layer_height": 0.4, "points_per_turn": 120, "printer": "trident",
+        "hybrid_base_height": 0,
+    }
+    r = serve.generate_mesh_texture_design(dict(body))
+    NEEDLE = "a hybrid planar base only applies"
+    check(not any(NEEDLE in m for m in r["issues"]),
+          "e2e/generate_mesh_texture_design: no hybrid-base note when "
+          "hybrid_base_height is 0 (off)", str(r["issues"]))
+
+
+# ---------------------------------------------------------------------------
 # 4. End-to-end: generate_surface_design's own issues_extra (the probe-slope
 # pass note) must reach report_text too -- a differently-shaped issues_extra
 # than the other two functions (advisory note, not a dropped-feature scope
@@ -258,6 +316,8 @@ def main() -> int:
     test_mesh_texture_base_style_scope_reaches_report_text()
     test_mesh_texture_height_ignored_scope_reaches_report_text()
     test_mesh_texture_height_matching_gets_no_note()
+    test_mesh_texture_hybrid_base_height_ignored_scope_reaches_report_text()
+    test_mesh_texture_hybrid_base_height_off_gets_no_note()
     test_surface_probe_note_reaches_report_text()
 
     if _FAILURES:

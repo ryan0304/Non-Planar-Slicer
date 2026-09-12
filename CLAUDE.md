@@ -56,7 +56,10 @@ inheriting a different printer's limits is how a gantry gets wrecked.
 
 ## Testing
 
-No test runner config exists; run the scripts directly.
+No test runner config exists; run the scripts directly. **Read `TEST_PLAN.md`
+before shipping anything that touches session/UI state or a mode with
+special-cased behavior** — it has the scenario checklist and the recurring
+failure patterns; this section below is just how to run what already exists.
 
 ```bash
 python tools/check_regression.py      # byte-compares output against regression_ref/

@@ -6585,18 +6585,24 @@
       }
     }
     // The parametric hybrid rows (a DIFFERENT planar-base source -- a
-    // silhouette extrusion, not this mesh) are dead controls once a mesh
-    // base is active: serve.py hard-rejects a request carrying both
-    // hybrid_base_height and mesh_base_id (buildGenerateBody never sends
-    // hybrid_base_height in that case either, see meshBaseActive there).
-    // Hiding them here is exactly the dead-control confusion fix, not just
-    // the request-side guard.
+    // silhouette extrusion, not this mesh) are dead controls once ANY mesh
+    // is in use, not only when the mesh is used AS a planar base: serve.py
+    // hard-rejects hybrid_base_height + mesh_base_id together (the
+    // meshBaseActive/planar-base case), but generate_mesh_texture_design
+    // (the texture-whole-model case) has no such rejection -- it just
+    // silently never reads hybrid_base_height at all. Gating this on
+    // meshBaseActive alone left the rows fully live and apparently working
+    // in Texture mode: a user could set a hybrid base height, watch the
+    // number sit there looking normal, generate, and get no base and no
+    // explanation ("the planar base is missing"). Gate on meshLoaded so
+    // BOTH mesh usages hide these dead controls, matching
+    // buildGenerateBody's own guard just below.
     ['row-hybrid-height', 'row-hybrid-walls', 'row-hybrid-infill', 'row-hybrid-pattern'].forEach(function(id){
       var el = document.getElementById(id);
-      if(el) el.style.display = meshBaseActive ? 'none' : '';
+      if(el) el.style.display = meshLoaded ? 'none' : '';
     });
     var hybridOrcaHint = document.getElementById('hybrid-orca-hint');
-    if(hybridOrcaHint && meshBaseActive) hybridOrcaHint.style.display = 'none';
+    if(hybridOrcaHint && meshLoaded) hybridOrcaHint.style.display = 'none';
 
     // A zone's xy_twist no-op note (zoneTwistNoOpNote below) depends on the
     // shape too -- refresh it here rather than only from the field's own
@@ -8222,13 +8228,20 @@
     var meshBaseActive = !!meshState.mesh_id && design.mesh_base_mode === 'planar_base';
     // Hybrid planar base: only sent when actually enabled (0 = off, same
     // "0 = off" numeric convention as base_layers/brim/skirt above) AND no
-    // mesh base is active (see meshBaseActive above -- sending both is the
-    // hard server error CLAUDE.md warns about). Only the parametric wall
-    // honors this -- server-side it takes priority over Zone
-    // Overrides/Point Edit Modifiers (unsupported by the wall generator
-    // hybrid mode uses) and is itself ignored for loop fabric, each with its
-    // own scope warning in the report, mirroring the existing pattern.
-    if(!meshBaseActive && design.hybrid_base_height > 0){
+    // mesh of EITHER usage is active. Guarding on meshBaseActive alone used
+    // to still send this field whenever the STL was used as Texture the
+    // whole model instead -- generate_mesh_texture_design has no mesh_base_id
+    // to collide with, so nothing rejected the request, but it also never
+    // reads hybrid_base_height, so the field was silently a no-op ("the
+    // planar base is missing", reported live). refreshShapeRows() hides
+    // these rows on the same meshLoaded condition, so the panel and the
+    // request agree. Only the parametric wall honors this -- server-side it
+    // takes priority over Zone Overrides/Point Edit Modifiers (unsupported
+    // by the wall generator hybrid mode uses) and is itself ignored for loop
+    // fabric, each with its own scope warning in the report, mirroring the
+    // existing pattern.
+    var meshLoadedForHybridGuard = !!meshState.mesh_id;
+    if(!meshLoadedForHybridGuard && design.hybrid_base_height > 0){
       body.hybrid_base_height = design.hybrid_base_height;
       body.hybrid_wall_count = Math.round(design.hybrid_wall_count || 3);
       body.hybrid_infill_density = design.hybrid_infill_density != null ? design.hybrid_infill_density : 0.15;
