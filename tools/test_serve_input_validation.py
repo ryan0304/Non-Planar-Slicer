@@ -196,6 +196,77 @@ def test_gcodewriter_rejects_nonpositive_feedrate():
           w._lines[-3:])
 
 
+def _max_emitted_z_rate(gcode):
+    """(peak Z-rate mm/s, moves within 1% of that peak) recomputed from the
+    EMITTED text -- the F the firmware actually reads -- not the writer's
+    internal float, with G90/G91 tracked."""
+    import re
+    x = y = z = 0.0
+    f = 0.0
+    absolute = True
+    rates = []
+    for line in gcode.splitlines():
+        up = line.split(";", 1)[0].strip().upper()
+        if up.startswith("G91"):
+            absolute = False
+            continue
+        if up.startswith("G90"):
+            absolute = True
+            continue
+        if not re.match(r"G[01]\s", up):
+            continue
+        nx, ny, nz = x, y, z
+        for tok in up.split()[1:]:
+            try:
+                v = float(tok[1:])
+            except ValueError:
+                continue
+            if tok[0] == "X":
+                nx = v if absolute else x + v
+            elif tok[0] == "Y":
+                ny = v if absolute else y + v
+            elif tok[0] == "Z":
+                nz = v if absolute else z + v
+            elif tok[0] == "F":
+                f = v
+        dist = ((nx - x) ** 2 + (ny - y) ** 2 + (nz - z) ** 2) ** 0.5
+        if dist > 0 and f > 0:
+            rates.append((f / 60.0) * abs(nz - z) / dist)
+        x, y, z = nx, ny, nz
+    peak = max(rates) if rates else 0.0
+    return peak, sum(1 for r in rates if r >= 0.99 * peak)
+
+
+def test_emitted_feedrate_never_exceeds_z_limit():
+    """Every F is rounded DOWN, so a Z-clamped feedrate can never round back
+    up past max_z_velocity. Found live: a Z-clamped 1841.6 mm/min printed as
+    F1842 asked an Ender 3 for 5.005 mm/s against its 5.0 limit, and two
+    regression references carried 25.004 mm/s on the Trident's 25.0."""
+    from trident_gcode.gcode import _feedrate_word
+    check(_feedrate_word(1841.6) == 1841, "a fractional feedrate rounds down, never up",
+          str(_feedrate_word(1841.6)))
+    check(_feedrate_word(2399.9999999997) == 2400,
+          "float noise under a whole number does not cost a whole unit",
+          str(_feedrate_word(2399.9999999997)))
+    # A design that actually drives Z to its ceiling on each machine, so the
+    # check cannot pass vacuously on a print that never reaches the limit.
+    for printer in ("creality_ender3", "trident"):
+        body = _base_body(printer=printer, shape="star", height=20, z_waves=8,
+                          amp_profile=[[0, 0.0], [0.3, 0.9], [1, 0.9]], print_speed=90)
+        ok, r = _generates(serve.generate_design, body)
+        if not ok:
+            check(False, f"{printer}: Z-limited design generates", r)
+            continue
+        limit = serve.printer_store.session_all_profiles(None)[printer].max_z_velocity
+        peak, near = _max_emitted_z_rate(r["gcode"])
+        check(peak <= limit + 1e-9,
+              f"{printer}: no emitted move asks for more than max_z_velocity {limit}",
+              f"peak {peak:.4f} mm/s")
+        check(peak >= 0.95 * limit and near > 0,
+              f"{printer}: teeth -- the design really does run Z at its ceiling",
+              f"peak {peak:.4f} of {limit}")
+
+
 def test_analyzer_flags_nonpositive_feedrate():
     """analyze_gcode must report F<=0 moves as an issue, classified DANGER."""
     import tempfile, os
@@ -448,6 +519,7 @@ def main() -> int:
     test_z_and_pattern_fields_clamped()
     test_first_layer_height_negative_is_absent_not_error()
     test_gcodewriter_rejects_nonpositive_feedrate()
+    test_emitted_feedrate_never_exceeds_z_limit()
     test_analyzer_flags_nonpositive_feedrate()
     test_analyzer_ignores_moves_before_the_first_f_word()
     test_mesh_profile_layer_height_boundary()

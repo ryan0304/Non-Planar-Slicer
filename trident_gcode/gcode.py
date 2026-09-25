@@ -14,6 +14,21 @@ from .profile import PrinterProfile
 from .extrusion import clamp_feedrate_for_z, extrusion_for_segment
 
 
+def _feedrate_word(f: float) -> int:
+    """The integer mm/min written after F for a computed feedrate ``f``.
+
+    Rounded DOWN, never to nearest. Every feedrate reaching here has already
+    been clamped to a ceiling (max_z_velocity, max_velocity, the volumetric
+    cap), and rounding to nearest could push it back over one: a Z-clamped
+    1841.6 mm/min printed as F1842 asked an Ender 3 for 5.005 mm/s of Z
+    against its 5.0 limit. Flooring gives up at most 1 mm/min of speed and
+    keeps every emitted F at or under the ceiling it was clamped to. The
+    1e-6 absorbs float noise, so an exact 2400 that computed as
+    2399.9999999997 still prints as F2400 instead of losing a whole unit.
+    """
+    return math.floor(f + 1e-6)
+
+
 @dataclass
 class GcodeWriter:
     profile: PrinterProfile
@@ -200,7 +215,7 @@ class GcodeWriter:
         # Pure-Z move: the whole feedrate lands on the Z axis, so cap it at
         # max_z_velocity rather than travel speed (which would be 8x over).
         f = min(self.travel_speed, self.profile.max_z_velocity) * 60.0
-        self._emit(f"G1 Z{z:.4f} F{f:.0f}  ; initial safe lift")
+        self._emit(f"G1 Z{z:.4f} F{_feedrate_word(f)}  ; initial safe lift")
         self._z = z
 
     def retract(self, mm: float | None = None, speed: float | None = None) -> None:
@@ -281,8 +296,34 @@ class GcodeWriter:
             x - self._x, y - self._y, z - self._z, requested, self.profile
         )
 
+    def _clamp_to_emitted_z(self, x, y, z, speed):
+        """Re-apply the max_z_velocity clamp to the move AS IT WILL BE WRITTEN.
+
+        Callers clamp against the writer's full-precision position, but the
+        file carries coordinates rounded to 4 decimals, and the firmware (and
+        every analyzer or viewer) derives the Z share of the move from those.
+        On a Z-limited move that rounding shifts dz/length by up to ~0.05% --
+        enough that a move clamped to exactly 25.0 mm/s read back as 25.011
+        -- and on a micron-long segment it can multiply it several times over.
+        Clamping on the rounded deltas, together with _feedrate_word()
+        rounding F down, keeps every emitted move at or under the limit.
+        Only ever lowers the speed; a non-finite speed passes through so the
+        finite guard in _move() still refuses it by name.
+        """
+        if not math.isfinite(speed):
+            return speed
+        dx = round(x, 4) - round(self._x, 4)
+        dy = round(y, 4) - round(self._y, 4)
+        dz = round(z, 4) - round(self._z, 4)
+        if dz == 0.0:
+            return speed
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+        return min(speed, self.profile.max_z_velocity * dist / abs(dz))
+
     def _move(self, x, y, z, e, speed, comment) -> None:
         self._check_bounds(x, y, z)
+        if self._has_position:
+            speed = self._clamp_to_emitted_z(x, y, z, speed)
         # Track the Z-rate of *extruding* moves only. Pure-Z travel plunges are
         # always clamped to exactly max_z_velocity and would otherwise mask the
         # real figure of interest: how fast Z moves while laying plastic.
@@ -324,7 +365,10 @@ class GcodeWriter:
             raise ValueError(f"Move feedrate F={f!r} must be greater than 0")
         if e is not None and not math.isfinite(e):
             raise ValueError(f"Move extrusion E={e!r} is not a finite number")
-        parts.append(f"F{f:.0f}")
+        f_word = _feedrate_word(f)
+        if f_word < 1:
+            raise ValueError(f"Move feedrate F={f!r} is below 1 mm/min and cannot be emitted")
+        parts.append(f"F{f_word}")
         line = " ".join(parts)
         if comment:
             line += f"  ; {comment}"

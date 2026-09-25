@@ -1098,8 +1098,13 @@ function showStats(name, d) {
   const zLimit = currentMaxZVelocity();
   const zrateEl = document.getElementById('s-zrate');
   if (zLimit != null) {
-    set('s-zrate', zr.toFixed(1) + ' mm/s' + (zr > zLimit ? ' !' : ' ok'));
-    zrateEl.classList.toggle('state-danger', zr > zLimit);
+    // One part in a billion of float headroom, nothing more: a move written
+    // at exactly the limit (e.g. an Ender 3's F300 = 5.0 mm/s Z lift) can
+    // divide out to 5.000000000000001 here and flag red on a file that is
+    // exactly at, not over, the ceiling. analyze.py itself allows 0.1 mm/s.
+    const over = zr > zLimit * (1 + 1e-9);
+    set('s-zrate', zr.toFixed(1) + ' mm/s' + (over ? ' !' : ' ok'));
+    zrateEl.classList.toggle('state-danger', over);
   } else {
     // No grounded limit available -- show the measured rate but withhold the
     // verdict rather than inventing or falling back to a ceiling. A verdict

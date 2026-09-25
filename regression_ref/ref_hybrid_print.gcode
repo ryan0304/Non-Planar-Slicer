@@ -30,7 +30,7 @@ G1 E-0.6000 F3600
 ; hybrid: non-planar wall begins here (z=0.6000)
 M106 S255  ; fan 100%
 ; move to profile spiral start
-G1 X100.4926 Y100.2706 Z5.6000 F1509  ; travel
+G1 X100.4926 Y100.2706 Z5.6000 F1508  ; travel
 G1 X100.4926 Y100.2706 Z0.6000 F1500  ; travel
 G1 E0.6000 F2400
 ; wall spiral
