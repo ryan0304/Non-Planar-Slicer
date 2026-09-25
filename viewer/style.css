@@ -507,7 +507,15 @@ textarea {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  flex: 0 0 auto;
+  /* flex-shrink:1 (was 0) + min-width:0: at narrow widths (see
+     .top-bar-title's own comment below) the brand must be able to shrink
+     BELOW its title's full text width, or .top-bar-actions (undo/redo/
+     load/history, flex:0 0 auto -- deliberately never shrinks, must stay
+     fully clickable) gets pushed off the right edge with no way to scroll
+     to it. flex-grow stays 0, so on desktop -- where there is always room
+     -- this is a no-op and the bar looks exactly as before. */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .top-bar-title {
@@ -517,6 +525,14 @@ textarea {
   letter-spacing: -0.01em;
   white-space: nowrap;
   font-feature-settings: "ss03";
+  /* Companion to .top-bar-brand's flex-shrink above: a flex item's
+     automatic min-width is its content's full width unless it declares a
+     non-visible overflow, which is what actually lets the row shrink this
+     title down instead of just clipping the WHOLE brand at a hard edge.
+     Ellipsis keeps it legible while truncated rather than a mid-word cut. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* Ties the undo/redo/load/history cluster to the brand instead of
@@ -3311,6 +3327,57 @@ input[type=radio]:active:not(:disabled) {
   flex: none;
 }
 
+/* Point Edit's rail+panels layout is the one modal that combines a FIXED
+   172px rail (.pe-rail) with FIXED-width fields inside the panel
+   (select.wide-select 178px, drow number inputs 80px) -- neither ever
+   shrank. At a 390px viewport (card width min(640px, 92vw) ~= 359px) that
+   pushed #pe-mask-channel and #pe-mask-scalev past the card's right edge;
+   every OTHER modal (zone, history, filament, printer, session, guide)
+   fits at this width already, because none combines a fixed side rail with
+   fixed-width fields the way this one does. Stack the rail above the
+   panels and let each row wrap/shrink instead, same spirit as
+   .pm-modal-body's own narrow-viewport rule above, scoped to Point Edit
+   only -- .drow is used all over the main design panel too, and that
+   panel's own width constraints are unrelated to this modal's overflow. */
+@media (max-width: 560px) {
+  .pe-modal-body {
+    flex-direction: column;
+  }
+
+  .pe-rail {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    max-height: 40vh;
+  }
+
+  .pe-rail-item {
+    width: auto;
+  }
+
+  .pe-rail-sep {
+    /* A 1px-tall, full-rail-width divider makes no sense once the rail
+       wraps into a row of chips instead of a single column. */
+    display: none;
+  }
+
+  .pe-panel .drow {
+    flex-wrap: wrap;
+  }
+
+  .pe-panel .drow select.wide-select,
+  .pe-panel .drow input.wide-input,
+  .pe-panel .drow input[type=number],
+  .pe-panel .drow select {
+    width: auto;
+    max-width: 100%;
+    flex: 1 1 auto;
+  }
+}
+
 .pe-grid {
   display: grid;
   gap: 3px;
@@ -3661,8 +3728,12 @@ input[type=radio]:active:not(:disabled) {
 }
 
 .zo-row-remove:hover {
-  color: var(--danger);
-  border-color: var(--danger);
+  /* --danger is reserved for machine-safety states (CLAUDE.md) -- removing
+     a zone override row is not one. Ink + underline is the destructive-
+     affordance treatment used elsewhere for this same reason. */
+  color: var(--ink);
+  border-color: var(--ink);
+  text-decoration: underline;
 }
 
 .zo-row-remove:active {
@@ -3780,11 +3851,18 @@ input[type=radio]:active:not(:disabled) {
 }
 
 .pm-link-danger:hover {
-  color: var(--danger);
+  /* --danger is reserved for machine-safety states (CLAUDE.md) -- deleting
+     a saved filament/printer profile is a destructive UI action, not one.
+     Ink + underline reads as clearly distinct from the muted default and
+     from an ordinary .pm-link's hover (underline only, no color change). */
+  color: var(--ink);
+  text-decoration: underline;
 }
 
 .pm-link-confirm {
-  color: var(--danger);
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: underline;
 }
 
 .pm-modal {
@@ -3975,8 +4053,12 @@ input[type=radio]:active:not(:disabled) {
 }
 
 .pm-report-copy-done {
-  color: var(--ok);
-  border-color: var(--ok);
+  /* --ok is reserved for machine-safety states (CLAUDE.md) -- "copied to
+     clipboard" is UI feedback, not one. --accent already reads as "this
+     succeeded/is happening" everywhere else in the UI (see the busy-state
+     token's own comment above). */
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .pm-issue {
@@ -5291,8 +5373,12 @@ body.hints-hidden .hint {
 }
 
 .zo-row-remove:hover {
-  color: var(--danger);
-  border-color: var(--danger);
+  /* --danger is reserved for machine-safety states (CLAUDE.md) -- removing
+     a zone override row is not one. Ink + underline is the destructive-
+     affordance treatment used elsewhere for this same reason. */
+  color: var(--ink);
+  border-color: var(--ink);
+  text-decoration: underline;
 }
 
 .zo-row-remove:active {

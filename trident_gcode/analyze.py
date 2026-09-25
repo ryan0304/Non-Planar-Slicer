@@ -41,6 +41,7 @@ class GcodeAnalysis:
     est_time_s: float = 0.0          # estimated print time (seconds)
     peak_z_accel: float = 0.0        # mm/s^2  finite-difference Z-accel demand
     unsupported_moves: int = 0       # extruding moves above z=1.0 with nothing under them
+    nonpositive_feedrate_moves: int = 0  # G0/G1 moves commanded with F <= 0 (firmware cannot run these)
     probe_hits: int = 0              # moves where printed material invades the probe keep-out
     probe_worst_mm: float = 0.0      # deepest keep-out violation (mm above the clearance)
     blob_count: int = 0              # E-only extrusion moves (heuristic blob detection)
@@ -84,6 +85,13 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
     a = GcodeAnalysis()
     x = y = z = e = 0.0
     curF = 0.0
+    f_seen = False           # True once an F word has actually been parsed --
+                              # curF's 0.0 default before that point is NOT a
+                              # commanded F0, it is "no F word yet" (normal in
+                              # external G-code, which may rely on the
+                              # firmware's own default feedrate for early
+                              # travel moves); only an F word the file itself
+                              # wrote can be a nonpositive-feedrate finding.
     cur_fan = 0.0            # sticky M106/M107 state (0..1); fan defaults off
     fan_ever_on = False      # True once the first M106 is seen -- gates min/max
                              # tracking so the deliberate fan-off adhesion window
@@ -218,7 +226,7 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
                 if c == "X": nx = v if abs_xyz else x + v; seen_x = True
                 elif c == "Y": ny = v if abs_xyz else y + v; seen_y = True
                 elif c == "Z": nz = v if abs_xyz else z + v; seen_z = True
-                elif c == "F": curF = v
+                elif c == "F": curF = v; f_seen = True
                 elif c == "E":
                     de = v if rel_e else (v - e)
                     e = (e + v) if rel_e else v
@@ -227,6 +235,19 @@ def analyze_gcode(path: str, profile: PrinterProfile = TRIDENT,
                 dx, dy, dz = nx - x, ny - y, nz - z
                 dist = math.sqrt(dx*dx + dy*dy + dz*dz)
                 a.moves += 1
+                # A zero or negative commanded feedrate is not a slow move --
+                # it is one the firmware cannot execute (F0) or a direction it
+                # was never asked to move in (negative F). Counted here,
+                # unconditionally (not gated behind "if dist > 0 and speed >
+                # 0" below, which would otherwise skip every stat for exactly
+                # these moves -- how a print_speed <= 0 request used to
+                # produce tens of thousands of bad moves with issues == []).
+                # Gated on f_seen, though: curF's 0.0 initial value before any
+                # F word has actually appeared in the file is "no F word yet"
+                # (normal -- some G-code relies on the firmware's own default
+                # feedrate for early travel), not a commanded F0.
+                if f_seen and curF <= 0:
+                    a.nonpositive_feedrate_moves += 1
                 extruding = de is not None and de > 1e-6
                 speed = curF / 60.0
                 if dist > 0 and speed > 0:
@@ -431,6 +452,12 @@ def _evaluate(a: GcodeAnalysis, p: PrinterProfile) -> None:
         a.issues.append(
             f"{a.unsupported_moves} unsupported extrusion moves ({a.unsupported_pct:.1f}%) "
             f"- printing in mid-air; add a base/body under the design."
+        )
+    if a.nonpositive_feedrate_moves:
+        a.issues.append(
+            f"{a.nonpositive_feedrate_moves} move(s) with F <= 0 (zero or negative "
+            f"feedrate) - the firmware cannot execute these at all; check "
+            f"print_speed / line_width for a value that reached zero or went negative."
         )
     if a.probe_hits and p.has_probe:
         a.issues.append(

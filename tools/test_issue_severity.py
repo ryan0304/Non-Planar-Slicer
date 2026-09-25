@@ -80,14 +80,18 @@ def test_every_analyze_message_is_explicitly_classified():
     # Into the probe keep-out (only reported when the profile HAS a probe).
     a.probe_hits = 7
     a.probe_worst_mm = 3.2
+    # Some moves commanded with F <= 0 -- the firmware-cannot-execute-this
+    # branch (a print_speed <= 0 / line_width <= 0 request used to reach the
+    # G-code with none of this counted or reported at all).
+    a.nonpositive_feedrate_moves = 12
 
     _evaluate(a, p)
 
     check(p.has_probe,
           "fixture sanity: the default profile has a probe, so the probe "
           "branch is reachable", str(p.has_probe))
-    check(len(a.issues) == 6,
-          "all six _evaluate() branches fired (if this count changed, a "
+    check(len(a.issues) == 7,
+          "all seven _evaluate() branches fired (if this count changed, a "
           "branch was added/removed and the rule table needs revisiting)",
           f"got {len(a.issues)}: {a.issues}")
 

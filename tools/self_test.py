@@ -418,6 +418,20 @@ def t_guards(srv: Server) -> None:
     st, j = gen(srv, {"shape": "trapezoid", "radius": 30, "height": 40})
     check(st == 400, "unknown shape rejected as 400", "status %s" % st)
 
+    # An unknown filament's error message must be the PLAIN sentence, not
+    # double-repr'd: FilamentSettings.from_orca raises KeyError("Filament 'x'
+    # not found."), and str() of a KeyError already quotes+escapes args[0] --
+    # a since-removed `except KeyError as e: raise KeyError(str(e))` used to
+    # wrap that a second time, so by the time the handler's old
+    # str(e).strip('"').strip("'") ran, only the OUTER layer of quoting came
+    # off and the UI showed literal backslashes and quote marks.
+    st, j = gen(srv, {"shape": "circle", "radius": 30, "height": 40,
+                      "layer_height": 0.3, "filament": "nope"})
+    check(st == 400, "unknown filament rejected as 400", "status %s" % st)
+    check(j.get("error") == "Filament 'nope' not found.",
+          "unknown filament error is the plain sentence, no extra quoting",
+          repr(j.get("error")))
+
 
 def t_star(srv: Server) -> None:
     """star_points / star_depth must be clamped server-side, not just by the

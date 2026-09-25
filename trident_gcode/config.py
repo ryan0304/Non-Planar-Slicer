@@ -21,6 +21,7 @@ Example::
 from __future__ import annotations
 
 import json
+import math
 import sys
 from dataclasses import fields as dc_fields
 
@@ -56,9 +57,33 @@ def load_config(path: str) -> tuple[dict, dict]:
 
 
 def apply_machine_overrides(profile, overrides: dict):
-    """Apply ``overrides`` dict to a PrinterProfile in-place.
+    """Apply ``overrides`` dict to a PrinterProfile IN-PLACE.
 
     Unknown keys trigger a clear error message and exit(1).
+
+    ``profile`` must already be the caller's OWN copy (generate.py builds one
+    fresh with ``PrinterProfile(...)`` or ``dataclasses.replace(...)`` before
+    ever calling this) -- this function has no way to tell a shared instance
+    from a private one, so it is the caller's job to never pass
+    trident_gcode.profile.TRIDENT or a PRINTER_PROFILES[...] entry directly.
+
+    Two rounds of validation, for two different reasons:
+
+    1. Per-field, here, BEFORE anything is written to ``profile``:
+       ``json.load`` accepts the bare tokens NaN/Infinity, and
+       ``type(getattr(profile, k))(v)`` used to hand those straight to
+       ``float()`` (which happily returns a NaN/inf float) and hand
+       ``bool("false")`` straight to ``bool()`` (which is True for ANY
+       non-empty string) -- so a config could set a numeric field to a
+       non-finite value or a bool field to the OPPOSITE of what its own text
+       said. Every comparison against NaN is False, so a NaN limit would
+       survive every downstream clamp silently (CLAUDE.md).
+    2. Whole-profile, after every override is applied:
+       printer_validate.validate_profile_dict runs the exact pipeline a
+       browser-imported profile goes through, catching what no single field
+       check can -- an in-range-but-unsafe COMBINATION, e.g. max_z_velocity
+       left above max_velocity, or a z_amp_max above this profile's own
+       probe clearance.
     """
     from trident_gcode.profile import PrinterProfile
     valid = {f.name for f in dc_fields(PrinterProfile)}
@@ -71,7 +96,80 @@ def apply_machine_overrides(profile, overrides: dict):
         )
         raise SystemExit(1)
     for k, v in overrides.items():
-        setattr(profile, k, type(getattr(profile, k))(v))
+        current = getattr(profile, k)
+        target_type = type(current)
+        if target_type is bool:
+            if not isinstance(v, bool):
+                print(
+                    f"ERROR: machine key '{k}' must be a JSON boolean (true or "
+                    f"false), got {v!r}. (bool('false') in Python is True for "
+                    f"any non-empty string -- this is rejected outright rather "
+                    f"than silently doing the opposite of what the config says.)",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            setattr(profile, k, v)
+            continue
+        if target_type in (int, float):
+            try:
+                num = float(v)
+            except (TypeError, ValueError):
+                print(f"ERROR: machine key '{k}' must be a number, got {v!r}.",
+                      file=sys.stderr)
+                raise SystemExit(1)
+            if not math.isfinite(num):
+                print(
+                    f"ERROR: machine key '{k}' must be a finite number, got "
+                    f"{v!r} -- NaN/Infinity would survive every downstream "
+                    f"min()/max() clamp instead of tripping it.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            setattr(profile, k, target_type(num))
+            continue
+        # str (name, firmware, start_gcode, end_gcode, pa_gcode_style, ...):
+        # unchanged coercion, nothing non-finite or boolean-truthy to guard.
+        setattr(profile, k, target_type(v))
+
+    from trident_gcode.printer_validate import validate_profile_dict
+    vr = validate_profile_dict(asdict_profile(profile))
+    if not vr.ok:
+        errs = "; ".join(i.message for i in vr.issues if i.severity == "error")
+        print(
+            f"ERROR: machine overrides in config produced an unsafe profile: {errs}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    # ``ok`` only means no ERROR-severity issue -- validate_profile_dict also
+    # CLAMPS an in-range-per-field-but-still-unsafe value with a WARNING
+    # instead of erroring (e.g. z_amp_max=50 clamps to 10, the module's own
+    # absolute ceiling, rather than failing outright). The browser/CLI
+    # printer-IMPORT path already treats a clamped-with-warning result as
+    # "safe to use vr.profile" (see generate.py's --import handling,
+    # printer_store.save_custom(key, vr.profile, ...)) -- mirrored here so a
+    # config's "machine" block cannot leave an out-of-range number sitting on
+    # `profile` just because it was a warning, not an error. Every field
+    # round-trips byte-identically when nothing was actually out of range
+    # (verified: TRIDENT through this same pipeline comes back unchanged,
+    # including start_gcode/end_gcode), so this is a no-op for a clean config.
+    #
+    # But a silent clamp is exactly the "convenient over safe" failure
+    # CLAUDE.md warns about: someone who typed 50 for z_amp_max must be told
+    # they actually got 10, not left to discover it by measuring a print.
+    # Printed BEFORE the clamp is applied to `profile` below, one line per
+    # warning, so a config with several out-of-range fields shows every one.
+    for i in vr.issues:
+        if i.severity == "warn":
+            print(f"WARNING: machine override {i.field}: {i.message}", file=sys.stderr)
+    for f in dc_fields(PrinterProfile):
+        setattr(profile, f.name, getattr(vr.profile, f.name))
+
+
+def asdict_profile(profile) -> dict:
+    """dataclasses.asdict(profile), pulled out to one place so both this
+    module's re-validation and any future caller share the same conversion."""
+    from dataclasses import asdict
+    return asdict(profile)
 
 
 def validate_flag_keys(flag_raw: dict, valid_dests: set[str], config_path: str) -> None:

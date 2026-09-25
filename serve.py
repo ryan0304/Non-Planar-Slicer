@@ -346,6 +346,33 @@ RADIUS_SCALE_MIN, RADIUS_SCALE_MAX = 0.2, 1.5
 # XY jumps of a large fraction of depth*radius at full print speed.
 STAR_POINTS_MIN, STAR_POINTS_MAX = 3, 12
 STAR_DEPTH_MIN, STAR_DEPTH_MAX = 0.0, 1.0
+
+# --- UI/process ranges mirrored server-side (see _num()'s docstring) -------
+# These are NOT machine limits (CLAUDE.md: no machine limit may be a module
+# constant) -- they are the same UI/process ranges the browser's <input
+# min/max> already enforces (viewer/index.html control ids in each comment),
+# repeated here only because a raw HTTP client bypasses the browser entirely.
+# The real machine ceilings (bed, z_max, max_velocity, max_z_velocity, ...)
+# stay exactly where they already lived: the selected PrinterProfile and
+# GcodeWriter's own bounds checks.
+LAYER_HEIGHT_MIN, LAYER_HEIGHT_MAX = 0.2, 0.6           # #d-lh
+MESH_LAYER_HEIGHT_MIN, MESH_LAYER_HEIGHT_MAX = 0.1, 0.6  # #mesh-lh
+PRINT_SPEED_MIN, PRINT_SPEED_MAX = 20.0, 90.0           # #d-speed
+LINE_WIDTH_MIN, LINE_WIDTH_MAX = 0.1, 1.2               # #d-lwoverride
+BASE_LAYERS_MIN, BASE_LAYERS_MAX = 0, 3                 # #d-base
+BRIM_MIN, BRIM_MAX = 0, 5                               # #d-brim
+SKIRT_MIN, SKIRT_MAX = 0, 3                             # #d-skirt (already clamped)
+Z_WAVES_MIN, Z_WAVES_MAX = 0, 12                        # #d-waves
+Z_TWIST_MIN, Z_TWIST_MAX = 0.0, 2.0                     # #d-ztwist
+XY_TWIST_MIN, XY_TWIST_MAX = -3.0, 3.0                  # #d-xytwist
+PATTERN_WAVES_MIN, PATTERN_WAVES_MAX = 1, 40            # #d-pwaves
+PATTERN_BANDS_MIN, PATTERN_BANDS_MAX = 0.0, 30.0        # #d-pbands
+MESH_SCALE_MIN, MESH_SCALE_MAX = 0.1, 10.0              # #mesh-scale
+# points_per_turn has no dedicated UI control (240 is the fixed default the
+# viewer sends); floor keeps a ring from degenerating into too few points to
+# trace the silhouette, ceiling matches _EXPORT_MAX_PPT so the G-code path can
+# never be looser than the STL export path already is.
+POINTS_PER_TURN_MIN, POINTS_PER_TURN_MAX = 32, _EXPORT_MAX_PPT
 # Fallback ONLY for a profile object that lacks quality_slope_max entirely
 # (e.g. a bare object built outside PrinterProfile's dataclass default) --
 # see slope_ceiling() above. Every real PrinterProfile carries its own
@@ -513,6 +540,45 @@ def _make_smooth_interp(points, clamp_lo, clamp_hi):
         return pts[-1][1]
 
     return f
+
+
+def _num(body, key, default, lo, hi, *, kind=float, reject_nonpositive=False):
+    """Parse + clamp one numeric request field, the same shape _parse_star's
+    two lines already used -- pulled out because those were about to stop
+    being the only unclamped pair (CLAUDE.md: server clamps must be at least
+    as strict as UI clamps; see viewer/index.html's <input min/max> for the
+    values callers pass as lo/hi).
+
+    Missing or explicit JSON null -> ``default`` returned as-is, unvalidated
+    (every caller's default is already a safe in-range constant, so there is
+    nothing to check). Present but not parseable as ``kind`` -> ValueError
+    naming the field (-> HTTP 400 at the handler). Present, parses, but
+    ``reject_nonpositive`` and <= 0 -> ValueError naming the field -- this
+    runs BEFORE clamping, so a positive lo (e.g. layer_height's 0.2) can never
+    silently turn a nonsense 0 or a negative number into an accepted value.
+    Otherwise clamped into [lo, hi] (either bound may be None to skip that
+    side, e.g. radius/height: positive is required but there is no UI
+    ceiling -- the machine's own z_max/footprint checks are the real limit).
+
+    Non-finite (NaN/Infinity) never reaches here: _read_json_body's
+    _reject_nonfinite_tree already rejects those for the whole request body
+    before any field-level parsing runs, exactly as _parse_star's docstring
+    already noted for star_points/star_depth.
+    """
+    raw = body.get(key, default)
+    if raw is None:
+        return default
+    try:
+        value = kind(raw)
+    except (TypeError, ValueError):
+        raise ValueError("%s must be a number" % key)
+    if reject_nonpositive and value <= 0:
+        raise ValueError("%s must be greater than 0" % key)
+    if lo is not None:
+        value = max(lo, value)
+    if hi is not None:
+        value = min(value, hi)
+    return value
 
 
 def _parse_star(body):
@@ -934,6 +1000,13 @@ def _parse_mesh_hybrid_params(body, height):
     scale = _finite_float("mesh_base_scale", body.get("mesh_base_scale"), 1.0)
     if scale <= 0.0:
         raise ValueError("mesh_base_scale must be positive, got %r" % (scale,))
+    # Same [0.1, 10] ceiling as #mesh-scale (the mesh_texture path's own
+    # "scale" field, and viewer/index.html's control) -- the viewer sends this
+    # DOM value straight through unclamped, so nothing upstream of here bounds
+    # a raw/malicious request. No UI exposes a DIFFERENT range for the hybrid
+    # base's own scale, so mirroring the one that does exist is the
+    # conservative choice rather than inventing a second, unreviewed ceiling.
+    scale = max(0.1, min(scale, 10.0))
 
     blend_height = _finite_float(
         "mesh_base_blend_height", body.get("mesh_base_blend_height"), 0.0)
@@ -1805,6 +1878,7 @@ _ISSUE_RULES = (
     ("PROBE COLLISION RISK", _SEVERITY_DANGER, "amp-curve"),
     ("falls outside the safe area", _SEVERITY_DANGER, "d-radius"),
     ("exceeds Z max", _SEVERITY_DANGER, "d-height"),
+    ("move(s) with F <= 0", _SEVERITY_DANGER, "d-speed"),
     ("exceeds max_z_velocity", _SEVERITY_WARN, "amp-curve"),
     ("exceeds max_z_accel", _SEVERITY_WARN, "amp-curve"),
     ("unsupported extrusion moves", _SEVERITY_WARN, "d-base"),
@@ -1867,32 +1941,42 @@ def _issues_detail(analysis_issues, issues_extra):
 
 def generate_design(body):
     shape_name = str(body.get("shape", "circle"))
-    radius = float(body.get("radius", 32.0))
-    height = float(body.get("height", 60.0))
-    layer_height = float(body.get("layer_height", 0.30))
+    # radius/height: no upper clamp here -- the machine's own footprint/z_max
+    # checks below are the real ceiling (CLAUDE.md: no machine limit as a
+    # module constant); only positivity is enforced at this boundary.
+    radius = _num(body, "radius", 32.0, None, None, reject_nonpositive=True)
+    height = _num(body, "height", 60.0, None, None, reject_nonpositive=True)
+    layer_height = _num(body, "layer_height", 0.30,
+                        LAYER_HEIGHT_MIN, LAYER_HEIGHT_MAX, reject_nonpositive=True)
     line_width = body.get("line_width", None)
-    z_waves = int(body.get("z_waves", 5))
-    xy_twist = float(body.get("xy_twist", 0.0))
-    z_twist = float(body.get("z_twist", 0.0))
-    base_layers = int(body.get("base_layers", 2))
+    if line_width is not None:
+        line_width = _num(body, "line_width", 0.0,
+                          LINE_WIDTH_MIN, LINE_WIDTH_MAX, reject_nonpositive=True)
+    z_waves = _num(body, "z_waves", 5, Z_WAVES_MIN, Z_WAVES_MAX, kind=int)
+    xy_twist = _num(body, "xy_twist", 0.0, XY_TWIST_MIN, XY_TWIST_MAX)
+    z_twist = _num(body, "z_twist", 0.0, Z_TWIST_MIN, Z_TWIST_MAX)
+    base_layers = _num(body, "base_layers", 2, BASE_LAYERS_MIN, BASE_LAYERS_MAX, kind=int)
     if str(body.get("bottom", "solid")) == "open":
         base_layers = 0
-    brim = int(body.get("brim", 0))
+    brim = _num(body, "brim", 0, BRIM_MIN, BRIM_MAX, kind=int)
     # Base fill style + shielding skirt.
     base_style = str(body.get("base_style", "spiral"))
     if base_style not in ("spiral", "concentric"):
         base_style = "spiral"
-    skirt_loops = max(0, min(int(body.get("skirt", 0)), 3))
+    skirt_loops = _num(body, "skirt", 0, SKIRT_MIN, SKIRT_MAX, kind=int)
     # First-layer height (mm) takes precedence over the raw squish factor:
     # lower first layer = bead pressed harder into the plate = firmer grip.
-    _flh = float(body.get("first_layer_height", 0) or 0)
+    # A negative value is treated as absent (0), same as before -- the squish
+    # branch below only ever activates for _flh > 0.
+    _flh = max(0.0, _num(body, "first_layer_height", 0.0, None, None))
     if _flh > 0:
         squish = min(max(_flh / max(layer_height, 1e-6), 0.5), 1.0)
     else:
         squish = min(max(float(body.get("squish", 0.75)), 0.5), 1.0)
     spacing_factor = max(0.8, min(float(body.get("first_layer_spacing_factor", 1.25)), 1.5))
     filament = body.get("filament", None)
-    print_speed = float(body.get("print_speed", 40.0))
+    print_speed = _num(body, "print_speed", 40.0,
+                       PRINT_SPEED_MIN, PRINT_SPEED_MAX, reject_nonpositive=True)
     star_points, star_depth = _parse_star(body)
 
     # Symmetry-breaking: leaning spine + elliptical cross-section.
@@ -1908,8 +1992,10 @@ def generate_design(body):
     # Radial surface texture (probe-safe: displaces radius, never Z).
     pattern = body.get("pattern") or None
     pattern_amp = max(0.0, min(float(body.get("pattern_amp", 1.0)), 4.0))
-    pattern_waves = int(body.get("pattern_waves", 12))
-    pattern_bands = float(body.get("pattern_bands", 6.0))
+    pattern_waves = _num(body, "pattern_waves", 12,
+                         PATTERN_WAVES_MIN, PATTERN_WAVES_MAX, kind=int)
+    pattern_bands = _num(body, "pattern_bands", 6.0,
+                         PATTERN_BANDS_MIN, PATTERN_BANDS_MAX)
     pattern_twist = float(body.get("pattern_twist", 0.0))
     pattern_phase = float(body.get("pattern_phase", 0.0))
     pattern_fade_in = max(0.0, min(float(body.get("pattern_fade_in", 0.10)), 0.5))
@@ -1969,10 +2055,14 @@ def generate_design(body):
     )
     if filament:
         from trident_gcode.orca import FilamentSettings
-        try:
-            fs = FilamentSettings.from_orca(str(filament))
-        except KeyError as e:
-            raise KeyError(str(e))
+        # No try/except here: FilamentSettings.from_orca already raises a
+        # plain-message KeyError ("Filament 'x' not found.") -- catching it
+        # just to re-raise KeyError(str(e)) double-repr's the message (str()
+        # of a KeyError already quotes+escapes args[0]), and the handler that
+        # eventually catches this only strips ONE layer of that. Let the
+        # original KeyError propagate unchanged so the handler's e.args[0]
+        # is the plain sentence, not a quoted-twice mess.
+        fs = FilamentSettings.from_orca(str(filament))
         writer_kwargs.update(fs.writer_kwargs())
 
     # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
@@ -2833,6 +2923,21 @@ def _check_surface_budget(radius, line_width, resolution, shells):
             % (int(total), radius, line_width, shells, _SURFACE_MAX_POINTS))
 
 
+def _fmt_small_mm(v: float) -> str:
+    """Format a small millimetre (or mm/mm slope) figure so a genuinely
+    nonzero value never prints as the misleading "0.00" -- %.2f rounds
+    anything under 0.005 to that, which reads as self-contradictory right
+    next to a hard rejection ("would ride 0.00 mm above its clearance
+    limit"). %.3f still rounds a sub-0.0005 violation to "0.000", so
+    anything under 0.001 gets an honest phrase instead of a number that
+    still looks like zero. Used only for _check_probe_slope's error message;
+    the check's own threshold (material_z > limit, strict >) is unchanged.
+    """
+    if 0.0 < v < 0.001:
+        return "less than 0.001"
+    return "%.3f" % v
+
+
 def _check_probe_slope(profile, field, base_pts, z_offset, shells, layer_height):
     """Refuse a conformal shell whose local slope the trailing probe cannot clear.
 
@@ -2933,11 +3038,12 @@ def _check_probe_slope(profile, field, base_pts, z_offset, shells, layer_height)
                 "Surface too steep for this printer's probe: at radius "
                 "%.1f mm from the surface centre, the trailing probe (offset "
                 "%.1f/%.1f mm, %.1f mm keep-out radius, %.2f mm body "
-                "clearance) would ride %.2f mm above its clearance limit -- "
-                "local slope ~%.2f mm/mm across the probe's reach. Reduce "
+                "clearance) would ride %s mm above its clearance limit -- "
+                "local slope %s mm/mm across the probe's reach. Reduce "
                 "amplitude, shrink the affected radius, or choose a "
                 "shallower surface."
-                % (radius_here, p_dx, p_dy, p_rad, p_clear, overshoot, slope))
+                % (radius_here, p_dx, p_dy, p_rad, p_clear,
+                   _fmt_small_mm(overshoot), _fmt_small_mm(slope)))
 
 
 def generate_surface_design(body):
@@ -2957,19 +3063,27 @@ def generate_surface_design(body):
             "unknown surface '%s', expected one of %s"
             % (surface_name, sorted(valid_surfaces)))
 
-    layer_height = float(body.get("layer_height", 0.30))
-    if layer_height <= 0:
-        raise ValueError("layer_height must be positive")
+    # layer_height/print_speed/line_width: surface mode is not reachable from
+    # the current viewer UI (no "surface" mode selector in index.html -- it
+    # is an API/CLI-only mode), but these are the SAME request fields
+    # generate_design's #d-lh/#d-speed/#d-lwoverride bind, so the same ranges
+    # apply here too rather than leaving this mode's own copy of them as the
+    # one path a raw client can still push arbitrarily far.
+    layer_height = _num(body, "layer_height", 0.30,
+                        LAYER_HEIGHT_MIN, LAYER_HEIGHT_MAX, reject_nonpositive=True)
     line_width = body.get("line_width", None)
-    print_speed = float(body.get("print_speed", 40.0))
+    if line_width is not None:
+        line_width = _num(body, "line_width", 0.0,
+                          LINE_WIDTH_MIN, LINE_WIDTH_MAX, reject_nonpositive=True)
+    print_speed = _num(body, "print_speed", 40.0,
+                       PRINT_SPEED_MIN, PRINT_SPEED_MAX, reject_nonpositive=True)
     filament = body.get("filament", None)
 
     surface_amp = float(body.get("surface_amp", 5.0))
     surface_wavelength = float(body.get("surface_wavelength", 20.0))
     surface_shells = max(1, min(int(body.get("surface_shells", 1)), 20))
-    radius = float(body.get("radius", 32.0))
-    if radius <= 0:
-        raise ValueError("radius must be positive")
+    # radius: no upper clamp -- same reasoning as generate_design's radius.
+    radius = _num(body, "radius", 32.0, None, None, reject_nonpositive=True)
     surface_scale = max(0.01, min(float(body.get("surface_scale", 1.0)), 100.0))
 
     profile = _get_profile(body)
@@ -2986,8 +3100,6 @@ def generate_surface_design(body):
 
     nozzle = profile.nozzle_diameter
     lw = round(nozzle * 1.125, 3) if line_width is None else float(line_width)
-    if lw <= 0:
-        raise ValueError("line width must be positive")
 
     writer_kwargs = dict(
         profile=profile,
@@ -2998,10 +3110,10 @@ def generate_surface_design(body):
     )
     if filament:
         from trident_gcode.orca import FilamentSettings
-        try:
-            fs = FilamentSettings.from_orca(str(filament))
-        except KeyError as e:
-            raise KeyError(str(e))
+        # See generate_design()'s copy of this block for why there is no
+        # try/except KeyError re-raise here: propagate the original
+        # plain-message KeyError unchanged.
+        fs = FilamentSettings.from_orca(str(filament))
         writer_kwargs.update(fs.writer_kwargs())
 
     # Applied AFTER the filament merge, same reasoning as generate_design: the
@@ -3067,6 +3179,13 @@ def generate_surface_design(body):
     # this app that shipped with nothing holding the first layer down. Every
     # clamp below is the SAME expression the parametric path uses, so the two
     # cannot drift into disagreeing about what a given request means.
+    # base_layers/brim ranges here are WIDER than #d-base/#d-brim's 0-3/0-5
+    # (generate_design's shared control ids), deliberately: surface mode is
+    # not reachable from the current viewer UI at all (no "surface" option in
+    # index.html's mode selector -- API/CLI-only), so there is no UI clamp to
+    # mirror or tighten to for these two fields specifically. Left at their
+    # own existing sane ceiling rather than invented-to-match a control this
+    # mode's requests never actually go through.
     surf_base_layers = int(body.get("base_layers", 0))
     if str(body.get("bottom", "solid")) == "open":
         surf_base_layers = 0
@@ -3075,7 +3194,7 @@ def generate_surface_design(body):
     surf_base_style = str(body.get("base_style", "spiral"))
     if surf_base_style not in ("spiral", "concentric"):
         surf_base_style = "spiral"
-    _flh_s = float(body.get("first_layer_height", 0) or 0)
+    _flh_s = max(0.0, _num(body, "first_layer_height", 0.0, None, None))
     if _flh_s > 0:
         surf_squish = min(max(_flh_s / max(layer_height, 1e-6), 0.5), 1.0)
     else:
@@ -3215,47 +3334,65 @@ def generate_mesh_texture_design(body):
     if entry is None:
         raise KeyError("mesh_id not found (upload may have expired) - re-upload the STL")
 
-    scale = float(body.get("scale", 1.0))
+    # scale: no dedicated UI control of its own for mesh_texture's stack
+    # (mesh_base_scale, the HYBRID base's scale, is a different field -- see
+    # _parse_mesh_hybrid_params) but #mesh-scale mirrors it 1:1 in the panel,
+    # so the same [0.1, 10] range applies.
+    scale = _num(body, "scale", 1.0, MESH_SCALE_MIN, MESH_SCALE_MAX,
+                reject_nonpositive=True)
     # Read only to compare against the actual printed height below and warn
     # if they disagree -- this mode's print height is ALWAYS the mesh's own
     # height (stack_from_mesh slices exactly maxz-minz), never this field.
     # The Design tab's Height control still shows and accepts a value because
     # it is shared with every other mode; leaving it live-but-inert here with
     # no signal is what let a user's 5mm mounting bracket silently produce a
-    # 5mm print while the panel still read "Height: 60mm".
+    # 5mm print while the panel still read "Height: 60mm". Absent/0/non-numeric
+    # keeps its existing "mesh's own height" semantics -- handled below, not
+    # through _num, since 0 and "missing" are both meaningful here (unlike
+    # every other height field in this file).
     requested_height = body.get("height")
-    layer_height = float(body.get("layer_height", 0.30))
-    points_per_turn = int(body.get("points_per_turn", 240))
+    layer_height = _num(body, "layer_height", 0.30,
+                        MESH_LAYER_HEIGHT_MIN, MESH_LAYER_HEIGHT_MAX,
+                        reject_nonpositive=True)
+    points_per_turn = _num(body, "points_per_turn", 240,
+                           POINTS_PER_TURN_MIN, POINTS_PER_TURN_MAX, kind=int)
     line_width = body.get("line_width", None)
-    base_layers = int(body.get("base_layers", 2))
+    if line_width is not None:
+        line_width = _num(body, "line_width", 0.0,
+                          LINE_WIDTH_MIN, LINE_WIDTH_MAX, reject_nonpositive=True)
+    base_layers = _num(body, "base_layers", 2, BASE_LAYERS_MIN, BASE_LAYERS_MAX, kind=int)
     if str(body.get("bottom", "solid")) == "open":
         base_layers = 0
-    brim = int(body.get("brim", 0))
+    brim = _num(body, "brim", 0, BRIM_MIN, BRIM_MAX, kind=int)
     # First-layer height (mm) takes precedence over the raw squish factor:
     # lower first layer = bead pressed harder into the plate = firmer grip.
-    _flh = float(body.get("first_layer_height", 0) or 0)
+    # A negative value is treated as absent (0), same as generate_design.
+    _flh = max(0.0, _num(body, "first_layer_height", 0.0, None, None))
     if _flh > 0:
         squish = min(max(_flh / max(layer_height, 1e-6), 0.5), 1.0)
     else:
         squish = min(max(float(body.get("squish", 0.75)), 0.5), 1.0)
     spacing_factor = max(0.8, min(float(body.get("first_layer_spacing_factor", 1.25)), 1.5))
     filament = body.get("filament", None)
-    print_speed = float(body.get("print_speed", 40.0))
+    print_speed = _num(body, "print_speed", 40.0,
+                       PRINT_SPEED_MIN, PRINT_SPEED_MAX, reject_nonpositive=True)
 
     # Radial surface texture (probe-safe: displaces radius, never Z).
     pattern = body.get("pattern") or None
     pattern_amp = max(0.0, min(float(body.get("pattern_amp", 1.0)), 4.0))
-    pattern_waves = int(body.get("pattern_waves", 12))
-    pattern_bands = float(body.get("pattern_bands", 6.0))
+    pattern_waves = _num(body, "pattern_waves", 12,
+                         PATTERN_WAVES_MIN, PATTERN_WAVES_MAX, kind=int)
+    pattern_bands = _num(body, "pattern_bands", 6.0,
+                         PATTERN_BANDS_MIN, PATTERN_BANDS_MAX)
     pattern_twist = float(body.get("pattern_twist", 0.0))
     pattern_phase = float(body.get("pattern_phase", 0.0))
     pattern_fade_in = max(0.0, min(float(body.get("pattern_fade_in", 0.10)), 0.5))
     pattern_fade_out = max(0.0, min(float(body.get("pattern_fade_out", 0.0)), 0.5))
     pattern_alternate = bool(body.get("pattern_alternate", False))
 
-    z_waves = int(body.get("z_waves", 5))
-    z_twist = float(body.get("z_twist", 0.0))
-    xy_twist = float(body.get("xy_twist", 0.0))
+    z_waves = _num(body, "z_waves", 5, Z_WAVES_MIN, Z_WAVES_MAX, kind=int)
+    z_twist = _num(body, "z_twist", 0.0, Z_TWIST_MIN, Z_TWIST_MAX)
+    xy_twist = _num(body, "xy_twist", 0.0, XY_TWIST_MIN, XY_TWIST_MAX)
 
     # Symmetry-breaking: leaning spine + elliptical cross-section. Same
     # clamps as generate_design()'s copy of this block -- ovality and the
@@ -3359,10 +3496,10 @@ def generate_mesh_texture_design(body):
     )
     if filament:
         from trident_gcode.orca import FilamentSettings
-        try:
-            fs = FilamentSettings.from_orca(str(filament))
-        except KeyError as e:
-            raise KeyError(str(e))
+        # See generate_design()'s copy of this block for why there is no
+        # try/except KeyError re-raise here: propagate the original
+        # plain-message KeyError unchanged.
+        fs = FilamentSettings.from_orca(str(filament))
         writer_kwargs.update(fs.writer_kwargs())
 
     # Applied AFTER the filament merge: fs.writer_kwargs() carries its own
@@ -3632,14 +3769,26 @@ def _export_contours_mesh_texture(body):
     if entry is None:
         raise KeyError("mesh_id not found (upload may have expired) - re-upload the STL")
 
-    scale = float(body.get("scale", 1.0))
-    layer_height = float(body.get("layer_height", 0.30))
-    points_per_turn = int(body.get("points_per_turn", 240))
+    scale = _num(body, "scale", 1.0, MESH_SCALE_MIN, MESH_SCALE_MAX,
+                reject_nonpositive=True)
+    layer_height = _num(body, "layer_height", 0.30,
+                        MESH_LAYER_HEIGHT_MIN, MESH_LAYER_HEIGHT_MAX,
+                        reject_nonpositive=True)
+    # Floor only here -- the upper bound stays _check_export_budget's own
+    # explicit "points_per_turn %d exceeds the export limit" rejection below,
+    # which is more informative than a silent clamp and already tested. A
+    # floor is still needed: points_per_turn=0 (or negative) divides by zero
+    # in the texture loop's `2*pi*j/n` below, well before that budget check
+    # would otherwise catch anything.
+    points_per_turn = _num(body, "points_per_turn", 240,
+                           POINTS_PER_TURN_MIN, None, kind=int)
 
     pattern = body.get("pattern") or None
     pattern_amp = max(0.0, min(float(body.get("pattern_amp", 1.0)), 4.0))
-    pattern_waves = int(body.get("pattern_waves", 12))
-    pattern_bands = float(body.get("pattern_bands", 6.0))
+    pattern_waves = _num(body, "pattern_waves", 12,
+                         PATTERN_WAVES_MIN, PATTERN_WAVES_MAX, kind=int)
+    pattern_bands = _num(body, "pattern_bands", 6.0,
+                         PATTERN_BANDS_MIN, PATTERN_BANDS_MAX)
     pattern_twist = float(body.get("pattern_twist", 0.0))
     pattern_phase = float(body.get("pattern_phase", 0.0))
     pattern_fade_in = max(0.0, min(float(body.get("pattern_fade_in", 0.10)), 0.5))
@@ -3657,8 +3806,6 @@ def _export_contours_mesh_texture(body):
 
     # Same ceiling as the parametric path, but the height comes from the mesh's
     # own bounds -- a large `scale` on a tall STL is how this one runs away.
-    if layer_height <= 0:
-        raise ValueError("layer_height must be positive")
     (_mlo, _mhi) = mesh_bounds(tris)
     _check_export_budget(max(1, int(round((_mhi[2] - _mlo[2]) / layer_height))),
                          points_per_turn)
@@ -3704,10 +3851,20 @@ def _export_contours_parametric(body):
     modulate the bead path itself and have no surface to hand a solid slicer.
     """
     shape_name = str(body.get("shape", "circle"))
-    radius = float(body.get("radius", 32.0))
-    height = float(body.get("height", 60.0))
-    layer_height = float(body.get("layer_height", 0.30))
-    points_per_turn = int(body.get("points_per_turn", 240))
+    # radius/height/layer_height validated (and points_per_turn floored) up
+    # front, before _parse_zone_overrides or anything else below runs on
+    # them -- same "fail fast, before any real work" discipline as the
+    # budget check further down, and _parse_zone_overrides divides by
+    # layer_height internally so it must never see a non-positive one.
+    radius = _num(body, "radius", 32.0, None, None, reject_nonpositive=True)
+    height = _num(body, "height", 60.0, None, None, reject_nonpositive=True)
+    layer_height = _num(body, "layer_height", 0.30,
+                        LAYER_HEIGHT_MIN, LAYER_HEIGHT_MAX, reject_nonpositive=True)
+    # Floor only -- see _export_contours_mesh_texture's copy of this same
+    # comment for why the upper bound stays _check_export_budget's own
+    # rejection rather than a silent clamp.
+    points_per_turn = _num(body, "points_per_turn", 240,
+                           POINTS_PER_TURN_MIN, None, kind=int)
     star_points, star_depth = _parse_star(body)
 
     radius_profile = body.get("radius_profile") or [[0, 1.0], [1, 1.0]]
@@ -3719,8 +3876,10 @@ def _export_contours_parametric(body):
 
     pattern = body.get("pattern") or None
     pattern_amp = max(0.0, min(float(body.get("pattern_amp", 1.0)), 4.0))
-    pattern_waves = int(body.get("pattern_waves", 12))
-    pattern_bands = float(body.get("pattern_bands", 6.0))
+    pattern_waves = _num(body, "pattern_waves", 12,
+                         PATTERN_WAVES_MIN, PATTERN_WAVES_MAX, kind=int)
+    pattern_bands = _num(body, "pattern_bands", 6.0,
+                         PATTERN_BANDS_MIN, PATTERN_BANDS_MAX)
     pattern_twist = float(body.get("pattern_twist", 0.0))
     pattern_phase = float(body.get("pattern_phase", 0.0))
     pattern_fade_in = max(0.0, min(float(body.get("pattern_fade_in", 0.10)), 0.5))
@@ -3731,7 +3890,7 @@ def _export_contours_parametric(body):
     elif pattern is not None and pattern not in _R_PATTERNS:
         raise ValueError(f"unknown pattern '{pattern}', expected one of {R_PATTERN_NAMES}")
 
-    xy_twist = float(body.get("xy_twist", 0.0))
+    xy_twist = _num(body, "xy_twist", 0.0, XY_TWIST_MIN, XY_TWIST_MAX)
     # Same clamps generate_design() applies, so the exported solid can never
     # differ from the printed wall just because one path validated harder.
     spine_mm = max(0.0, min(float(body.get("spine_mm", 0.0)), 20.0))
@@ -3748,9 +3907,8 @@ def _export_contours_parametric(body):
     zone_specs, _zone_notes = _parse_zone_overrides(body.get("zone_overrides"), layer_height, height)
 
     # Budget-check BEFORE building anything -- stack_from_shape would otherwise
-    # allocate the whole oversized stack before we could reject it.
-    if layer_height <= 0:
-        raise ValueError("layer_height must be positive")
+    # allocate the whole oversized stack before we could reject it. (radius/
+    # height/layer_height already validated positive above.)
     _check_export_budget(max(1, int(round(height / layer_height))), points_per_turn)
 
     # Layer count comes from the shared stack builder so an export always has the
@@ -3905,8 +4063,14 @@ def generate_export_stl(body):
     if len(contours) < 2:
         raise ValueError("design is too short (need at least 2 layers) to export a solid mesh")
 
-    contours = _point_edits_on_contours(
-        body, contours, heights, int(body.get("points_per_turn", 240)))
+    # The ring's OWN length, not a second independent re-read of
+    # body["points_per_turn"] -- both _export_contours_* helpers already
+    # resample every ring to whatever points_per_turn they actually used
+    # (clamped/floored there), so re-parsing the raw body value here could
+    # disagree with it (a stale/differently-clamped number) and misalign
+    # apply_point_edits' index -> (theta, t) recovery, which assumes this
+    # value truly is the ring length.
+    contours = _point_edits_on_contours(body, contours, heights, len(contours[0]))
 
     tris = contours_to_mesh(contours, heights, cap_bottom=True, cap_top=True)
     data = write_binary_stl(tris, name=b"trident_export")
@@ -3927,6 +4091,22 @@ PRINTER_UPLOAD_MAX_BYTES = 2 * 1024 * 1024  # 2 MB; mirrors printer_import's own
 def _profile_to_json(profile):
     from dataclasses import asdict
     return asdict(profile)
+
+
+def _keyerror_message(e: KeyError) -> str:
+    """The plain-text message of a KeyError raised with a single string arg.
+
+    str(a_keyerror) is NOT the message -- KeyError's __str__ is repr(args[0]),
+    so KeyError("Filament 'x' not found.") stringifies to the quoted, escaped
+    "\"Filament 'x' not found.\"". Every KeyError this server raises for a
+    user-facing reason (unknown filament, unknown mesh_id) is constructed with
+    exactly one string argument, so args[0] IS the real message and needs no
+    unquoting at all. Falls back to str(e) only for the (should-never-happen)
+    case of a KeyError with no string args.
+    """
+    if e.args and isinstance(e.args[0], str):
+        return e.args[0]
+    return str(e)
 
 
 def _issues_json(issues):
@@ -4158,13 +4338,24 @@ def _read_json_body(handler):
         body = json.loads(raw.decode("utf-8"), parse_constant=_reject_nonfinite) if raw else {}
         # Second pass: quoted "nan"/"inf" strings and overflowed literals like
         # 1e400 are already plain values by the time parse_constant has run.
-        return _reject_nonfinite_tree(body)
+        body = _reject_nonfinite_tree(body)
     except (ValueError, UnicodeDecodeError) as exc:
         # Name the offending field when we know it -- "body.amp_profile[1][1]
         # is not a finite number" is actionable, "not valid JSON" is not.
         detail = str(exc) if "finite" in str(exc) else "Request body is not valid JSON."
         handler._send_json({"error": detail}, status=400)
         return None
+    if not isinstance(body, dict):
+        # Valid JSON, but not an object -- a bare array/string/number/bool/
+        # null. Every caller does body.get(...) immediately, which raises
+        # AttributeError on anything but a dict; uncaught, that drops the
+        # connection instead of sending a 400 (do_POST /api/generate,
+        # _handle_printer_session, _handle_printer_delete and
+        # _handle_generate_stream's worker thread all hit this the same way).
+        handler._send_json(
+            {"error": "Request body must be a JSON object."}, status=400)
+        return None
+    return body
 
 
 def _progress_fraction(progress, floor):
@@ -4327,6 +4518,20 @@ class Handler(SimpleHTTPRequestHandler):
             layer_height = float((query.get("layer_height") or ["0.30"])[0])
         except (TypeError, ValueError):
             layer_height = 0.30
+        # This value comes from the query string, so it bypasses
+        # _read_json_body's _reject_nonfinite_tree boundary entirely -- a bare
+        # ?layer_height=nan or ?layer_height=inf parses as a legal Python
+        # float. Reject non-finite/non-positive rather than clamp (CLAUDE.md:
+        # every comparison against NaN is False, so it would sail through
+        # max()/min() clamping), then clamp into the same [0.1, 0.6] range as
+        # #mesh-lh so a tiny value (e.g. 1e-9) cannot hang this endpoint the
+        # same way it can /api/generate.
+        if not math.isfinite(layer_height) or layer_height <= 0:
+            self._send_json(
+                {"error": "layer_height must be a positive finite number"},
+                status=400)
+            return
+        layer_height = max(MESH_LAYER_HEIGHT_MIN, min(layer_height, MESH_LAYER_HEIGHT_MAX))
 
         entry = _mesh_cache_get(_session_id(self), mesh_id)
         if entry is None:
@@ -4687,8 +4892,16 @@ class Handler(SimpleHTTPRequestHandler):
             meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
             # The stored key is preserved so a saved design that references
             # it still resolves; if it is unusable, mint a fresh one rather
-            # than dropping the printer.
-            if not (key and key not in PRINTER_PROFILES):
+            # than dropping the printer. "Unusable" must include the wrong
+            # SHAPE (e.g. hand-edited localStorage carrying "My Printer"),
+            # not just "blank" or "collides with a built-in" -- a key that
+            # fails printer_store's own custom_[a-z0-9_]{1,48} pattern would
+            # otherwise reach session_save() below, which raises ValueError
+            # for exactly that reason, and the printer was REJECTED instead
+            # of being re-keyed the way this comment already says it should
+            # be.
+            if not (key and key not in PRINTER_PROFILES
+                    and printer_store.is_valid_key(key)):
                 key = printer_store.session_make_key(sid, vr.profile.name)
             try:
                 printer_store.session_save(sid, key, vr.profile, meta)
@@ -4766,9 +4979,10 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 result = generate_design(body)
         except KeyError as e:
-            # Unknown filament profile / mesh_id.
-            msg = str(e).strip('"').strip("'")
-            self._send_json({"error": msg}, status=400)
+            # Unknown filament profile / mesh_id. _keyerror_message, not
+            # str(e) -- str() of a KeyError is repr(args[0]), which quotes
+            # and escapes an already-plain message.
+            self._send_json({"error": _keyerror_message(e)}, status=400)
             return
         except ValueError as e:
             # Footprint / height too big, unknown shape, bad numbers.
@@ -4824,9 +5038,9 @@ class Handler(SimpleHTTPRequestHandler):
                 else:
                     outcome["result"] = generate_design(body)
             except KeyError as e:
-                # Unknown filament profile / mesh_id -- same mapping as
-                # /api/generate.
-                outcome["error"] = str(e).strip('"').strip("'")
+                # Unknown filament profile / mesh_id -- same mapping (and the
+                # same _keyerror_message, not str(e)) as /api/generate.
+                outcome["error"] = _keyerror_message(e)
                 outcome["status"] = 400
             except ValueError as e:
                 outcome["error"] = str(e)
@@ -4904,8 +5118,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             data, filename = generate_export_stl(body)
         except KeyError as e:
-            msg = str(e).strip('"').strip("'")
-            self._send_json({"error": msg}, status=400)
+            self._send_json({"error": _keyerror_message(e)}, status=400)
             return
         except (ValueError, TypeError) as e:
             # TypeError covers a malformed body (e.g. "radius": null reaching

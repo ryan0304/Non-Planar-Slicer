@@ -311,6 +311,17 @@ class GcodeWriter:
         # every emitted move passes through, so no caller can route around it.
         if not math.isfinite(f):
             raise ValueError(f"Move feedrate F={f!r} is not a finite number")
+        if f <= 0:
+            # Defense in depth, same choke point as the non-finite guard
+            # above: a non-positive feedrate is not a slow move, it is one
+            # Klipper cannot execute at all (F0) or a move direction the
+            # firmware was never asked to make (negative F) -- and unlike
+            # NaN, 0 and negative numbers pass every min()/max() clamp
+            # upstream silently, so this must be a hard reject, not a clamp.
+            # A caller-level bug (e.g. print_speed <= 0 reaching here despite
+            # serve.py's own boundary check) must fail here rather than emit
+            # thousands of unexecutable moves.
+            raise ValueError(f"Move feedrate F={f!r} must be greater than 0")
         if e is not None and not math.isfinite(e):
             raise ValueError(f"Move extrusion E={e!r} is not a finite number")
         parts.append(f"F{f:.0f}")

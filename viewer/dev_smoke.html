@@ -492,6 +492,78 @@
     check('...without disturbing printer X or Z',
           near(tip[0], 117.5, 0.6) && near(tip[2], 0.3, 0.05), 'got ' + tip.join(', '));
 
+    // ---- G90/G91 (B9): parseGcode must honor absolute/relative XYZ ----------
+    // trident_gcode/analyze.py already tracks G90/G91 (abs_xyz); the viewer's
+    // own parseGcode used to ignore both entirely and always read X/Y/Z as
+    // absolute. Every Bambu and Creality-Marlin file THIS APP generates ends
+    // with a G91-bracketed relative Z lift + park travel (see profile.py's
+    // _bambu_end/_creality_marlin_end): "G1 E-1 / G1 E-2 / G91 / G1 Z10 F1800
+    // / G90 / G1 X5 Y200 F6000". Read as absolute, "G1 Z10" draws the end
+    // lift straight down through the part instead of +10mm above it.
+    check('window.__parseGcode is exposed for automation',
+          typeof w.__parseGcode === 'function', 'missing hook');
+    if (typeof w.__parseGcode === 'function') {
+      var lastExtrudeZ = 45.5250;
+      // No travel move precedes the extrude on purpose: the FIRST G1 in a
+      // file never becomes a segment at all (parseGcode's `has` flag), so
+      // making the extrude move the second line keeps every segment this
+      // test can see AT OR AFTER lastExtrudeZ -- otherwise an earlier, low
+      // travel (e.g. the initial Z0.3 approach) would pollute minTravelZ
+      // below with an unrelated low point that has nothing to do with the
+      // G90/G91 bug this test targets.
+      var bambuEndGcode = ['M83',
+        'G1 Z0.3 F600',
+        'G1 X100 Y110 Z' + lastExtrudeZ + ' E0.047 F2400',
+        'G1 E-1 F1800',
+        'G1 E-2 F1800',
+        'G91',
+        'G1 Z10 F1800',
+        'G90',
+        'G1 X5 Y200 F6000',
+        ''].join('\n');
+      var bambuParsed = w.__parseGcode(bambuEndGcode);
+      check('the end sequence produced travel segments to check',
+            bambuParsed.trv.length > 0, 'trv length ' + bambuParsed.trv.length);
+      // trv is a flat [ax,ay,az, bx,by,bz, ...] Float32Array; world Y
+      // (index 1/4 of each sextuple) is printer Z unscaled (see
+      // parseGcode's own remap comment: `ay = z, by = nz`), so this is a
+      // direct printer-Z compare, not a world-space one. Tolerance is
+      // 1e-3, not tighter, because Float32Array rounds a value like
+      // 55.525 to ~55.525001525878906.
+      var minTravelZ = Infinity;
+      for (var ti = 0; ti < bambuParsed.trv.length; ti += 6) {
+        minTravelZ = Math.min(minTravelZ, bambuParsed.trv[ti + 1], bambuParsed.trv[ti + 4]);
+      }
+      check('the G91 end lift + G90 park travel never dips below the last extrusion height',
+            minTravelZ >= lastExtrudeZ - 1e-3,
+            'min travel Z ' + minTravelZ + ', want >= ' + lastExtrudeZ);
+      // The lift is a RELATIVE +10mm -- if G91 is honored, the park move (no
+      // Z word, sticky) sits at lastExtrudeZ + 10, not at a literal Z=10.
+      // It is the LAST segment pushed (see the gcode above), so its "by"
+      // (world Y = printer Z of the segment's end point) is the last of
+      // every 6 values.
+      var finalTravelZ = bambuParsed.trv[bambuParsed.trv.length - 2];
+      check('the relative Z lift actually reaches lastExtrudeZ + 10, not a literal Z=10',
+            near(finalTravelZ, lastExtrudeZ + 10, 1e-3),
+            'got final travel Y(=Z) ' + finalTravelZ);
+      // Height (Z) / bounds stats (s-height = d.maxz - d.minz) are built ONLY
+      // from extrude-only minz/maxz, never travel -- confirm the G91/G90 fix
+      // did not leak the travel lift's height into them for the app's own
+      // output shape.
+      check('extrude-only maxz is unaffected by the (correctly, now-relative) end lift',
+            near(bambuParsed.maxz, lastExtrudeZ, 1e-3),
+            'got maxz ' + bambuParsed.maxz + ', want ' + lastExtrudeZ);
+
+      // Absolute-E (M82) files from other slicers reset E with "G92 E0";
+      // every extrude after a reset must still count as extruding. Mirrors
+      // analyze.py's G92 branch. Three extrudes: 0->1, reset, 0->1, 1->2.
+      var m82Parsed = w.__parseGcode(['M82', 'G1 X100 Y100 Z0.3 F1200',
+        'G1 X110 Y100 E1', 'G92 E0', 'G1 X120 Y100 E1', 'G1 X130 Y100 E2', ''].join('\n'));
+      check('an M82 file keeps extruding after a G92 E0 reset',
+            m82Parsed.extrudeCount === 3,
+            'got extrudeCount ' + m82Parsed.extrudeCount + ', want 3');
+    }
+
     // Ties world Z to the MACHINE, not merely to itself: a transform flipped
     // consistently in both directions would satisfy the round-trip above but
     // still preview the print mirrored. The front of the bed is printer Y=0,
@@ -887,8 +959,52 @@
     w.document.getElementById('filament-edit-btn').click();
     check('the Edit icon opens the filament settings modal',
           filaModal.style.display !== 'none', 'got display=' + filaModal.style.display);
-    check('the "Save as custom filament" row stays hidden (no backend exists for it)',
-          filaCustomRow.style.display === 'none', 'got display=' + filaCustomRow.style.display);
+    // B1: custom filaments now work end to end (client resolves the
+    // custom_* key to its base material + overrides before sending), so the
+    // "Save as" row is intentionally visible, not hidden as it used to be.
+    check('the "Save as custom filament" row is visible (B1: custom filaments work now)',
+          filaCustomRow.style.display !== 'none', 'got display=' + filaCustomRow.style.display);
+
+    // B1/B3: saving a custom filament and selecting it must never leak the
+    // custom_* key into the generate request -- buildGenerateBody() must
+    // resolve it to the built-in material it was derived from (`base`) and
+    // carry the custom's own values (nozzle_temp etc.) as overrides.
+    var customNameEl = w.document.getElementById('fm-custom-name');
+    var customSaveBtn = w.document.getElementById('fm-save-custom-btn');
+    var customNozzleEl = w.document.getElementById('d-nozzletemp');
+    var CUSTOM_TEST_KEY = 'custom_devsmoke_test_filament';
+    var baseBeforeSave = famSelEl.value;
+    customNameEl.value = 'devsmoke test filament';
+    customNameEl.dispatchEvent(new w.Event('input'));
+    var expectedNozzle = customNozzleEl.value;
+    customSaveBtn.click();
+    check('saving a custom filament selects it in the dropdown',
+          famSelEl.value === CUSTOM_TEST_KEY, 'got ' + famSelEl.value);
+    var savedSnapshot = w.__designSnapshot();
+    check('...and the request never carries a custom_* filament key',
+          typeof savedSnapshot.filament === 'string' && savedSnapshot.filament.indexOf('custom_') !== 0,
+          'got filament=' + savedSnapshot.filament);
+    check('...and the request resolves to the material the custom was derived from',
+          savedSnapshot.filament === baseBeforeSave, 'got ' + savedSnapshot.filament + ', want ' + baseBeforeSave);
+    check('...and the request carries the custom\'s own nozzle_temp as an override',
+          String(savedSnapshot.nozzle_temp) === String(expectedNozzle),
+          'got nozzle_temp=' + savedSnapshot.nozzle_temp + ', field was ' + expectedNozzle);
+    // Clean up the localStorage entry this test created -- leaving it behind
+    // would pollute the filament option count for later assertions/runs.
+    try {
+      var __customsCleanup = JSON.parse(w.localStorage.getItem('trident_custom_filaments') || '[]');
+      __customsCleanup = __customsCleanup.filter(function(c){ return c.key !== CUSTOM_TEST_KEY; });
+      w.localStorage.setItem('trident_custom_filaments', JSON.stringify(__customsCleanup));
+    } catch(e) {}
+    // Restore the selection the custom-filament test displaced, and drop the
+    // now-deleted custom's stale <option> so it doesn't linger in the DOM
+    // (populateFilamentSelect() is private to designer.js's filament IIFE,
+    // so remove the element directly rather than re-invoking it).
+    var staleOpt = famSelEl.querySelector('option[value="' + CUSTOM_TEST_KEY + '"]');
+    if (staleOpt) staleOpt.parentNode.removeChild(staleOpt);
+    famSelEl.value = baseBeforeSave;
+    famSelEl.dispatchEvent(new w.Event('change'));
+
     w.document.getElementById('fm-modal-done').click();
     check('Done closes the filament settings modal',
           filaModal.style.display === 'none', 'got display=' + filaModal.style.display);
@@ -912,10 +1028,14 @@
           fmTip.style.display === 'none', 'got display=' + fmTip.style.display);
 
     // Temperature override: entering a value reveals the reset-to-default
-    // button (hidden by default); clicking it clears back to blank
-    // (= "auto", the filament's own default) and hides itself again.
+    // button (hidden by default); clicking it refills the field with the
+    // SELECTED FILAMENT'S DEFAULT (by design: "Fill each input with the
+    // current filament's defaults, not as placeholder" -- designer.js's
+    // applyFilamentDefaults/makeReset), not blank, and hides itself again.
     var nozzleTempEl = w.document.getElementById('d-nozzletemp');
     var nozzleResetBtn = w.document.getElementById('fm-reset-nozzle');
+    // Captured while there is no override (field shows the filament's own
+    // default), so it doubles as the expected value after reset below.
     var prevNozzleTemp = nozzleTempEl.value;
     check('the reset button is hidden while there is no override',
           nozzleResetBtn.style.display === 'none', 'got display=' + nozzleResetBtn.style.display);
@@ -927,8 +1047,11 @@
     check('...and marks the field as overridden',
           nozzleTempEl.classList.contains('fm-overridden'), 'classes ' + nozzleTempEl.className);
     nozzleResetBtn.click();
-    check('clicking reset clears the override back to blank',
-          nozzleTempEl.value === '', 'got ' + JSON.stringify(nozzleTempEl.value));
+    check('clicking reset refills the field with the filament default (not blank)',
+          nozzleTempEl.value === prevNozzleTemp,
+          'got ' + JSON.stringify(nozzleTempEl.value) + ', want default ' + JSON.stringify(prevNozzleTemp));
+    check('...and clears the overridden marker',
+          !nozzleTempEl.classList.contains('fm-overridden'), 'classes ' + nozzleTempEl.className);
     // __designSnapshot() IS buildGenerateBody() -- it only sets body.nozzle_temp
     // when design.nozzle_temp is non-null (see designer.js's "_parse_nozzle_temp()"
     // comment), so a cleared override means the KEY IS ABSENT from the request
@@ -941,12 +1064,11 @@
     check('...and the reset button hides itself again',
           nozzleResetBtn.style.display === 'none', 'got display=' + nozzleResetBtn.style.display);
 
-    // Leave the field and the selection as we found them.
-    if(prevNozzleTemp !== ''){
-      nozzleTempEl.value = prevNozzleTemp;
-      nozzleTempEl.dispatchEvent(new w.Event('input'));
-      nozzleTempEl.dispatchEvent(new w.Event('change'));
-    }
+    // No extra restore needed here: clicking reset above already put the
+    // field back to prevNozzleTemp with no override (design.nozzle_temp ===
+    // null) -- re-dispatching 'input' with that same value would just mark
+    // it overridden again (watchOverride treats any parseable number as an
+    // override, even one that happens to match the default).
     w.document.getElementById('fm-modal-done').click();
     famSelEl.value = prevFilamentValue;
     famSelEl.dispatchEvent(new w.Event('change'));

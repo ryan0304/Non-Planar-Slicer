@@ -421,6 +421,76 @@
     }
   }
 
+  // Same problem as SELECT_BACKED_FIELDS above, for the plain-number fields
+  // bindNumber() drives: a resumed session or a loaded .trident/.json file
+  // is merged into `design` with a plain `design[k] = src[k]`, which has no
+  // way to know a numeric field's real domain. Unlike a select, a bad
+  // number does not just blank a widget -- "layer_height": 0 makes
+  // preview_math.js's `turns = height / layerHeight` Infinity and hangs the
+  // draft preview; a string, a negative radius, or a 1e9 height goes
+  // straight into preview math and the generate request.
+  //
+  // bindNumber() (below) registers every (element id, design field, isInt)
+  // it binds here, and self-repairs the SAME field the moment it binds --
+  // that covers the resumed-session merge above even though bindNumber runs
+  // much later in this file: this is all one synchronous script, so by the
+  // time any preview math or a Generate click can run, every bound field
+  // has already passed through repairOneNumericField() once. The explicit
+  // repairNumericFields() calls next to each repairSelectBackedFields() call
+  // site below matter for the SECOND merge a session can see -- loading a
+  // .trident/.json file after the page (and bindNumber) has already loaded,
+  // where the registry below is fully populated and a fresh repair pass is
+  // needed before applyDesignToUI() pushes values back into the fields.
+  var NUMERIC_BOUND_FIELDS = [];
+
+  // Bad value -> DEFAULT_DESIGN[field] (never a hardcoded fallback -- see
+  // CLAUDE.md on machine limits never being a module constant). A
+  // genuinely numeric value is clamped into the ELEMENT'S OWN min/max --
+  // the same ceiling bindNumber's own applyValue() enforces, which
+  // applyPrinterCaps() keeps set to the SELECTED PRINTER's real limits --
+  // never widened here, and never substituted for a printer-dependent
+  // field's true ceiling (e.g. amplitude) beyond what the element already
+  // declares.
+  function repairOneNumericField(row, el){
+    var v = design[row.field];
+    if(typeof v !== 'number' || !isFinite(v)){
+      v = DEFAULT_DESIGN[row.field];
+    } else if(el){
+      var lo = parseFloat(el.min), hi = parseFloat(el.max);
+      if(isFinite(lo)) v = Math.max(lo, v);
+      if(isFinite(hi)) v = Math.min(hi, v);
+    }
+    if(row.isInt) v = Math.round(v);
+    design[row.field] = v;
+    return v;
+  }
+
+  // Curve profiles (amp/radius/width) are NOT bindNumber fields -- the
+  // curve editors own them -- but preview_math.js reads design.amp_profile
+  // etc. directly, so a malformed one crashes/freezes the draft preview
+  // exactly like a bad bindNumber field does. Must be an array of [t, v]
+  // finite-number pairs; anything else (wrong shape, non-finite, a string)
+  // reverts to the shipped default curve rather than reaching preview math.
+  function isValidCurveProfile(p){
+    if(!Array.isArray(p) || p.length === 0) return false;
+    for(var i = 0; i < p.length; i++){
+      var pt = p[i];
+      if(!Array.isArray(pt) || pt.length !== 2) return false;
+      if(typeof pt[0] !== 'number' || !isFinite(pt[0])) return false;
+      if(typeof pt[1] !== 'number' || !isFinite(pt[1])) return false;
+    }
+    return true;
+  }
+
+  function repairNumericFields(){
+    NUMERIC_BOUND_FIELDS.forEach(function(row){
+      repairOneNumericField(row, document.getElementById(row.id));
+    });
+    ['amp_profile', 'radius_profile', 'width_profile'].forEach(function(field){
+      if(!isValidCurveProfile(design[field])) design[field] = DEFAULT_DESIGN[field];
+    });
+  }
+
   // Load persisted state, if any (merge over defaults so new fields survive).
   //
   // `cachedDesign` records what was found so the session-restore prompt at the
@@ -471,6 +541,14 @@
       // and every other select-backed field a session saved before this fix
       // (or while the original shape='mesh' bug was live) might still carry.
       repairSelectBackedFields();
+      // NUMERIC_BOUND_FIELDS is empty this early (bindNumber() has not run
+      // yet) -- see repairNumericFields()'s own comment above bindNumber()
+      // itself closes the gap for THIS merge, by self-repairing each field
+      // the moment it binds, later in this same synchronous script. This
+      // call is kept here anyway so the two repair passes read as one pair,
+      // matching repairSelectBackedFields(), and so it is not silently
+      // forgotten if that self-repair is ever refactored away.
+      repairNumericFields();
       for(var ck in saved){
         if(!saved.hasOwnProperty(ck) || RESTORE_IGNORED_KEYS[ck]) continue;
         if(JSON.stringify(saved[ck]) !== JSON.stringify(DEFAULT_DESIGN[ck])){
@@ -2911,20 +2989,22 @@
 
   // ---- Filament defaults --------------------------------------------------
   // Default nozzle temp, bed temp, fan min/max for each built-in material key.
-  // retract: mirrors trident_gcode/orca.py's BASIC_FILAMENTS retraction_length
-  // per material -- this is the one field here the SERVER also varies by
-  // filament (FilamentSettings.writer_kwargs()), so the client default is
-  // kept in sync with it for display purposes only (sent to the server ONLY
-  // when the user actually overrides it -- see buildGenerateBody()).
+  // nozzle/bed/retract all mirror trident_gcode/orca.py's BASIC_FILAMENTS
+  // per material -- these are the fields the SERVER also varies by filament
+  // (FilamentSettings.writer_kwargs()), so the client defaults are kept in
+  // sync with it for display purposes only (sent to the server ONLY when the
+  // user actually overrides them -- see buildGenerateBody()). If orca.py's
+  // BASIC_FILAMENTS changes, update this table too -- nothing enforces the
+  // match mechanically.
   // retractSpeed/unretractSpeed/zHop are NOT filament-derived on the server
   // (GcodeWriter's plain class defaults apply regardless of material: 60/40/
   // 5mm) -- deliberately the SAME across every material below rather than
   // inventing per-filament numbers this app has never measured.
   var FILAMENT_DEFAULTS = {
-    pla: { label: 'PLA', nozzle: 205, bed: 60, fanMin: 100, fanMax: 100, retract: 1.0, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
+    pla: { label: 'PLA', nozzle: 210, bed: 60, fanMin: 100, fanMax: 100, retract: 1.0, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
     petg: { label: 'PETG', nozzle: 240, bed: 70, fanMin: 50, fanMax: 80, retract: 1.2, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
-    abs: { label: 'ABS', nozzle: 245, bed: 100, fanMin: 20, fanMax: 40, retract: 0.8, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
-    tpu: { label: 'TPU', nozzle: 220, bed: 45, fanMin: 30, fanMax: 60, retract: 0.0, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
+    abs: { label: 'ABS', nozzle: 255, bed: 100, fanMin: 20, fanMax: 40, retract: 0.8, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
+    tpu: { label: 'TPU', nozzle: 230, bed: 50, fanMin: 30, fanMax: 60, retract: 0.0, retractSpeed: 60, unretractSpeed: 40, zHop: 5 },
   };
   var CUSTOM_FILAMENTS_KEY = 'trident_custom_filaments';
 
@@ -3317,10 +3397,21 @@
     if (saveBtn) {
       saveBtn.addEventListener('click', function () {
         var name = (customName ? customName.value.trim() : '') || 'My filament';
-        var key = 'custom_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        // An all-symbol name (e.g. "***") slugs to '' -- guard against the
+        // bare key "custom_", which would collide with every other
+        // all-symbol name and isn't a valid material identifier either.
+        var slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        var key = 'custom_' + (slug || 'filament');
         var defs = getFilamentDefaults(famSel.value);
+        // The server only knows built-in materials -- record which one this
+        // custom is derived from so buildGenerateBody() can send THAT as
+        // `filament` and these values as overrides (see B1). Re-saving an
+        // already-custom selection carries its base forward instead of
+        // treating the custom itself as a base.
+        var isCustomSelected = String(famSel.value).indexOf('custom_') === 0;
+        var base = isCustomSelected ? (defs.base || 'pla') : famSel.value;
         var profile = {
-          key: key, label: name,
+          key: key, label: name, base: base,
           nozzle: numOr(nozzleEl.value, defs.nozzle),
           bed: numOr(bedEl.value, defs.bed),
           fanMin: defs.fanMin, fanMax: defs.fanMax,
@@ -4134,13 +4225,17 @@
     if(el) el.disabled = !cageHasEdits();
   }
 
-  // Warns (in the warning color) when freeform mode is active over the
-  // 'loops' pattern, since the per-point cage deformation doesn't apply to
-  // loop fabric geometry.
+  // Warns when freeform mode is active over the 'loops' pattern, since the
+  // per-point cage deformation doesn't apply to loop fabric geometry. This
+  // is a scoped-control note (the cage silently does nothing in this mode),
+  // not a machine-safety state -- --warn is reserved for those (CLAUDE.md) --
+  // so it borrows --cage, the Freeform cage's own subsystem color, the same
+  // way #zo-scope-note borrows --zone for a Zone-Overrides scope note.
   function updateCageNote(){
     var noteEl = document.getElementById('cage-note');
-    // Mirrors --warn in style.css (safety/constraint-state color, not decoration).
-    if(noteEl) noteEl.style.color = (design.pattern === 'loops') ? '#ffb454' : '';
+    if(!noteEl) return;
+    var cageColor = getComputedStyle(document.documentElement).getPropertyValue('--cage').trim();
+    noteEl.style.color = (design.pattern === 'loops') ? (cageColor || '#ffc24c') : '';
   }
 
   // ---- Silhouette mode: Symmetrical (curve editor) vs Freeform/3D (cage) ----
@@ -4384,6 +4479,15 @@
   function bindNumber(id, field, isInt){
     var el = document.getElementById(id);
     if(!el) return;
+    // Register so repairNumericFields() (see its own comment, near
+    // SELECT_BACKED_FIELDS) can re-validate this field after a LATER merge
+    // (loading a .trident/.json file); and self-repair design[field] right
+    // now so a value that arrived via the EARLIER resumed-session merge
+    // (which ran before this function existed to call) never reaches
+    // el.value below malformed.
+    var __row = { id: id, field: field, isInt: !!isInt };
+    NUMERIC_BOUND_FIELDS.push(__row);
+    repairOneNumericField(__row, el);
     el.value = design[field];
     function applyValue(commit){
       var raw = parseFloat(el.value);
@@ -7590,6 +7694,14 @@
         // pushes every one of these fields straight into its <select> with
         // no validation of its own.
         repairSelectBackedFields();
+        // Unlike the resumed-session merge above, bindNumber() has already
+        // run by the time a file can be loaded (the page is fully up), so
+        // NUMERIC_BOUND_FIELDS is populated and this call does the real
+        // repair work: a bad number in the file must not reach
+        // applyDesignToUI() (which writes it straight into an <input> with
+        // no validation of its own, same as the select case above) or the
+        // preview math that runs right after.
+        repairNumericFields();
         applyDesignToUI();
         if(isEnv && loaded.history && loaded.history.length && typeof openHistoryModal === 'function'){
           openHistoryModal();
@@ -8057,6 +8169,49 @@
     }
   }
 
+  // #mesh-scale / #mesh-lh are plain DOM reads, not bindNumber() fields --
+  // there is no `design.*` field backing them, so they never got
+  // bindNumber's clamp-to-element's-own-min/max treatment. Unclamped, they
+  // let the panel show, the draft preview draw, and the request send a
+  // scale/layer-height the server would silently clamp anyway (min="0.1"
+  // max="10" / min="0.1" max="0.6" in index.html) -- exactly the lying-UI
+  // problem bindNumber's own comment describes. Mirror that same contract
+  // here: every read of these two fields (buildGenerateBody AND the draft
+  // preview) goes through this one clamp so they can never disagree.
+  function clampedMeshInputValue(id, fallback){
+    var el = document.getElementById(id);
+    if(!el) return fallback;
+    var raw = parseFloat(el.value);
+    if(isNaN(raw)) return fallback;
+    var v = raw;
+    var lo = parseFloat(el.min), hi = parseFloat(el.max);
+    if(isFinite(lo)) v = Math.max(lo, v);
+    if(isFinite(hi)) v = Math.min(hi, v);
+    return v;
+  }
+  // On commit (change/blur), snap the field itself to the clamped value --
+  // same "the UI must never suggest a value the server would reject or
+  // clamp" contract as bindNumber, with the same out-of-range styling while
+  // the user is mid-edit (input) so it never fights an in-progress "0.1" on
+  // the way to "0.15".
+  function bindMeshRangeInput(id, onChange){
+    var el = document.getElementById(id);
+    if(!el) return;
+    function applyValue(commit){
+      var raw = parseFloat(el.value);
+      if(isNaN(raw)) return;
+      var lo = parseFloat(el.min), hi = parseFloat(el.max);
+      var v = raw;
+      if(isFinite(lo)) v = Math.max(lo, v);
+      if(isFinite(hi)) v = Math.min(hi, v);
+      el.classList.toggle('out-of-range', Math.abs(raw - v) > 1e-9);
+      if(commit){ el.value = v; el.classList.remove('out-of-range'); }
+      if(onChange) onChange();
+    }
+    el.addEventListener('input', function(){ applyValue(false); });
+    el.addEventListener('change', function(){ applyValue(true); });
+  }
+
   // ---- draw the imported STL on the bed (Design tab draft preview) --------
   // The parametric draft (generatePreview/showPreview, preview_math.js) never
   // drew an uploaded mesh -- reported as "i couldnt see my file on the bed".
@@ -8077,8 +8232,9 @@
       return;
     }
     if(typeof window.setMeshBasePreview !== 'function') return;
-    var scaleEl = document.getElementById('mesh-scale');
-    var scale = scaleEl ? (parseFloat(scaleEl.value) || 1.0) : 1.0;
+    // Same clamp buildGenerateBody() uses for mesh_base_scale/scale -- the
+    // draft must never show a scale the server would refuse to honor.
+    var scale = clampedMeshInputValue('mesh-scale', 1.0);
     var bedCx = (design.bed_center && design.bed_center.length === 2) ? design.bed_center[0] : 117.5;
     var bedCy = (design.bed_center && design.bed_center.length === 2) ? design.bed_center[1] : 117.5;
     window.setMeshBasePreview(meshState.arrayBuffer, {
@@ -8097,8 +8253,11 @@
     // in the draft preview".
     schedulePreview();
   }
-  var meshScaleEl = document.getElementById('mesh-scale');
-  if(meshScaleEl) meshScaleEl.addEventListener('input', refreshMeshBasePreview);
+  // 'input' keeps the draft live while dragging/typing; 'change' (inside
+  // bindMeshRangeInput) is what actually snaps an out-of-range value back
+  // into the field, so a commit still needs to refresh the draft too.
+  bindMeshRangeInput('mesh-scale', refreshMeshBasePreview);
+  bindMeshRangeInput('mesh-lh');
 
   // Remove the mesh from EVERY place that holds one. There are five, and
   // missing any of them leaves the app in a state the user did not ask for:
@@ -8185,6 +8344,33 @@
 
   function buildGenerateBody(){
     var baseSpec = effectiveBaseSpec();
+    // Custom filaments live only in localStorage -- the server only knows
+    // the BASIC_FILAMENTS built-ins (trident_gcode/orca.py). Never send a
+    // custom_* key: resolve it to the built-in material it was derived from
+    // and carry its own stored values as explicit overrides below (any
+    // override the user set on top of the custom, e.g. nudging nozzle temp
+    // after selecting it, still wins -- see the design[field] checks).
+    var filamentKey = design.filament || 'pla';
+    var customFilamentOverrides = null;
+    if (String(filamentKey).indexOf('custom_') === 0) {
+      var __customs = loadCustomFilaments();
+      var __customDef = null;
+      for (var __ci = 0; __ci < __customs.length; __ci++) {
+        if (__customs[__ci].key === filamentKey) { __customDef = __customs[__ci]; break; }
+      }
+      if (__customDef) {
+        // Legacy customs saved before `base` was recorded have no base --
+        // fall back to PLA rather than sending a dead custom_* key.
+        filamentKey = __customDef.base || 'pla';
+        customFilamentOverrides = __customDef;
+      } else {
+        // Deleted in another tab / cleared since this session loaded it --
+        // fall back and repair the UI so it stops pointing at a dead key.
+        filamentKey = 'pla';
+        design.filament = 'pla';
+        if (famSel) famSel.value = 'pla';
+      }
+    }
     var body = {
       printer: design.printer || 'trident',
       shape: design.shape,
@@ -8211,7 +8397,7 @@
       // way pattern_* fields are -- it is independent of the texture, and
       // the server declines it for loop fabric / STL texture mode itself.
       radius_speed_comp: !!design.radius_speed_comp,
-      filament: design.filament || null,
+      filament: filamentKey,
       amp_profile: ampEditor.profile(),
       radius_profile: silEditor.profile(),
       width_profile: widthEditor.profile(),
@@ -8235,15 +8421,22 @@
     }
     // Only sent when the user actually set an override -- absent means
     // "use the profile/filament default", same contract as serve.py's
-    // _parse_nozzle_temp().
+    // _parse_nozzle_temp(). A selected custom_* filament (resolved to
+    // filamentKey above) is its own kind of "not overridden by the user"
+    // default: fall back to its stored value so the custom's own temps
+    // actually reach the server, but let a real user override win.
     if(design.nozzle_temp != null && design.nozzle_temp !== ''){
       body.nozzle_temp = design.nozzle_temp;
+    } else if(customFilamentOverrides && customFilamentOverrides.nozzle != null){
+      body.nozzle_temp = customFilamentOverrides.nozzle;
     }
     // Same contract via serve.py's _parse_bed_temp(), EXCEPT 0 is a real,
     // meaningful override (bed off) and must be sent, not treated as unset --
     // this check is "!= null", not truthy, so 0 passes through correctly.
     if(design.bed_temp != null && design.bed_temp !== ''){
       body.bed_temp = design.bed_temp;
+    } else if(customFilamentOverrides && customFilamentOverrides.bed != null){
+      body.bed_temp = customFilamentOverrides.bed;
     }
     // Retraction / Z-hop overrides (Filament settings modal): same "only
     // sent when the user actually set an override" contract as nozzle/bed
@@ -8253,15 +8446,23 @@
     // truthy -- see serve.py's _parse_retraction_length/_parse_travel_clearance.
     if(design.retraction_length != null && design.retraction_length !== ''){
       body.retraction_length = design.retraction_length;
+    } else if(customFilamentOverrides && customFilamentOverrides.retract != null){
+      body.retraction_length = customFilamentOverrides.retract;
     }
     if(design.retraction_speed != null && design.retraction_speed !== ''){
       body.retraction_speed = design.retraction_speed;
+    } else if(customFilamentOverrides && customFilamentOverrides.retractSpeed != null){
+      body.retraction_speed = customFilamentOverrides.retractSpeed;
     }
     if(design.unretract_speed != null && design.unretract_speed !== ''){
       body.unretract_speed = design.unretract_speed;
+    } else if(customFilamentOverrides && customFilamentOverrides.unretractSpeed != null){
+      body.unretract_speed = customFilamentOverrides.unretractSpeed;
     }
     if(design.travel_clearance != null && design.travel_clearance !== ''){
       body.travel_clearance = design.travel_clearance;
+    } else if(customFilamentOverrides && customFilamentOverrides.zHop != null){
+      body.travel_clearance = customFilamentOverrides.zHop;
     }
     // Wipe on retract: only sent when the checkbox is actually on (a real
     // boolean default-OFF control, same "presence is the switch" contract
@@ -8432,7 +8633,7 @@
         // mesh_base_layer_height field, so the planar base and the
         // non-planar wall above it share one layer height.
         body.mesh_base_id = meshState.mesh_id;
-        body.mesh_base_scale = parseFloat(document.getElementById('mesh-scale').value) || 1.0;
+        body.mesh_base_scale = clampedMeshInputValue('mesh-scale', 1.0);
         // Enable seam blend off forces a hard seam (corner_extent=0) without
         // touching the STORED height -- blend_stack()/build_mesh_hybrid_print
         // already treat blend_height<=0 as an unconditional hard seam (no new
@@ -8493,9 +8694,9 @@
       } else {
         body.mode = 'mesh_texture';
         body.mesh_id = meshState.mesh_id;
-        body.scale = parseFloat(document.getElementById('mesh-scale').value) || 1.0;
+        body.scale = clampedMeshInputValue('mesh-scale', 1.0);
         // layer_height from the mesh panel overrides the shape panel's value
-        body.layer_height = parseFloat(document.getElementById('mesh-lh').value) || 0.3;
+        body.layer_height = clampedMeshInputValue('mesh-lh', 0.3);
         // texture + z-wave params still come from the design object (Texture/Waves tabs)
       }
     }

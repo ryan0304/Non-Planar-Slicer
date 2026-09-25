@@ -2222,8 +2222,12 @@ def test_inapplicable_controls_are_reported():
     serve._mesh_cache_put("t_inapplicable", load_stl(str(ROOT / "examples" / "cylinder.stl")))
 
     def mesh(**kw):
+        # base_layers=1 here (not the old 3): serve.py's server-side clamp on
+        # base_layers is now [0, 3] (SPEC A item 1, mirroring viewer/index.html's
+        # #d-base min/max), so `more_base` below must stay able to ask for
+        # something strictly BIGGER while remaining in range.
         body = {"mode": "mesh_texture", "mesh_id": "t_inapplicable", "layer_height": 0.4,
-                "points_per_turn": 120, "printer": "trident", "base_layers": 3}
+                "points_per_turn": 120, "printer": "trident", "base_layers": 1}
         body.update(kw)
         return serve.generate_mesh_texture_design(body)
 
@@ -2248,7 +2252,7 @@ def test_inapplicable_controls_are_reported():
 
     # Base layers and the brim DO work in STL mode -- they must not be swept
     # into the same warning, or the message becomes noise.
-    more_base = mesh(base_layers=4)
+    more_base = mesh(base_layers=3)   # still <= the new [0, 3] server clamp
     check(more_base["gcode"] != plain["gcode"],
           "inapplicable: STL mode still honours base layers (not everything is dropped)")
 

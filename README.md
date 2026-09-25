@@ -1039,7 +1039,8 @@ Sorted roughly by what they protect:
 | `test_orca_slice.py`, `test_orca_gcode_parser.py` | the OrcaSlicer boundary: profile JSON, and the fail-closed parser for its output |
 | `test_orca_live_integration.py` | the real subprocess — **skips cleanly** when no OrcaSlicer is installed |
 | `test_mesh.py`, `test_mesh_geometry.py` | STL loading, slicing, and the seam-ring sampling the hybrid wall lands on |
-| `test_serve_limits.py`, `test_serve_mesh_params.py` | the request boundary: size ceilings, per-session mesh cache, parameter clamping |
+| `test_serve_limits.py`, `test_serve_mesh_params.py`, `test_serve_input_validation.py` | the request boundary: size ceilings, per-session mesh cache, parameter clamping (layer_height/print_speed/line_width/radius/height/base/brim/skirt/z_waves/pattern fields, non-dict JSON bodies, the mesh_profile query-string boundary, malformed-key printer re-minting) |
+| `test_config_overrides.py` | the CLI config file's "machine" overrides: non-finite/non-numeric/wrong-type rejection, the whole-profile printer_validate re-check, and that generate.py never hands this a shared profile instance |
 | `test_issue_severity.py` | that every machine-safety message is explicitly classified, so a reword cannot silently downgrade a risk to a note |
 | `test_report_extra_issues.py` | that scope warnings reach the visible report, not just a count |
 | `test_base_fan_curve.py`, `test_fan_off_layers.py`, `test_radius_speed.py`, `test_profile_spiral_zones.py` | cooling curves, fan timing, radius-based speed, zone overrides |

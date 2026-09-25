@@ -633,6 +633,14 @@ function parseGcode(text) {
   // changes, this needs to change with it.
   const HYBRID_POINTS_PER_TURN = 240;
   let fil = 0, extrudeCount = 0, travelCount = 0, maxZrate = 0, relE = false;
+  // G90/G91 (absolute/relative X/Y/Z) and the running absolute-E counter --
+  // mirrors trident_gcode/analyze.py exactly (its abs_xyz/e locals), not a
+  // separate invented convention. This app's own Bambu/Creality-Marlin end
+  // G-code (profile.py's _bambu_end/_creality_marlin_end) brackets its
+  // final Z-lift + park move in G91/G90 -- ignoring those two codes made
+  // the viewer read that lift as an ABSOLUTE Z=10 move (straight down
+  // through the part) instead of the +10mm relative lift it actually is.
+  let absXYZ = true, eAbs = 0;
   let curFan = 0, minFan = Infinity, maxFan = -Infinity, fanEverOn = false;   // sticky M106/M107 state (0..1)
   const ext = [], extCol = [], trv = [];          // world-space vertex arrays
   const segSpeed = [], segFlow = [];            // per-extrude-segment telemetry
@@ -660,6 +668,18 @@ function parseGcode(text) {
     if (up.startsWith('M107')) { curFan = 0; continue; }
     if (up.startsWith('M83')) { relE = true; continue; }
     if (up.startsWith('M82')) { relE = false; continue; }
+    if (up.startsWith('G91')) { absXYZ = false; continue; }
+    if (up.startsWith('G90')) { absXYZ = true; continue; }
+    // G92 E<n>: reset the absolute-E counter, exactly as analyze.py's G92
+    // branch does. Absolute-E (M82) files from other slicers reset E with
+    // "G92 E0" routinely; without this, every move after a reset computes a
+    // negative delta against the stale counter and renders as a travel.
+    if (up.startsWith('G92')) {
+      for (const tok of up.split(/\s+/).slice(1)) {
+        if (tok[0] === 'E') { const v = parseFloat(tok.slice(1)); if (!Number.isNaN(v)) eAbs = v; }
+      }
+      continue;
+    }
     // Nozzle temp: Bambu-style profiles emit M104/M109 S<temp>; the Trident
     // (default) profile emits PRINT_START EXTRUDER=<temp> ... instead. S0 is
     // the heater-off line in the end G-code, not a real target -- ignored so
@@ -675,15 +695,32 @@ function parseGcode(text) {
       continue;
     }
     if (!(up.startsWith('G0') || up.startsWith('G1'))) continue;
-    let nx = x, ny = y, nz = z, e = null, f = null;
+    let nx = x, ny = y, nz = z, eTok = null, f = null;
     for (const tok of line.split(/\s+/).slice(1)) {
       const c = tok[0].toUpperCase(), v = parseFloat(tok.slice(1));
       if (Number.isNaN(v)) continue;
-      if (c === 'X') nx = v; else if (c === 'Y') ny = v; else if (c === 'Z') nz = v;
-      else if (c === 'E') e = v; else if (c === 'F') f = v;
+      // X/Y/Z: absolute value in G90 (default), else added to the CURRENT
+      // (pre-move) position -- same `v if abs_xyz else x + v` analyze.py uses.
+      if (c === 'X') nx = absXYZ ? v : x + v;
+      else if (c === 'Y') ny = absXYZ ? v : y + v;
+      else if (c === 'Z') nz = absXYZ ? v : z + v;
+      else if (c === 'E') eTok = v; else if (c === 'F') f = v;
     }
     if (f !== null) curF = f;                       // feedrate is sticky across moves
-    const extruding = e !== null && (relE ? e > 1e-6 : e > 0);
+    // E: mirror analyze.py's de/e exactly. In M83 (relative) the token IS
+    // the delta; in M82 (absolute, the default) the delta is the token
+    // minus the running absolute counter -- "the raw token value is > 0"
+    // is NOT "this move is extruding" in absolute mode, since a retract
+    // still reads as a large positive absolute E right up until the next
+    // move's value drops below it. eAbs is kept up to date in both modes
+    // so a mid-file M82<->M83 switch cannot desync it; a G92 E reset is
+    // handled above.
+    let de = null;
+    if (eTok !== null) {
+      de = relE ? eTok : (eTok - eAbs);
+      eAbs = relE ? (eAbs + eTok) : eTok;
+    }
+    const extruding = de !== null && de > 1e-6;
     if (has) {
       // Remap to world (Y up). Y is NEGATED (cy-y, not y-cy) so the swap of
       // two axes (printer Z-up -> Three.js Y-up) stays a rotation rather than
@@ -710,12 +747,14 @@ function parseGcode(text) {
         ext.push(ax, ay, az, bx, by, bz);
         extCol.push(nz, nz);            // store z; convert to colour after
         extrudeCount++;
-        // volumetric flow = filament volume extruded / time = e*area*speed/len
-        const flow = (len > 0 && relE) ? e * FIL_AREA * speed / len : 0;
+        // volumetric flow = filament volume extruded / time = de*area*speed/len
+        // -- de is already a true per-move delta in BOTH E modes (see its
+        // own comment above), so this no longer needs to special-case relE.
+        const flow = (len > 0) ? de * FIL_AREA * speed / len : 0;
         segSpeed.push(speed); segFlow.push(flow);
         // skip pre-M106 extrudes (fan-off adhesion window) so they don't pin minFan to 0
         if (fanEverOn) { if (curFan < minFan) minFan = curFan; if (curFan > maxFan) maxFan = curFan; }
-        if (relE) fil += e;
+        fil += de;
         minz = Math.min(minz, z, nz); maxz = Math.max(maxz, z, nz);
         minx = Math.min(minx, nx); maxx = Math.max(maxx, nx); miny = Math.min(miny, ny); maxy = Math.max(maxy, ny);
         // See seamMinX's own comment above: capture exactly one full
@@ -773,6 +812,11 @@ function parseGcode(text) {
     minFan: fanSeen ? minFan : null, maxFan: fanSeen ? maxFan : null
   };
 }
+// Automation/test hook, same convention as window.__camera/__controls above
+// -- lets dev_smoke.html feed parseGcode a raw G-code string directly (e.g.
+// the Bambu/Creality-Marlin end sequence, G91 lift + G90 + park) and assert
+// on its parsed bounds/segments without needing a real file load.
+window.__parseGcode = parseGcode;
 
 // Swap the Display-panel legend to match the active colour mode: height shows
 // the viridis gradient + z-range labels, overhang shows a green->yellow->red

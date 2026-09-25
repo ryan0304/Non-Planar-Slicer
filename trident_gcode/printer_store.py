@@ -41,6 +41,7 @@ import json
 import os
 import re
 import sys
+import threading
 from collections import OrderedDict
 from dataclasses import asdict
 
@@ -55,6 +56,15 @@ _KEY_RE = re.compile(r'^custom_[a-z0-9_]{1,48}$')
 
 def _is_valid_key(key: str) -> bool:
     return isinstance(key, str) and bool(_KEY_RE.match(key))
+
+
+def is_valid_key(key: str) -> bool:
+    """Public wrapper: True iff ``key`` has the shape this module ever
+    accepts (``custom_[a-z0-9_]{1,48}``). Callers outside this module (e.g.
+    serve.py deciding whether a stored key can be reused vs. must be
+    re-minted) should use this instead of reaching for the private
+    ``_is_valid_key``."""
+    return _is_valid_key(key)
 
 
 def _default_data_dir() -> str:
@@ -284,6 +294,17 @@ MAX_SESSIONS = 32
 MAX_PRINTERS_PER_SESSION = 32
 
 _sessions: "OrderedDict[str, dict[str, dict]]" = OrderedDict()
+# ThreadingHTTPServer runs each request on its own thread, and every
+# session_* function below reads or mutates _sessions -- an OrderedDict is
+# NOT thread-safe on its own. Without this, one thread's
+# get()-then-move_to_end() (inside _session_bucket) could interleave with
+# another thread's popitem() eviction (also inside _session_bucket, when a
+# NEW session is created past MAX_SESSIONS) and raise KeyError -> a 500 for a
+# request that did nothing wrong. An RLock (not Lock) because
+# _session_bucket is called from WITHIN other locked functions below
+# (session_list, session_save, ...) on the same thread, and a plain Lock
+# would deadlock on that self-reentry.
+_sessions_lock = threading.RLock()
 
 
 def is_valid_session(sid) -> bool:
@@ -295,29 +316,32 @@ def is_valid_session(sid) -> bool:
 
 
 def _session_bucket(sid: str, create: bool = False) -> dict[str, dict] | None:
-    if not is_valid_session(sid):
-        return None
-    bucket = _sessions.get(sid)
-    if bucket is None:
-        if not create:
+    with _sessions_lock:
+        if not is_valid_session(sid):
             return None
-        while len(_sessions) >= MAX_SESSIONS:
-            _sessions.popitem(last=False)
-        bucket = {}
-        _sessions[sid] = bucket
-    _sessions.move_to_end(sid)
-    return bucket
+        bucket = _sessions.get(sid)
+        if bucket is None:
+            if not create:
+                return None
+            while len(_sessions) >= MAX_SESSIONS:
+                _sessions.popitem(last=False)
+            bucket = {}
+            _sessions[sid] = bucket
+        _sessions.move_to_end(sid)
+        return bucket
 
 
 def session_list(sid) -> dict[str, dict]:
     """key -> {"profile": PrinterProfile, "meta": dict} for this session.
     An unknown or malformed session id is simply an empty set of custom
     printers -- never an error, and never another session's contents."""
-    return dict(_session_bucket(sid) or {})
+    with _sessions_lock:
+        return dict(_session_bucket(sid) or {})
 
 
 def session_make_key(sid, name: str) -> str:
-    return _make_key(name, set((_session_bucket(sid) or {}).keys()))
+    with _sessions_lock:
+        return _make_key(name, set((_session_bucket(sid) or {}).keys()))
 
 
 def session_save(sid, key: str, profile: PrinterProfile, meta: dict) -> None:
@@ -331,35 +355,40 @@ def session_save(sid, key: str, profile: PrinterProfile, meta: dict) -> None:
         raise ValueError(f"invalid custom printer key: {key!r}")
     if key in PRINTER_PROFILES:
         raise ValueError(f"'{key}' is a built-in printer key and cannot be overwritten")
-    bucket = _session_bucket(sid, create=True)
-    if key not in bucket and len(bucket) >= MAX_PRINTERS_PER_SESSION:
-        raise ValueError(
-            f"this session already holds the maximum of {MAX_PRINTERS_PER_SESSION} "
-            f"custom printers; delete one before adding another")
-    bucket[key] = {"profile": profile, "meta": dict(meta or {})}
+    with _sessions_lock:
+        bucket = _session_bucket(sid, create=True)
+        if key not in bucket and len(bucket) >= MAX_PRINTERS_PER_SESSION:
+            raise ValueError(
+                f"this session already holds the maximum of {MAX_PRINTERS_PER_SESSION} "
+                f"custom printers; delete one before adding another")
+        bucket[key] = {"profile": profile, "meta": dict(meta or {})}
 
 
 def session_delete(sid, key: str) -> bool:
-    bucket = _session_bucket(sid)
-    if bucket is None or key not in bucket:
-        return False
-    del bucket[key]
-    return True
+    with _sessions_lock:
+        bucket = _session_bucket(sid)
+        if bucket is None or key not in bucket:
+            return False
+        del bucket[key]
+        return True
 
 
 def session_is_custom(sid, key: str) -> bool:
-    return _is_valid_key(key) and key in (_session_bucket(sid) or {})
+    with _sessions_lock:
+        return _is_valid_key(key) and key in (_session_bucket(sid) or {})
 
 
 def session_all_profiles(sid) -> dict[str, PrinterProfile]:
     """{**PRINTER_PROFILES, **this session's custom} -- never mutates
     PRINTER_PROFILES, and never reads another session or the disk store."""
     merged: dict[str, PrinterProfile] = dict(PRINTER_PROFILES)
-    for key, entry in session_list(sid).items():
-        merged[key] = entry["profile"]
+    with _sessions_lock:
+        for key, entry in session_list(sid).items():
+            merged[key] = entry["profile"]
     return merged
 
 
 def _reset_sessions() -> None:
     """Test hook: drop every session. Not used by the server."""
-    _sessions.clear()
+    with _sessions_lock:
+        _sessions.clear()
