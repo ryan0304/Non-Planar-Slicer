@@ -3028,6 +3028,18 @@
     return FILAMENT_DEFAULTS['pla'];
   }
 
+  // The built-in material a custom filament is sent to the server as. Customs
+  // saved before `base` was recorded have none, and treating every one of
+  // those as PLA silently printed a real "PETG-R3D" custom with PLA's flow
+  // ratio and volumetric ceiling (found on live data). Infer the material
+  // from the custom's own name/key first; PLA only when nothing matches.
+  function customFilamentBase(def) {
+    if (def && FILAMENT_DEFAULTS[def.base]) return def.base;
+    var text = String((def && def.label) || '') + ' ' + String((def && def.key) || '');
+    var m = text.toLowerCase().match(/petg|abs|tpu|pla/);
+    return m ? m[0] : 'pla';
+  }
+
   function populateFilamentSelect(preferKey) {
     famSel.innerHTML = '';
     // 1. Built-ins
@@ -3409,7 +3421,7 @@
         // already-custom selection carries its base forward instead of
         // treating the custom itself as a base.
         var isCustomSelected = String(famSel.value).indexOf('custom_') === 0;
-        var base = isCustomSelected ? (defs.base || 'pla') : famSel.value;
+        var base = isCustomSelected ? customFilamentBase(defs) : famSel.value;
         var profile = {
           key: key, label: name, base: base,
           nozzle: numOr(nozzleEl.value, defs.nozzle),
@@ -8359,9 +8371,7 @@
         if (__customs[__ci].key === filamentKey) { __customDef = __customs[__ci]; break; }
       }
       if (__customDef) {
-        // Legacy customs saved before `base` was recorded have no base --
-        // fall back to PLA rather than sending a dead custom_* key.
-        filamentKey = __customDef.base || 'pla';
+        filamentKey = customFilamentBase(__customDef);
         customFilamentOverrides = __customDef;
       } else {
         // Deleted in another tab / cleared since this session loaded it --

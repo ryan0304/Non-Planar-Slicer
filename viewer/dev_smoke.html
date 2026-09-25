@@ -1005,6 +1005,31 @@
     famSelEl.value = baseBeforeSave;
     famSelEl.dispatchEvent(new w.Event('change'));
 
+    // Legacy customs (saved before `base` was recorded) must resolve to the
+    // material their name says, not blanket PLA. Found on live data: a real
+    // "PETG-R3D" custom was being sent as filament=pla (PLA flow ratio and
+    // volumetric ceiling). One with no material in its name still gets PLA.
+    [['custom_devsmoke_petg_legacy', 'PETG-R3D devsmoke', 'petg'],
+     ['custom_devsmoke_mystery_legacy', 'Mystery spool', 'pla']].forEach(function(c){
+      var list = JSON.parse(w.localStorage.getItem('trident_custom_filaments') || '[]');
+      list.push({ key: c[0], label: c[1], nozzle: 260, bed: 70 });   // no `base`
+      w.localStorage.setItem('trident_custom_filaments', JSON.stringify(list));
+      var opt = w.document.createElement('option');
+      opt.value = c[0]; opt.textContent = c[1];
+      famSelEl.appendChild(opt);
+      famSelEl.value = c[0];
+      famSelEl.dispatchEvent(new w.Event('change'));
+      var snap = w.__designSnapshot();
+      check('legacy custom "' + c[1] + '" (no base) is sent as ' + c[2] + ' with its own 260C',
+            snap.filament === c[2] && String(snap.nozzle_temp) === '260',
+            'got filament=' + snap.filament + ' nozzle_temp=' + snap.nozzle_temp);
+      w.localStorage.setItem('trident_custom_filaments', JSON.stringify(
+        list.filter(function(x){ return x.key !== c[0]; })));
+      opt.parentNode.removeChild(opt);
+    });
+    famSelEl.value = baseBeforeSave;
+    famSelEl.dispatchEvent(new w.Event('change'));
+
     w.document.getElementById('fm-modal-done').click();
     check('Done closes the filament settings modal',
           filaModal.style.display === 'none', 'got display=' + filaModal.style.display);
